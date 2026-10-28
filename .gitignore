@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+*.egg-info/
+.venv/
+venv/
+ENV/
+env/
+*.egg
+*.eggs
+
+# Node & Frontend Build
+node_modules/
+dist/
+.cache/
+.eslintcache
+
+# Playwright Test Reports
+playwright-report/
+test-results/
+junit.xml
+*.mp4
+!ebuch_konverter_erklaervideo_de.mp4
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environment Configs
+.env
+.env.local
+.env.*.local
+
+# Dynamic App Directories (Ignore runtime folders completely)
+assets/uploads/
+assets/output/
+assets/feedback/
+assets/settings.json
+assets/logs/
+assets/scratch_output/
+assets/test_out_debug/
+test_output/
+test_output_single/
+scratch/
+logs/
+*.log
+
+# Model weights (highly recommended to keep outside Git history)
+assets/models/*
+!assets/models/.gitkeep
+assets/rules/*.pdf
+assets/video_capture/
+
+# Benchmarks Temporary Extraction Runs
+benchmark_outputs/
+benchmarks/runs/
+
+# Private companion testdata repository (must never be committed to the open main repo)
+ebuch-testdaten/

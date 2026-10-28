@@ -1,0 +1,6 @@
+Datei-spezifische Regeln für sek2_mathematik_analysis:
+1. Schwierigkeitsgrade (Quadrat-Symbole in den Aufgabenüberschriften):
+   - □ (leeres Quadrat) wird übertragen als: [leicht]
+   - ◩ (halb gefülltes Quadrat) wird übertragen als: [mittel]
+   - ■ (gefülltes Quadrat) wird übertragen als: [schwer]
+2. Die Schwierigkeitsgrade stehen in einer eigenen Zeile direkt unter der Aufgabenüberschrift.

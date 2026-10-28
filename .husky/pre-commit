@@ -1,0 +1,26 @@
+#!/usr/bin/env sh
+set -e
+
+echo "🔍 [1/6] Checking freshness of dependencies and local AI models..."
+.venv/bin/python scripts/check_dependencies_and_models.py
+
+echo "🐍 [2/6] Linting backend Python & Google Style Guide docstrings (Ruff)..."
+if command -v ruff >/dev/null 2>&1; then
+  ruff check backend/services/fibs_constants.py backend/services/prompts.py backend/services/models.py backend/services/fibs_formatting.py backend/services/fibs_postprocess.py backend/services/llm_service.py backend/services/a11y_linter.py backend/services/feedback_service.py backend/services/docx_service.py backend/services/formula_service.py
+elif [ -x .venv/bin/ruff ]; then
+  .venv/bin/ruff check backend/services/fibs_constants.py backend/services/prompts.py backend/services/models.py backend/services/fibs_formatting.py backend/services/fibs_postprocess.py backend/services/llm_service.py backend/services/a11y_linter.py backend/services/feedback_service.py backend/services/docx_service.py backend/services/formula_service.py
+fi
+
+echo "🧹 [3/6] Linting frontend TypeScript with ESLint (Google Style Guide)..."
+npx eslint frontend/src --max-warnings 0
+
+echo "📐 [4/6] Validating TypeScript types..."
+npx tsc --noEmit
+
+echo "🕸️ [5/6] Scanning backend for dead code (Vulture)..."
+.venv/bin/vulture backend --min-confidence 90 --exclude backend/tests
+
+echo "🧪 [6/6] Running backend unit tests & coverage check..."
+.venv/bin/pytest backend/tests --cov=backend --cov-report=term --cov-fail-under=60
+
+echo "✅ All pre-commit quality gates passed successfully!"

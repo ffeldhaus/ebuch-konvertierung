@@ -1,0 +1,8 @@
+Datei-spezifische Regeln für sek1_englisch:
+1. Schwierigkeitsgrade (Stern-Symbole ★ in den Aufgabenüberschriften):
+   - ★ (ein Stern) wird übertragen als: [leicht]
+   - ★★ (zwei Sterne) wird übertragen als: [mittel]
+   - ★★★ (drei Sterne) wird übertragen als: [schwer]
+2. Piktogramme neben der Aufgabenüberschrift:
+   - Blaues Zwei-Personen-Piktogramm (bei Aufgabe 2) wird übertragen als: [Partnerarbeit]
+3. Schwierigkeitsgrade und Piktogramme stehen in einer eigenen Zeile direkt unter der Aufgabenüberschrift.

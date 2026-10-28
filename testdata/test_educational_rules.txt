@@ -1,0 +1,6 @@
+Datei-spezifische Regeln für test_educational:
+1. Schwierigkeitsgrade (Difficulty Indicators):
+   - ○ (leerer Kreis) wird übertragen als: ○ [leicht]
+   - ◐ (halb gefüllter Kreis) wird übertragen als: ◐ [mittel]
+   - ● (gefüllter Kreis) wird übertragen als: ● [schwer]
+2. Die Symbole befinden sich direkt vor den Aufgaben und beschreiben deren Schwierigkeitsgrad für Schülerinnen und Schüler.

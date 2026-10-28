@@ -1,0 +1,70 @@
+[project]
+name = "ebuch-konvertierung"
+version = "0.1.0"
+description = "E-Buch Standard Converter Backend"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "fastapi>=0.141.0",
+    "uvicorn>=0.52.0",
+    "python-multipart>=0.0.9",
+    "python-docx>=1.1.0",
+    "openai>=2.0.0",
+    "pypdfium2>=4.28.0",
+    "reportlab>=4.1.0",
+    "pillow>=10.2.0",
+    "jinja2>=3.1.3",
+    "python-dotenv>=1.2.0",
+    "docling>=2.0.0",
+    "torch>=2.2.0",
+    "transformers>=4.48.0",
+    "accelerate>=1.0.0",
+    "psutil>=7.0.0",
+    "rapid-mlx>=0.12.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-vlm>=0.6.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-lm>=0.30.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "bitsandbytes>=0.45.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.1.0",
+    "httpx>=0.27.0",
+    "pytest-cov>=6.0.0",
+    "vulture>=2.14",
+    "ruff>=0.11.0",
+]
+
+[tool.setuptools]
+packages = ["backend", "backend.services"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+addopts = "-v --strict-markers"
+
+[tool.coverage.run]
+source = ["backend"]
+omit = [
+    "backend/tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.vulture]
+min_confidence = 90
+paths = ["backend"]
+exclude = ["backend/tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+exclude = ["backend/tests/*"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "D", "I", "UP"]
+ignore = ["D104", "D105", "D107", "D205", "D401"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

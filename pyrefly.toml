@@ -1,0 +1,6 @@
+python-version = "3.14"
+python-interpreter-path = ".venv/bin/python3.14"
+site-package-path = [".venv/lib/python3.14/site-packages"]
+project-includes = ["backend", "scripts"]
+project-excludes = ["**/node_modules", "**/.venv", "**/dist", "**/assets"]
+search-path = ["."]

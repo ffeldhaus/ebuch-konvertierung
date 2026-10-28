@@ -1,0 +1,9 @@
+Datei-spezifische Regeln für sek2_chemie:
+1. Schwierigkeitsgrade (Kreis-Symbole vor den Aufgaben im Aufgabenblock):
+   - ○ (leerer Kreis) wird übertragen als: [leicht]
+   - ◐ (halb gefüllter Kreis) wird übertragen als: [mittel]
+   - ● (gefüllter Kreis) wird übertragen als: [schwer]
+2. Gefahrstoffpiktogramme im Versuchsprotokoll:
+   - GHS02 wird übertragen als: [Gefahrstoffsymbol: Entzündbar]
+   - GHS05 wird übertragen als: [Gefahrstoffsymbol: Ätzend]
+   - GHS07 wird übertragen als: [Gefahrstoffsymbol: Achtung]

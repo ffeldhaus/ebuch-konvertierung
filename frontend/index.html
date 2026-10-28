@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="de" class="theme-light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>E-Buch Standard Konverter Workspace</title>
+  <link rel="stylesheet" href="/src/styles.css">
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col antialiased bg-slate-950 text-slate-100">
+
+  <!-- Compact Top Header -->
+  <header class="h-12 border-b border-slate-800 bg-slate-900 flex items-center justify-between px-4 z-50 select-none flex-shrink-0">
+    <!-- Brand / Collapse controls & View Navigation -->
+    <div class="flex items-center space-x-4">
+      <div class="flex items-center space-x-2">
+        <div class="w-7 h-7 rounded-lg bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-md">
+          <span class="text-white font-bold text-sm">EB</span>
+        </div>
+        <h1 id="workspace-title" class="text-sm font-bold tracking-tight bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">E-Buch Standard Konverter</h1>
+      </div>
+
+      <!-- Mode Selector (Dropdown): Übertragung / Benchmark & Evaluierung / Feedback -->
+      <div class="mode-select-wrapper flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-xs h-8">
+        <label for="main-mode-select" class="sr-only">Modus</label>
+        <select id="main-mode-select" class="bg-transparent border-0 text-slate-200 px-2 py-1 font-semibold focus:outline-none cursor-pointer text-xs">
+          <option value="workspace" class="bg-slate-950 text-slate-300">📄 Übertragung</option>
+          <option value="benchmark" class="bg-slate-950 text-slate-300">⚖️ Benchmark &amp; Evaluierung</option>
+          <option value="feedback" class="bg-slate-950 text-slate-300">💬 Feedback</option>
+          <option value="settings" class="bg-slate-950 text-slate-300">⚙️ Einstellungen</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Stepper (Ultra-compact progress line) -->
+    <div id="header-stepper" class="hidden md:flex items-center space-x-4 text-xs font-semibold">
+      <div id="step-1-indicator" class="flex items-center space-x-1.5 text-indigo-400">
+        <span class="w-5 h-5 rounded-full bg-indigo-500/20 border border-indigo-500 flex items-center justify-center text-[10px]">1</span>
+        <span>Upload</span>
+      </div>
+      <span class="text-slate-700">&rarr;</span>
+      <div id="step-2-indicator" class="flex items-center space-x-1.5 text-slate-500">
+        <span class="w-5 h-5 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px]">2</span>
+        <span>Markdown Konvertierung</span>
+      </div>
+      <span class="text-slate-700">&rarr;</span>
+      <div id="step-3-indicator" class="flex items-center space-x-1.5 text-slate-500">
+        <span class="w-5 h-5 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px]">3</span>
+        <span>Anwendung Übertragungsregeln</span>
+      </div>
+      <span class="text-slate-700">&rarr;</span>
+      <div id="step-4-indicator" class="flex items-center space-x-1.5 text-slate-500">
+        <span class="w-5 h-5 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px]">4</span>
+        <span>DOCX</span>
+      </div>
+    </div>
+
+    <!-- Header Right Controls -->
+    <div class="flex items-center space-x-2">
+      <!-- Theme Selector -->
+      <div class="flex items-center space-x-1.5 bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px] h-8">
+        <label for="theme-select" class="sr-only">Farbschema</label>
+        <select id="theme-select" class="bg-transparent border-0 text-slate-350 hover:text-white px-2 py-1 font-semibold focus:outline-none transition-colors cursor-pointer text-xs">
+          <option value="system" class="bg-slate-950 text-slate-300">💻 System</option>
+          <option value="light" selected class="bg-slate-950 text-slate-300">☀️ Hell</option>
+          <option value="dark" class="bg-slate-950 text-slate-300">🌙 Dunkel</option>
+          <option value="high-contrast" class="bg-slate-950 text-slate-300">👁️ Kontrast</option>
+        </select>
+      </div>
+
+      <!-- Pane visibility selectors -->
+      <div id="header-pane-toggles" class="flex items-center space-x-1.5 bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-xs h-8">
+        <button id="toggle-pane-pdf" class="px-2.5 py-0.5 rounded-md font-semibold text-slate-400 hover:text-white transition-all duration-150 h-full">
+          Original PDF
+        </button>
+        <button id="toggle-pane-raw" class="px-2.5 py-0.5 rounded-md font-semibold text-slate-400 hover:text-white transition-all duration-150 h-full">
+          Roh-Markdown
+        </button>
+        <button id="toggle-pane-standardised" class="px-2.5 py-0.5 rounded-md font-semibold text-white bg-indigo-650 border border-indigo-550 transition-all duration-150 h-full">
+          E-Buch MD
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Glowing Progress Bar Container -->
+  <div id="pipeline-progress-container" class="hidden h-8 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between select-none flex-shrink-0 text-xs text-slate-350">
+    <div class="flex items-center space-x-2">
+      <span class="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+      <span id="pipeline-progress-phase" class="font-semibold text-slate-300">Bereite Extraktion vor...</span>
+    </div>
+    <div class="flex items-center space-x-3 w-1/2 justify-end">
+      <span id="pipeline-progress-pages" class="text-[10px] text-slate-500 font-mono">0 / 0 Seiten</span>
+      <div class="w-32 bg-slate-950 rounded-full h-1.5 overflow-hidden border border-slate-850">
+        <div id="pipeline-progress-bar" class="bg-gradient-to-r from-indigo-500 to-purple-600 h-full w-0 transition-all duration-300"></div>
+      </div>
+      <span id="pipeline-progress-percent" class="font-mono font-bold text-indigo-400 w-8 text-right">0%</span>
+      <button id="pipeline-abort-btn" title="Konvertierung abbrechen" class="px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all flex items-center space-x-1 ml-2">
+        <span>🛑 Abbrechen</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Workspace Container -->
+  <div id="main-workspace-view" class="flex-1 flex flex-row min-h-0 relative overflow-hidden">
+
+    <!-- Left Sidebar (Collapsible: Upload & Controls) -->
+    <aside id="left-sidebar" class="w-80 bg-slate-900 flex flex-col h-full transition-all duration-300 overflow-hidden flex-shrink-0">
+      <!-- Input Controls Section -->
+      <div class="flex-1 overflow-y-auto p-4 space-y-4">
+        <!-- Ruleset -->
+        <div class="space-y-1.5">
+          <label for="ruleset-select" class="text-[10px] font-bold tracking-wider uppercase text-slate-400">Regelsatz</label>
+          <select id="ruleset-select" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors">
+            <option value="uebertragungsregeln_09_2025" selected>Übertragungsregeln FIBS (September 2025)</option>
+          </select>
+        </div>
+
+        <!-- File Upload Dropzone -->
+        <div id="dropzone" class="border border-dashed border-slate-800 hover:border-indigo-500/80 rounded-lg p-5 text-center cursor-pointer transition-all duration-200 bg-slate-950/40 hover:bg-indigo-500/5 flex flex-col items-center justify-center space-y-2">
+          <div class="w-8 h-8 rounded-full bg-slate-850 flex items-center justify-center text-indigo-400">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+            </svg>
+          </div>
+          <div>
+            <p class="text-xs font-semibold text-slate-200">PDF oder DOCX auswählen</p>
+            <p class="text-[9px] text-slate-500 mt-0.5">Drag-and-drop support</p>
+          </div>
+          <input type="file" id="file-input" class="hidden" accept=".pdf,.docx">
+        </div>
+
+        <!-- File Status Info -->
+        <div id="file-status" class="hidden flex items-center justify-between p-2.5 bg-slate-950 rounded-lg border border-slate-800 text-[10px]">
+          <div class="flex items-center space-x-1.5 text-slate-300 min-w-0">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+            </svg>
+            <span id="selected-file-name" class="font-medium truncate"></span>
+          </div>
+          <button id="cancel-file-btn" class="text-slate-500 hover:text-red-400 font-bold transition-colors">Löschen</button>
+        </div>
+
+        <!-- Additional Ruleset (Below Document Upload, Disabled until file is uploaded) -->
+        <div id="additional-ruleset-container" class="space-y-1.5">
+          <label class="text-[10px] font-bold tracking-wider uppercase text-slate-400">Zusätzliche Regeln (.txt, .md, .pdf, .docx)</label>
+          <div id="ruleset-upload-zone" class="border border-dashed border-slate-800 rounded-lg p-2.5 text-center cursor-not-allowed opacity-50 bg-slate-950/20 transition-all pointer-events-none">
+            <p class="text-[10px] text-slate-500" id="ruleset-status-text">Zusätzliche Regeln hochladen (erst Dokument hochladen)</p>
+            <input type="file" id="ruleset-file-input" class="hidden" accept=".txt,.md,.pdf,.docx" disabled>
+          </div>
+          <div id="ruleset-actions" class="hidden flex items-center justify-between pt-1">
+            <span id="ruleset-badge" class="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded truncate max-w-[170px]"></span>
+            <button id="inspect-ruleset-btn" type="button" class="text-[10px] font-medium text-indigo-400 hover:text-indigo-300 bg-indigo-950/50 hover:bg-indigo-900/50 border border-indigo-800/60 px-2 py-0.5 rounded transition-colors flex items-center gap-1">
+              <span>👁️</span><span>Regeln anzeigen</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Action & Pages Group -->
+        <div class="space-y-2.5">
+          <!-- Pages Selector (Optional, only for PDF) -->
+          <div class="space-y-1.5" id="pages-select-container">
+            <label for="pages-input" class="text-[10px] font-bold tracking-wider uppercase text-slate-400">Seitenauswahl (Optional)</label>
+            <input type="text" id="pages-input" placeholder="Erst Dokument hochladen..." disabled class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-not-allowed opacity-60">
+            <p id="pages-input-error" class="hidden text-[10px] text-rose-400 font-medium mt-1 flex items-start space-x-1">
+              <span class="shrink-0">⚠️</span><span id="pages-input-error-text"></span>
+            </p>
+            <p class="text-[8px] text-slate-500 mt-0.5">Komma-separierte Seiten oder Bereiche (z. B. 1-5). Leer lassen für alle Seiten.</p>
+          </div>
+
+          <!-- Extraction Engine (Optional, only for PDF) -->
+          <div class="space-y-1.5" id="engine-select-container">
+            <label for="engine-select" class="text-[10px] font-bold tracking-wider uppercase text-slate-400">Extraktions-Engine</label>
+            <select id="engine-select" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors">
+              <option value="infinity" selected>Infinity-Parser2-Flash + Docling Layout (Standard – Beste Formel- &amp; Scan-OCR)</option>
+              <option value="lightonocr">LightOnOCR-3-0.8B + Docling Layout (Kompakte VLM-OCR – Schnell &amp; Speicherschonend)</option>
+              <option value="docling">Docling mit CodeFormulaV2 (IBM Research – Schnellste Fließtext-Engine)</option>
+            </select>
+          </div>
+
+          <!-- OCR Language (Optional, only for PDF) -->
+          <div class="space-y-1.5" id="lang-select-container">
+            <label for="lang-select" class="text-[10px] font-bold tracking-wider uppercase text-slate-400">OCR-Sprachauswahl</label>
+            <select id="lang-select" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors">
+              <option value="en" selected>Automatisch (Deutsch, Englisch, Französisch, etc.)</option>
+              <option value="ch">Chinesische / Japanische Schrift</option>
+              <option value="east_slavic">Kyrillische Schrift (Russisch, Ukrainisch, etc.)</option>
+              <option value="korean">Koreanische Schrift</option>
+              <option value="arabic">Arabische Schrift (Arabisch, Persisch, etc.)</option>
+              <option value="el">Griechische Schrift</option>
+              <option value="devanagari">Indische Schriften (Hindi, Sanskrit, etc.)</option>
+            </select>
+          </div>
+
+          <!-- Image Descriptions Toggle -->
+          <div class="pt-0.5 pb-0.5" id="describe-images-toggle-container">
+            <label class="flex items-start space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="describe-images-toggle" checked class="mt-0.5 rounded bg-slate-950 border-slate-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-slate-900">
+              <div class="text-[10px]">
+                <span class="font-bold text-slate-300 block">Bildbeschreibungen generieren</span>
+                <span class="text-slate-500 text-[8.5px] leading-tight block">Deaktivieren für schnellere Konvertierung</span>
+              </div>
+            </label>
+          </div>
+
+          <button id="process-btn" disabled class="w-full bg-slate-800 text-slate-500 font-semibold py-2.5 px-4 rounded-lg cursor-not-allowed border border-slate-700 transition-all duration-200 text-xs mt-1.5">
+            Extraktion starten
+          </button>
+          <button id="abort-process-btn" class="hidden w-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold py-2 px-4 rounded-lg transition-all duration-200 text-xs mt-1.5 flex items-center justify-center space-x-1.5">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-3.5 h-3.5 text-rose-400">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+            <span>Konvertierung abbrechen</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Backend Tasks Manager (collapsible) -->
+      <div class="border-t border-slate-800 flex flex-col min-h-0 bg-slate-900/40 flex-shrink-0">
+        <button id="toggle-tasks-btn" class="w-full flex items-center justify-between p-3.5 text-[10px] font-bold tracking-wider uppercase text-slate-400 hover:text-white hover:bg-slate-850/30 transition-all select-none">
+          <div class="flex items-center space-x-2">
+            <span>Prozess-Verwaltung</span>
+            <span id="active-tasks-badge" class="hidden px-1.5 py-0.5 text-[9px] leading-none rounded-full bg-indigo-500 text-white font-mono font-bold">0</span>
+          </div>
+          <svg id="tasks-arrow" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor" class="w-3 h-3 transform transition-transform duration-205 rotate-0">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+          </svg>
+        </button>
+        <div id="tasks-manager-container" class="hidden px-4 pb-4 max-h-48 flex flex-col min-h-0 overflow-y-auto">
+          <div id="tasks-list" class="space-y-2">
+            <p class="text-slate-500 text-[10px] italic py-1">Keine aktiven Prozesse im Hintergrund.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Terminal logs (collapsible) -->
+      <div class="border-t border-slate-800 flex flex-col min-h-0 bg-slate-900/60 flex-shrink-0">
+        <button id="toggle-logs-btn" class="w-full flex items-center justify-between p-3.5 text-[10px] font-bold tracking-wider uppercase text-slate-400 hover:text-white hover:bg-slate-850/30 transition-all select-none">
+          <span>Live-Protokoll</span>
+          <svg id="logs-arrow" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor" class="w-3 h-3 transform transition-transform duration-205 rotate-0">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+          </svg>
+        </button>
+        <div id="logs-console-container" class="hidden px-4 pb-4 h-48 flex flex-col min-h-0">
+          <div id="logs-console" class="flex-1 w-full bg-slate-950 rounded-lg p-2.5 font-mono text-[9px] text-slate-400 overflow-y-auto border border-slate-850 space-y-1">
+            <span class="text-slate-600">[System] Arbeitsbereich bereit.</span>
+          </div>
+        </div>
+    </aside>
+    <div id="left-sidebar-handle" tabindex="0" role="button" aria-label="Linke Seitenleiste ein- oder ausklappen" aria-expanded="true" class="w-1.5 hover:w-2 bg-slate-850 hover:bg-indigo-500 cursor-pointer h-full transition-all duration-150 flex-shrink-0 z-45" title="Linke Seitenleiste ein-/ausklappen"></div>
+
+    <!-- Center Workspace Panels Container -->
+    <main class="flex-1 flex flex-row p-2 space-x-2 min-h-0 bg-slate-950 overflow-hidden">
+
+      <!-- Panel 1: Original Document (PDF Viewer) -->
+      <section id="panel-pdf-container" class="flex-1 flex flex-col h-full bg-slate-900 border border-slate-800 rounded-xl overflow-hidden transition-all duration-200 hidden">
+        <div class="h-9 px-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/80 flex-shrink-0 select-none">
+          <span class="text-xs font-bold text-slate-300">Originaldatei (Vorschau)</span>
+          <div class="flex items-center space-x-1.5 overflow-x-auto max-w-[200px] scrollbar-none" id="pdf-page-pills-container">
+            <!-- Dynamic page jumper pills populated via JS -->
+            <span class="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-750">PDF-Vorschau</span>
+          </div>
+        </div>
+        <div class="flex-1 bg-slate-950">
+          <iframe id="pdf-viewer-frame" class="w-full h-full border-0" src="about:blank"></iframe>
+        </div>
+      </section>
+
+      <!-- Panel 2: Raw Markdown Editor (OCR Extract) -->
+      <section id="panel-raw-container" class="flex-1 flex flex-col h-full bg-slate-900 border border-slate-800 rounded-xl overflow-hidden transition-all duration-200 hidden">
+        <!-- Panel Header -->
+        <div class="h-9 px-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/80 flex-shrink-0 select-none">
+          <span class="text-xs font-bold text-slate-300">1. Extrahiertes Markdown</span>
+          <div class="flex items-center space-x-1.5">
+            <button id="btn-render-raw" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition-colors">
+              Rendern
+            </button>
+            <span class="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-750">Nur Lesen</span>
+          </div>
+        </div>
+        
+        <!-- Editor Textarea Toolbar -->
+        <div id="toolbar-raw" class="h-8 bg-slate-900 border-b border-slate-800/80 px-2 flex items-center space-x-1 flex-shrink-0 select-none overflow-x-auto scrollbar-none">
+          <button data-tag="# " class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">H1</button>
+          <button data-tag="## " class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">H2</button>
+          <button data-tag="### " class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">H3</button>
+          <span class="w-px h-3.5 bg-slate-850"></span>
+          <button data-tag="*" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">*Fett*</button>
+          <button data-tag="%" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">%Kursiv%</button>
+          <button data-tag="_" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">_Unter_</button>
+          <span class="w-px h-3.5 bg-slate-850"></span>
+          <button data-tag="<Tabelle>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] text-slate-400 hover:text-white font-mono transition-colors">&lt;Tabelle&gt;</button>
+          <button data-tag="<Bild>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] text-slate-400 hover:text-white font-mono transition-colors">&lt;Bild&gt;</button>
+          <button data-tag="<Rahmen>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] text-slate-400 hover:text-white font-mono transition-colors">&lt;Rahmen&gt;</button>
+          <button data-tag="<Anmerkung>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] text-slate-400 hover:text-white font-mono transition-colors">&lt;Anm&gt;</button>
+          <button data-tag="<L>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] text-slate-400 hover:text-white font-mono transition-colors">&lt;L&gt;</button>
+        </div>
+
+        <!-- Content Area -->
+        <div class="flex-1 min-h-0 relative bg-slate-950">
+          <textarea id="raw-markdown-textarea" readonly placeholder="Nach der Analyse wird hier der extrahierte Text angezeigt." class="absolute inset-0 w-full h-full bg-slate-950 text-slate-300 font-mono text-xs p-3 focus:outline-none resize-none border-0 overflow-y-auto"></textarea>
+          <div id="raw-markdown-rendered" class="absolute inset-0 w-full h-full bg-slate-950 p-4 text-xs overflow-y-auto hidden prose prose-invert prose-slate max-w-none"></div>
+        </div>
+      </section>
+
+      <!-- Panel 3: E-Buch Markdown Editor (Gemma / Rules) -->
+      <section id="panel-standardised-container" class="flex-1 flex flex-col h-full bg-slate-900 border border-slate-800 rounded-xl overflow-hidden transition-all duration-200">
+        <!-- Panel Header -->
+        <div class="h-9 px-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/80 flex-shrink-0 select-none">
+          <span class="text-xs font-bold text-slate-300">2. E-Buch Standard Markdown</span>
+          <div class="flex items-center space-x-1.5">
+            <!-- Mode buttons -->
+            <button id="btn-edit-standardised" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-600 text-white border border-indigo-500 transition-colors">
+              Editor
+            </button>
+            <button id="btn-render-standardised" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition-colors">
+              Vorschau
+            </button>
+            <button id="btn-diff-standardised" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition-colors">
+              Differenzen
+            </button>
+          </div>
+        </div>
+
+        <!-- E-Buch Formatting Actions Toolbar -->
+        <div id="toolbar-standardised" class="h-8 bg-slate-900 border-b border-slate-800/80 px-2 flex items-center space-x-1 flex-shrink-0 select-none overflow-x-auto scrollbar-none">
+          <button data-tag="# " class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">H1</button>
+          <button data-tag="## " class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">H2</button>
+          <button data-tag="### " class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">H3</button>
+          <span class="w-px h-3.5 bg-slate-850"></span>
+          <button data-tag="*" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">*Fett*</button>
+          <button data-tag="%" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">%Kursiv%</button>
+          <button data-tag="_" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">_Unter_</button>
+          <span class="w-px h-3.5 bg-slate-850"></span>
+          <button data-tag="-\t" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">- Liste</button>
+          <button data-tag="<L>  </L>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white transition-colors">Math &lt;L&gt;</button>
+          <span class="w-px h-3.5 bg-slate-850"></span>
+          <button data-tag="<Bild> Foto/Zeichnung:  </Bild>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-indigo-300 hover:text-white transition-colors">&lt;Bild&gt;</button>
+          <button data-tag="<Tabelle>  </Tabelle>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-indigo-300 hover:text-white transition-colors">&lt;Tabelle&gt;</button>
+          <button data-tag="<Rahmen>  </Rahmen>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-indigo-300 hover:text-white transition-colors">&lt;Rahmen&gt;</button>
+          <button data-tag="<Anmerkung>  </Anmerkung>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-indigo-300 hover:text-white transition-colors">&lt;Anm&gt;</button>
+        </div>
+
+        <!-- Content Area -->
+        <div class="flex-1 min-h-0 relative bg-slate-950">
+          <textarea id="standardised-markdown-textarea" placeholder="Hier erscheint das nach den ausgewählten Regeln strukturierte E-Buch Markdown." class="absolute inset-0 w-full h-full bg-slate-950 text-slate-300 font-mono text-xs p-3 focus:outline-none focus:border-indigo-500/30 resize-none border-0 overflow-y-auto"></textarea>
+          <div id="standardised-markdown-rendered" class="absolute inset-0 w-full h-full bg-slate-950 p-4 text-xs overflow-y-auto hidden prose prose-invert prose-slate max-w-none"></div>
+          
+          <!-- Diff View Panel -->
+          <div id="standardised-markdown-diff" class="absolute inset-0 w-full h-full bg-slate-950 flex flex-col hidden">
+            <!-- Diff Legend -->
+            <div class="bg-slate-900 border-b border-slate-800 px-3 py-1.5 flex items-center justify-between text-[9px] text-slate-400 select-none flex-shrink-0">
+              <span class="font-semibold text-slate-300">Kategorien:</span>
+              <div class="flex items-center space-x-2.5">
+                <span class="flex items-center"><span class="w-2.5 h-2.5 rounded bg-indigo-900/60 border border-indigo-500/50 mr-1"></span>Sonderzeichen/Tags</span>
+                <span class="flex items-center"><span class="w-2.5 h-2.5 rounded bg-cyan-900/60 border border-cyan-500/50 mr-1"></span>Formatierung</span>
+                <span class="flex items-center"><span class="w-2.5 h-2.5 rounded bg-emerald-900/60 border border-emerald-500/50 mr-1"></span>Textveränderung</span>
+                <span class="flex items-center"><span class="w-2.5 h-2.5 rounded bg-red-900/60 border border-red-500/50 mr-1"></span>Löschung</span>
+              </div>
+            </div>
+            <!-- Diff Container -->
+            <div id="diff-view-content" class="flex-1 p-4 text-xs font-mono overflow-y-auto whitespace-pre-wrap leading-relaxed text-slate-350 bg-slate-950 select-text"></div>
+          </div>
+        </div>
+        <!-- LLM Feedback/Optimization Prompt Bar -->
+        <div id="optimization-container" class="border-t border-slate-800 p-2.5 bg-slate-900/55 flex items-center space-x-2 flex-shrink-0">
+          <input type="text" id="optimization-prompt-input" disabled placeholder="Was ist nicht optimal? (z.B. 'Formel auf Zeile 3 als LaTeX formatieren')" class="flex-1 bg-slate-950 border border-slate-850 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500/50 placeholder-slate-600 transition-colors">
+          <button id="btn-optimize" disabled class="bg-indigo-650 hover:bg-indigo-600 active:bg-indigo-700 text-white font-semibold px-4 py-1.5 rounded-lg text-xs border border-indigo-550 hover:border-indigo-500 transition-all flex items-center space-x-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
+            <span>Optimieren</span>
+          </button>
+        </div>
+      </section>
+
+    </main>
+
+    <div id="right-sidebar-handle" tabindex="0" role="button" aria-label="Rechte Seitenleiste ein- oder ausklappen" aria-expanded="true" class="w-1.5 hover:w-2 bg-slate-850 hover:bg-indigo-500 cursor-pointer h-full transition-all duration-150 flex-shrink-0 z-45" title="Rechte Seitenleiste ein-/ausklappen"></div>
+
+    <!-- Right Sidebar (Export Settings) -->
+    <aside id="right-sidebar" class="w-72 bg-slate-900 flex flex-col h-full transition-all duration-300 overflow-hidden flex-shrink-0">
+      <div class="p-4 border-b border-slate-800 space-y-4">
+        <h3 class="text-xs font-bold tracking-wider uppercase text-slate-400">Word-Exportoptionen</h3>
+
+        <!-- Accessibility Profile -->
+        <div class="space-y-1.5">
+          <label for="profile-select" class="text-[10px] font-bold text-slate-400">Zielgruppen-Profil</label>
+          <select id="profile-select" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors">
+            <option value="visually-impaired" selected>Sehbehindert</option>
+            <option value="braille">Brailleschrift (Blind)</option>
+            <option value="large-print">Großdruck (Sehbehindert)</option>
+            <option value="high-contrast">Hoher Kontrast (Farbblind)</option>
+          </select>
+        </div>
+
+        <!-- Template Selection upload -->
+        <div class="space-y-1.5">
+          <label for="template-mode-select" class="text-[10px] font-bold text-slate-400">Dokument-Designvorlage</label>
+          <select id="template-mode-select" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors">
+            <option value="default" selected>Standard (FIBS Vorlage)</option>
+            <option value="custom">Eigene Vorlage hochladen...</option>
+            <option value="none">Keine Vorlage (Standard Word-Format)</option>
+          </select>
+          
+          <div id="template-upload-container" class="hidden mt-1.5">
+            <div id="template-upload-zone" class="border border-dashed border-slate-800 rounded-lg p-3 text-center cursor-pointer bg-slate-950/20 hover:bg-slate-850/30 transition-colors">
+              <p class="text-[10px] text-slate-450" id="template-status-text">Vorlage hochladen (.docx, .dotx)</p>
+              <input type="file" id="template-file-input" class="hidden" accept=".docx,.dotx">
+            </div>
+          </div>
+          <p class="text-[9px] text-slate-500 leading-tight">Word-Layoutstile, Ränder und Schriftarten werden aus der gewählten Vorlage vererbt.</p>
+        </div>
+      </div>
+
+      <!-- Bottom actions -->
+      <div class="flex-1 flex flex-col justify-end p-4 space-y-3">
+        <!-- Secondary downloads -->
+        <div id="download-actions" class="hidden flex flex-col space-y-2">
+          <button id="download-raw-btn" class="w-full bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white font-medium py-2 px-3 rounded-lg text-xs border border-slate-700 transition-all">
+            Rohtext (.md) herunterladen
+          </button>
+          <button id="download-standard-btn" class="w-full bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white font-medium py-2 px-3 rounded-lg text-xs border border-slate-700 transition-all">
+            Standard-Text (.md) herunterladen
+          </button>
+        </div>
+
+        <!-- Main docx export trigger -->
+        <button id="download-docx-btn" disabled class="w-full bg-slate-800 text-slate-500 font-semibold py-3 px-4 rounded-xl cursor-not-allowed border border-slate-700 transition-all duration-300 text-xs">
+          Word-Datei erzeugen
+        </button>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Dedicated Benchmark & Evaluation View -->
+  <div id="main-benchmark-view" class="hidden flex-1 flex flex-col min-h-0 overflow-y-auto p-6 space-y-6 bg-slate-950">
+    
+    <!-- Benchmark Header & History Selector -->
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/80 shadow-xl">
+      <div class="space-y-1">
+        <h2 class="text-lg font-bold text-white tracking-tight flex items-center space-x-2">
+          <span>⚖️</span>
+          <span>Benchmark & Evaluierungs-Center</span>
+        </h2>
+        <p class="text-xs text-slate-400">Vergleiche Multi-Engine Layout-Extraktionen gegen Ground Truth Referenzen & E-Buch 2025 Standards</p>
+      </div>
+
+      <div class="flex items-center space-x-3 flex-wrap gap-2">
+        <!-- History Dropdown & Delete Button -->
+        <div class="flex items-center space-x-2">
+          <span class="text-xs text-slate-400 font-semibold">📜 Verlauf:</span>
+          <select id="bench-history-select" class="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+            <option value="">-- Benchmark-Verlauf wählen --</option>
+          </select>
+          <button id="bench-delete-history-btn" class="hidden px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all flex items-center space-x-1" title="Ausgewählten Run und Dateien vom Server löschen">
+            <span>🗑️</span>
+            <span>Run löschen</span>
+          </button>
+        </div>
+
+        <!-- Start Benchmark Button -->
+        <button id="start-custom-benchmark-btn" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold py-2 px-4 rounded-xl border border-indigo-400/30 focus:outline-none transition-all duration-200 text-xs flex items-center space-x-2 shadow-lg shadow-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
+          <span>🚀</span>
+          <span>Benchmark Ausführen</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Quad Upload Dropzones & Configuration Section -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+      
+      <!-- Box 1: Source PDF -->
+      <div class="glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-lg flex flex-col space-y-3">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+            <span>📄</span>
+            <span>1. Quell-Dokument (PDF)</span>
+          </label>
+          <span id="bench-source-badge" class="hidden px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Ausgewählt</span>
+        </div>
+        <div id="bench-source-dropzone" class="flex-1 min-h-[130px] border-2 border-dashed border-slate-750 hover:border-indigo-500/60 rounded-xl p-4 flex flex-col items-center justify-center text-center cursor-pointer bg-slate-950/40 hover:bg-slate-900/40 transition-all">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7 text-indigo-400 mb-2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+          </svg>
+          <p id="bench-source-filename" class="text-xs font-semibold text-slate-200">PDF hier ablegen oder klicken</p>
+          <p class="text-[10px] text-slate-400 mt-1">Digitale & gescannte Schulbuch-PDFs</p>
+          <input type="file" id="bench-source-file-input" class="hidden" accept=".pdf">
+        </div>
+      </div>
+
+      <!-- Box 2: Manual Ground Truth (.md, .txt, or .docx) -->
+      <div class="glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-lg flex flex-col space-y-3">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+            <span>✍️</span>
+            <span>2. Ground Truth (.md, .docx)</span>
+          </label>
+          <span id="bench-gt-badge" class="hidden px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Ausgewählt</span>
+        </div>
+        <div id="bench-gt-dropzone" class="flex-1 min-h-[130px] border-2 border-dashed border-slate-750 hover:border-emerald-500/60 rounded-xl p-4 flex flex-col items-center justify-center text-center cursor-pointer bg-slate-950/40 hover:bg-slate-900/40 transition-all">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7 text-emerald-400 mb-2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
+          </svg>
+          <p id="bench-gt-filename" class="text-xs font-semibold text-slate-200">Ground Truth (.md oder .docx) hier ablegen</p>
+          <p class="text-[10px] text-slate-400 mt-1">Manuell geprüfte Referenz</p>
+          <input type="file" id="bench-gt-file-input" class="hidden" accept=".md,.txt,.docx">
+        </div>
+      </div>
+
+      <!-- Box 3: Document-Specific Custom Rules (Optional) -->
+      <div class="glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-lg flex flex-col space-y-3">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+            <span>📜</span>
+            <span>3. Spezifische Regeln <span class="text-[10px] text-slate-400 font-normal lowercase">(optional)</span></span>
+          </label>
+          <span id="bench-rules-badge" class="hidden px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">Aktiv</span>
+        </div>
+        <div id="bench-rules-dropzone" class="flex-1 min-h-[130px] border-2 border-dashed border-slate-750 hover:border-purple-500/60 rounded-xl p-3 flex flex-col items-center justify-center text-center cursor-pointer bg-slate-950/40 hover:bg-slate-900/40 transition-all">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7 text-purple-400 mb-2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+          </svg>
+          <p id="bench-rules-filename" class="text-xs font-semibold text-slate-200">Regel-Datei (.docx, .md, .txt, .pdf) ablegen</p>
+          <p class="text-[10px] text-slate-400 mt-1">Oder Textfeld unten nutzen</p>
+          <input type="file" id="bench-rules-file-input" class="hidden" accept=".docx,.txt,.md,.pdf">
+        </div>
+        <textarea id="bench-custom-rules-textarea" rows="2" placeholder="Zusätzliche dateispezifische Anweisungen eingeben..." class="w-full bg-slate-950/80 border border-slate-800 rounded-lg p-2 text-[11px] text-slate-200 placeholder-slate-500 focus:outline-none focus:border-purple-500 resize-none"></textarea>
+      </div>
+
+      <!-- Box 4: Evaluation Options -->
+      <div class="glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-lg flex flex-col justify-between space-y-3">
+        <div class="space-y-2.5">
+          <label class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+            <span>⚙️</span>
+            <span>4. Konfiguration</span>
+          </label>
+          
+          <!-- Ruleset -->
+          <div class="space-y-1">
+            <span class="text-[11px] text-slate-400 font-semibold">Basis-Regelsatz:</span>
+            <select id="bench-ruleset-select" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+              <option value="uebertragungsregeln_09_2025" selected>Übertragungsregeln FIBS (Sept 2025)</option>
+              <option value="raw">Roh-Extraktion (Ohne LLM)</option>
+            </select>
+          </div>
+
+          <!-- Page Range Input -->
+          <div class="space-y-1">
+            <span class="text-[11px] text-slate-400 font-semibold flex items-center justify-between">
+              <span>Seitenbereich (optional):</span>
+              <span class="text-[9px] text-slate-500 font-normal">z.B. 1-5, 45-48</span>
+            </span>
+            <input type="text" id="bench-pages-input" placeholder="Erst Quell-PDF hochladen..." disabled class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-not-allowed opacity-60 transition-colors">
+            <p id="bench-pages-input-error" class="hidden text-[10px] text-rose-400 font-medium mt-1 flex items-start space-x-1">
+              <span class="shrink-0">⚠️</span><span id="bench-pages-input-error-text"></span>
+            </p>
+          </div>
+
+          <!-- Engine Checkboxes -->
+          <div class="space-y-1.5">
+            <span class="text-[11px] text-slate-400 font-semibold">Zu evaluierende Engines:</span>
+            <div class="grid grid-cols-1 gap-1.5 text-[11px]">
+              <label class="flex items-center space-x-1.5 bg-slate-950 p-1.5 rounded-lg border border-slate-850 cursor-pointer hover:border-slate-700">
+                <input type="checkbox" id="bench-eng-infinity" value="infinity" checked class="accent-indigo-500">
+                <span class="text-slate-200 font-semibold text-indigo-300">⚡ Infinity-Parser2-Flash + Docling Layout</span>
+              </label>
+              <label class="flex items-center space-x-1.5 bg-slate-950 p-1.5 rounded-lg border border-slate-850 cursor-pointer hover:border-slate-700">
+                <input type="checkbox" id="bench-eng-lightonocr" value="lightonocr" checked class="accent-indigo-500">
+                <span class="text-slate-200 font-semibold text-amber-300">🔥 LightOnOCR-3-0.8B + Docling Layout</span>
+              </label>
+              <label class="flex items-center space-x-1.5 bg-slate-950 p-1.5 rounded-lg border border-slate-850 cursor-pointer hover:border-slate-700">
+                <input type="checkbox" id="bench-eng-docling" value="docling" checked class="accent-indigo-500">
+                <span class="text-slate-200">🚀 Docling (IBM Research)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Enhanced Live Execution & Progress Component -->
+    <div id="bench-live-status" class="hidden glass-card p-5 rounded-2xl border border-indigo-500/40 bg-slate-900/95 shadow-2xl space-y-4">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="flex items-center space-x-3">
+          <div class="w-3.5 h-3.5 rounded-full bg-indigo-500 animate-ping"></div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <p id="bench-live-phase" class="text-xs font-bold text-slate-100">Extrahiere Layout & Text...</p>
+              <span id="bench-live-step-badge" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Engine 1 / 3</span>
+            </div>
+            <p id="bench-live-subtext" class="text-[11px] text-slate-400 mt-0.5">Sequenzielle Hardware-Ausführung auf Apple Silicon GPU</p>
+          </div>
+        </div>
+
+        <!-- Abort & Skip Controls -->
+        <div class="flex items-center space-x-2">
+          <button id="bench-skip-engine-btn" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-all flex items-center space-x-1.5">
+            <span>⏭️</span>
+            <span>Engine überspringen</span>
+          </button>
+          <button id="bench-abort-btn" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all flex items-center space-x-1.5">
+            <span>🛑</span>
+            <span>Benchmark abbrechen</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Animated Progress Bar -->
+      <div class="space-y-1.5">
+        <div class="flex justify-between items-center text-xs font-mono">
+          <span class="text-slate-400 text-[11px]">Gesamt-Fortschritt</span>
+          <span id="bench-live-progress-pct" class="font-bold text-indigo-400">0.0%</span>
+        </div>
+        <div class="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-slate-800">
+          <div id="bench-live-progress-bar" class="bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 h-2.5 rounded-full transition-all duration-300 w-0"></div>
+        </div>
+      </div>
+
+      <!-- Live Activity Log Console -->
+      <div class="space-y-1">
+        <div class="flex items-center justify-between">
+          <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400">Echtzeit-Aktivitätsprotokoll:</span>
+          <span class="text-[10px] font-mono text-slate-500">Apple Metal GPU Monitoring</span>
+        </div>
+        <div id="bench-live-logs" class="h-28 overflow-y-auto p-3 rounded-xl bg-slate-950 font-mono text-[11px] text-slate-300 border border-slate-850 space-y-1 select-text">
+          <!-- Logs injected by app.ts -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Benchmark Results Dashboard -->
+    <div id="bench-results-section" class="hidden space-y-6">
+      
+      <!-- Top Ranking Cards & Action Bar -->
+      <div>
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
+            <span>🏆</span>
+            <span>Evaluierungs-Ergebnisse & Rangliste</span>
+          </h3>
+          <button id="bench-reevaluate-btn" class="px-3.5 py-1.5 rounded-xl font-bold text-xs bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-600 hover:text-white transition-all flex items-center space-x-1.5 shadow-sm active:scale-95" title="Re-evaluiert alle Metriken und führt ein neues Gemma 4 LLM-Judge Urteil durch">
+            <span id="bench-reevaluate-icon">🔄</span>
+            <span id="bench-reevaluate-text">Neu evaluieren</span>
+          </button>
+        </div>
+        <div id="bench-ranking-cards" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <!-- Dynamic cards injected by app.ts -->
+        </div>
+      </div>
+
+      <!-- Multi-Category Comparison Table -->
+      <div class="glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/80 shadow-xl overflow-hidden">
+        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3">Detaillierte Kategorie-Matrix</h4>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs text-slate-300 border-collapse">
+            <thead>
+              <tr class="border-b border-slate-800 text-[11px] font-bold text-slate-400 uppercase bg-slate-950/60">
+                <th class="py-2.5 px-3">Rang</th>
+                <th class="py-2.5 px-3">Engine</th>
+                <th class="py-2.5 px-3">Lizenz</th>
+                <th class="py-2.5 px-3 font-bold text-indigo-300">Gesamt-Score</th>
+                <th class="py-2.5 px-3">Überschriften (10%)</th>
+                <th class="py-2.5 px-3">Formeln / STEM (25%)</th>
+                <th class="py-2.5 px-3">Tabellen (25%)</th>
+                <th class="py-2.5 px-3">Fluss / Dehyphen (20%)</th>
+                <th class="py-2.5 px-3">Barrierefreiheit (10%)</th>
+                <th class="py-2.5 px-3">LLM Judge (10%)</th>
+                <th class="py-2.5 px-3">Geschwindigkeit</th>
+              </tr>
+            </thead>
+            <tbody id="bench-matrix-tbody" class="divide-y divide-slate-800/60 text-xs font-medium">
+              <!-- Injected by app.ts -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Deep Dive Multi-Tab Inspector -->
+      <div class="glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/80 shadow-xl space-y-4">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+          <div class="flex items-center space-x-2">
+            <span class="text-base">🔬</span>
+            <div>
+              <h4 class="text-xs font-bold uppercase tracking-wider text-slate-200">Engine Deep Dive & Multi-Tab Inspektor</h4>
+              <p class="text-[10px] text-slate-400">Untersuchen Sie Roh-Extraktion, Gemma 4 Standardisierung, Diff & Judge-Analyse</p>
+            </div>
+          </div>
+          
+          <!-- Engine Diff Switcher & DOCX Download -->
+          <div class="flex items-center space-x-2">
+            <span class="text-[11px] text-slate-400 font-semibold">Engine wählen:</span>
+            <select id="bench-diff-engine-select" class="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+              <!-- Options populated by app.ts -->
+            </select>
+            <a id="bench-download-docx-btn" href="#" download class="hidden px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 flex items-center space-x-1.5 transition-all">
+              <span>📥</span>
+              <span>DOCX Herunterladen</span>
+            </a>
+          </div>
+        </div>
+
+        <!-- Inspector Tabs Header -->
+        <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-2 text-xs font-semibold">
+          <button id="bench-tab-btn-diff" class="px-3 py-1.5 rounded-lg bg-indigo-600/30 text-indigo-200 border border-indigo-500/40 transition-all flex items-center space-x-1.5">
+            <span>🔍</span>
+            <span>Visueller Diff gegen GT</span>
+          </button>
+          <button id="bench-tab-btn-raw" class="px-3 py-1.5 rounded-lg bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800 transition-all flex items-center space-x-1.5">
+            <span>⚡</span>
+            <span>Roh-Extraktion (vor LLM)</span>
+          </button>
+          <button id="bench-tab-btn-std" class="px-3 py-1.5 rounded-lg bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800 transition-all flex items-center space-x-1.5">
+            <span>✨</span>
+            <span>Gemma 4 Standardisiert</span>
+          </button>
+          <button id="bench-tab-btn-judge" class="px-3 py-1.5 rounded-lg bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800 transition-all flex items-center space-x-1.5">
+            <span>🤖</span>
+            <span>Gemma 4 Judge Analyse</span>
+          </button>
+        </div>
+
+        <!-- Inspector Panes -->
+        <div id="bench-tab-pane-diff" class="h-96 overflow-y-auto p-4 rounded-xl bg-slate-950 font-mono text-xs text-slate-300 border border-slate-850 leading-relaxed">
+          <!-- Injected by app.ts -->
+        </div>
+
+        <div id="bench-tab-pane-raw" class="hidden h-96 overflow-y-auto p-4 rounded-xl bg-slate-950 font-mono text-xs text-slate-300 border border-slate-850 whitespace-pre-wrap leading-relaxed select-text">
+          <!-- Injected by app.ts -->
+        </div>
+
+        <div id="bench-tab-pane-std" class="hidden h-96 overflow-y-auto p-4 rounded-xl bg-slate-950 font-mono text-xs text-slate-300 border border-slate-850 whitespace-pre-wrap leading-relaxed select-text">
+          <!-- Injected by app.ts -->
+        </div>
+
+        <div id="bench-tab-pane-judge" class="hidden h-96 overflow-y-auto p-5 rounded-xl bg-slate-950 text-xs text-slate-300 border border-slate-850 space-y-4">
+          <!-- Injected by app.ts -->
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Settings View: persistent application settings (form rendered from GET /api/settings schema) -->
+  <div id="main-settings-view" class="hidden flex-1 flex flex-col min-h-0 overflow-y-auto p-6 space-y-6 bg-slate-950">
+    <div class="glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/80 shadow-xl space-y-1">
+      <h2 class="text-lg font-bold text-white tracking-tight flex items-center space-x-2">
+        <span>⚙️</span>
+        <span>Einstellungen</span>
+      </h2>
+      <p class="text-xs text-slate-400 max-w-3xl">Diese Einstellungen gelten für alle künftigen Übertragungen und werden lokal gespeichert.</p>
+    </div>
+    <form id="settings-form" class="glass-card fb-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-lg space-y-5 max-w-3xl" novalidate>
+      <div id="settings-fields" class="space-y-6"></div>
+      <div class="flex items-center gap-3 flex-wrap pt-2 border-t border-slate-800">
+        <button id="settings-save-btn" type="submit" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold py-2 px-4 rounded-xl border border-indigo-400/30 transition-all duration-200 text-xs shadow-lg shadow-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed">Speichern</button>
+        <button id="settings-reset-btn" type="button" class="text-xs text-slate-300 hover:text-white px-3 py-2 rounded-xl border border-slate-700 hover:border-slate-500 transition-colors">Standardwerte</button>
+        <p id="settings-status" class="settings-status text-xs" role="status" aria-live="polite"></p>
+      </div>
+    </form>
+  </div>
+
+  <!-- Dedicated Feedback View: analyse manual corrections of a transfer with Gemma 4 -->
+  <div id="main-feedback-view" class="hidden flex-1 flex flex-col min-h-0 overflow-y-auto p-6 space-y-6 bg-slate-950">
+
+    <!-- Header -->
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/80 shadow-xl">
+      <div class="space-y-1">
+        <h2 class="text-lg font-bold text-white tracking-tight flex items-center space-x-2">
+          <span>💬</span>
+          <span>Feedback zur Übertragung</span>
+        </h2>
+        <p class="text-xs text-slate-400 max-w-3xl">Lade eine manuell korrigierte Übertragung hoch, beschreibe die Probleme und markiere fehlerhafte Stellen im Quell-PDF. Gemma 4 analysiert lokal, was schiefgelaufen ist, und erstellt eine Fehleranalyse für einen Coding Assistant – mit Mustern und Beispielen statt längerer (geschützter) Textpassagen.</p>
+      </div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <label for="fb-reports-select" class="text-xs text-slate-400 font-semibold">📜 Berichte:</label>
+        <select id="fb-reports-select" class="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 max-w-[260px]">
+          <option value="">-- Früheren Bericht öffnen --</option>
+        </select>
+        <button id="fb-analyze-btn" disabled class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold py-2 px-4 rounded-xl border border-indigo-400/30 focus:outline-none transition-all duration-200 text-xs flex items-center space-x-2 shadow-lg shadow-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
+          <span>🧠</span>
+          <span>Analyse mit Gemma 4 starten</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-5 gap-5">
+      <!-- Left column: job, revised transfer, feedback -->
+      <div class="xl:col-span-2 flex flex-col gap-5">
+
+        <!-- 1. Job selection -->
+        <section class="glass-card fb-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-lg space-y-3" aria-labelledby="fb-step1-title">
+          <div class="flex items-center justify-between">
+            <h3 id="fb-step1-title" class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+              <span class="fb-step-num">1</span><span>Auftrag aus der Historie</span>
+            </h3>
+            <button id="fb-refresh-jobs-btn" type="button" class="text-[10px] text-slate-400 hover:text-white px-2 py-0.5 rounded border border-slate-800 hover:border-slate-600 transition-colors" title="Historie neu laden">↻ Aktualisieren</button>
+          </div>
+          <label for="fb-job-select" class="sr-only">Auftrag auswählen</label>
+          <select id="fb-job-select" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+            <option value="">-- Bearbeiteten Auftrag wählen --</option>
+          </select>
+          <div id="fb-job-artifacts" class="hidden flex flex-wrap items-center gap-1.5 text-[10px]"></div>
+
+          <button id="fb-toggle-new-job-btn" type="button" class="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 transition-colors" aria-expanded="false" aria-controls="fb-new-job-form">
+            ＋ Auftrag fehlt? Neuen Auftrag anlegen
+          </button>
+          <div id="fb-new-job-form" class="hidden space-y-2.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+            <div class="space-y-1">
+              <label for="fb-new-transfer-input" class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Automatische Übertragung (.md oder .docx) *</label>
+              <input type="file" id="fb-new-transfer-input" accept=".md,.txt,.docx" class="fb-file-input">
+            </div>
+            <div class="space-y-1">
+              <label for="fb-new-pdf-input" class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Quell-PDF (für Markierungen empfohlen)</label>
+              <input type="file" id="fb-new-pdf-input" accept=".pdf" class="fb-file-input">
+            </div>
+            <button id="fb-create-job-btn" type="button" disabled class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 rounded-lg text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Auftrag anlegen</button>
+          </div>
+        </section>
+
+        <!-- 2. Revised transfer -->
+        <section class="glass-card fb-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-lg space-y-3" aria-labelledby="fb-step2-title">
+          <div class="flex items-center justify-between">
+            <h3 id="fb-step2-title" class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+              <span class="fb-step-num">2</span><span>Überarbeitete Übertragung</span>
+            </h3>
+            <span id="fb-revised-badge" class="hidden px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Ausgewählt</span>
+          </div>
+          <div id="fb-revised-dropzone" tabindex="0" role="button" aria-label="Überarbeitete Übertragung hochladen" class="min-h-[110px] border-2 border-dashed border-slate-750 hover:border-emerald-500/60 rounded-xl p-4 flex flex-col items-center justify-center text-center cursor-pointer bg-slate-950/40 hover:bg-slate-900/40 transition-all">
+            <span class="text-2xl mb-1" aria-hidden="true">✍️</span>
+            <p id="fb-revised-filename" class="text-xs font-semibold text-slate-200">Korrigierte Fassung (.docx oder .md) ablegen</p>
+            <p class="text-[10px] text-slate-400 mt-1">Wird automatisch in Markdown umgewandelt</p>
+            <input type="file" id="fb-revised-input" class="hidden" accept=".md,.txt,.docx">
+          </div>
+        </section>
+
+        <!-- 3. Feedback -->
+        <section class="glass-card fb-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-lg space-y-3" aria-labelledby="fb-step3-title">
+          <h3 id="fb-step3-title" class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+            <span class="fb-step-num">3</span><span>Feedback <span class="text-[10px] text-slate-400 font-normal lowercase">(optional)</span></span>
+          </h3>
+          <label for="fb-feedback-text" class="sr-only">Feedback als Text</label>
+          <textarea id="fb-feedback-text" rows="5" placeholder="Was wurde nicht korrekt übertragen? z. B. „Aufgabennummern fehlen als Überschrift“, „Tabellen sind zerrissen“, „Seitenzahlen an falscher Stelle“ …" class="w-full bg-slate-950/80 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-y"></textarea>
+          <div class="flex items-center justify-between gap-2">
+            <label for="fb-feedback-file-input" class="text-[10px] text-slate-400">oder Datei (.txt, .md, .docx, .pdf):</label>
+            <input type="file" id="fb-feedback-file-input" accept=".txt,.md,.docx,.pdf" class="fb-file-input max-w-[60%]">
+          </div>
+        </section>
+      </div>
+
+      <!-- Right column: PDF region marking -->
+      <section class="xl:col-span-3 glass-card fb-card p-5 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-lg flex flex-col space-y-3 min-h-[520px]" aria-labelledby="fb-step4-title">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 id="fb-step4-title" class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-1.5">
+            <span class="fb-step-num">4</span><span>Fehlerstellen im Quell-PDF markieren <span class="text-[10px] text-slate-400 font-normal lowercase">(optional)</span></span>
+          </h3>
+          <div class="flex items-center gap-1.5 text-xs">
+            <button id="fb-page-prev-btn" type="button" disabled class="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 hover:text-white disabled:opacity-40" aria-label="Vorherige Seite">‹</button>
+            <label for="fb-page-select" class="sr-only">Seite</label>
+            <select id="fb-page-select" disabled class="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-40"></select>
+            <button id="fb-page-next-btn" type="button" disabled class="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 hover:text-white disabled:opacity-40" aria-label="Nächste Seite">›</button>
+          </div>
+        </div>
+
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4 min-h-0">
+          <!-- Page canvas -->
+          <div class="lg:col-span-2 flex flex-col min-h-0">
+            <div id="fb-page-stage" tabindex="0" role="region" aria-label="Seitenansicht des Quell-PDFs – Mausrad oder Bild-Tasten blättern seitenweise" class="fb-page-stage relative h-[70vh] min-h-[420px] overflow-hidden rounded-xl bg-slate-950 border border-slate-850 flex items-center justify-center p-2">
+              <p id="fb-page-placeholder" class="m-auto text-xs text-slate-500 p-6 text-center">Wähle einen Auftrag mit Quell-PDF, um Stellen zu markieren.</p>
+              <div id="fb-page-canvas-wrap" class="hidden relative select-none touch-none">
+                <img id="fb-page-image" alt="Seite des Quell-PDFs" class="fb-page-image block w-auto h-auto" draggable="false">
+                <div id="fb-page-overlay" class="absolute inset-0 cursor-crosshair" aria-hidden="true">
+                  <div id="fb-selection-rect" class="fb-selection hidden absolute"></div>
+                </div>
+              </div>
+            </div>
+            <p class="text-[10px] text-slate-500 mt-1.5">Ziehe mit der Maus einen Rahmen um die fehlerhafte Stelle – der Ausschnitt wird als PNG übernommen. Mit dem Mausrad (oder Bild ↑/↓) blätterst du seitenweise. Angezeigt werden die Seitenzahlen des PDFs.</p>
+          </div>
+
+          <!-- Region controls & list -->
+          <div class="flex flex-col gap-2.5 min-h-0">
+            <label for="fb-region-note" class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Notiz zur Stelle</label>
+            <input type="text" id="fb-region-note" placeholder="z. B. Tabelle fehlt komplett" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+            <button id="fb-add-region-btn" type="button" disabled class="w-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/40 font-semibold py-1.5 rounded-lg text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed">✂️ Markierung als PNG übernehmen</button>
+            <button id="fb-add-fullpage-btn" type="button" disabled class="w-full bg-slate-950 hover:bg-slate-850 text-slate-300 border border-slate-800 font-semibold py-1.5 rounded-lg text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed">📄 Ganze Seite übernehmen</button>
+            <div class="flex items-center justify-between pt-1">
+              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Markierte Stellen</span>
+              <span id="fb-region-count" class="text-[10px] font-mono text-slate-400">0</span>
+            </div>
+            <ul id="fb-regions-list" class="flex-1 overflow-y-auto space-y-2 pr-1 max-h-[46vh]" aria-live="polite">
+              <li class="fb-empty text-[10px] text-slate-500 italic">Noch keine Stellen markiert.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Progress -->
+    <div id="fb-progress" class="hidden glass-card p-5 rounded-2xl border border-indigo-500/40 bg-slate-900/95 shadow-2xl space-y-3" role="status" aria-live="polite">
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex items-center space-x-3">
+          <div class="w-3 h-3 rounded-full bg-indigo-500 animate-ping"></div>
+          <p id="fb-progress-phase" class="text-xs font-bold text-slate-100">Bereite Analyse vor…</p>
+        </div>
+        <span id="fb-progress-percent" class="font-mono font-bold text-indigo-400 text-xs">0%</span>
+      </div>
+      <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-850">
+        <div id="fb-progress-bar" class="bg-gradient-to-r from-indigo-500 via-purple-500 to-fuchsia-500 h-full w-0 transition-all duration-500"></div>
+      </div>
+      <p id="fb-progress-log" class="text-[11px] text-slate-400 font-mono"></p>
+    </div>
+
+    <!-- Live Gemma output (logs + token stream) -->
+    <details id="fb-live-panel" class="hidden fb-live-panel glass-card rounded-2xl border border-slate-800 bg-slate-900/80 shadow-xl" open>
+      <summary class="fb-live-summary px-5 py-3 cursor-pointer select-none flex flex-wrap items-center justify-between gap-2">
+        <span class="text-sm font-bold text-white flex items-center gap-2">
+          <span id="fb-live-indicator" class="fb-live-dot" aria-hidden="true"></span>
+          <span>🖥️ Gemma Live-Ausgabe</span>
+        </span>
+        <span id="fb-live-stats" class="text-[11px] font-mono text-slate-400">0 Tokens</span>
+      </summary>
+      <div class="px-5 pb-5 space-y-3">
+        <p id="fb-live-warning" class="fb-live-warning text-[11px] rounded-lg px-3 py-2">
+          ⚠️ Rohausgabe des Modells – ungefiltert, nur lokal sichtbar und wird nicht gespeichert.
+          Der Urheberrechtsfilter (Entfernen längerer Textpassagen) wird erst auf den finalen Bericht angewendet.
+        </p>
+        <div class="grid grid-cols-1 lg:grid-cols-5 gap-3">
+          <section class="lg:col-span-2 space-y-1" aria-labelledby="fb-live-log-title">
+            <h4 id="fb-live-log-title" class="text-[11px] font-bold uppercase tracking-wide text-slate-400">Protokoll</h4>
+            <ol id="fb-live-log" class="fb-live-log h-72 overflow-y-auto rounded-xl bg-slate-950 border border-slate-850 p-3 font-mono text-[11px] text-slate-400 space-y-0.5" aria-live="off"></ol>
+          </section>
+          <section class="lg:col-span-3 space-y-1" aria-labelledby="fb-live-output-title">
+            <h4 id="fb-live-output-title" class="text-[11px] font-bold uppercase tracking-wide text-slate-400">Generierter Text</h4>
+            <div id="fb-live-output" class="fb-live-output h-72 overflow-y-auto rounded-xl bg-slate-950 border border-slate-850 p-3 text-xs text-slate-300 select-text" aria-live="off"></div>
+          </section>
+        </div>
+      </div>
+    </details>
+
+    <!-- Result -->
+    <section id="fb-result-section" class="hidden glass-card p-5 rounded-2xl border border-slate-800 bg-slate-900/80 shadow-xl space-y-4" aria-labelledby="fb-result-title">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 id="fb-result-title" class="text-sm font-bold text-white flex items-center space-x-2">
+          <span>🤖</span><span>Fehleranalyse für den Coding Assistant</span>
+        </h3>
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="fb-answer-questions-btn" type="button" class="hidden px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-medium transition-colors">❓ Offene Fragen beantworten</button>
+          <button id="fb-copy-report-btn" type="button" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors">📋 Kopieren</button>
+          <button id="fb-download-report-btn" type="button" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition-colors">⬇️ Als .md herunterladen</button>
+        </div>
+      </div>
+      <article id="fb-report-content" class="fb-report max-h-[70vh] overflow-y-auto p-5 rounded-xl bg-slate-950 border border-slate-850 text-xs text-slate-300 leading-relaxed select-text"></article>
+    </section>
+  </div>
+
+  <!-- Beautiful Error Modal -->
+  <div id="error-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md hidden transition-all duration-300 select-none" role="dialog" aria-modal="true" aria-labelledby="error-modal-title">
+    <div class="glass-card max-w-md w-full p-6 rounded-2xl border border-red-500/20 bg-slate-900/90 shadow-2xl relative">
+      <div class="flex flex-col items-center text-center space-y-4">
+        <!-- Error icon with red pulsing background -->
+        <div class="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-6 h-6">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+        </div>
+        
+        <h3 id="error-modal-title" class="text-base font-bold text-slate-100 Outfit">Seitenauswahl fehlerhaft</h3>
+        
+        <p id="error-modal-message" class="text-xs text-slate-300 leading-relaxed"></p>
+        
+        <button id="error-modal-close-btn" class="w-full bg-slate-800 hover:bg-slate-750 text-slate-200 font-semibold py-2 px-4 rounded-lg border border-slate-700 hover:border-slate-600 focus:outline-none transition-all duration-150 text-xs">
+          Verstanden
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+
+  <!-- Document Specific Rules Inspection Modal -->
+  <div id="ruleset-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm hidden" aria-modal="true" role="dialog" aria-labelledby="ruleset-modal-title">
+    <div class="bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col mx-4 overflow-hidden">
+      <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
+        <div class="flex items-center space-x-2">
+          <span class="text-indigo-400 text-lg">📜</span>
+          <h3 id="ruleset-modal-title" class="text-sm font-semibold text-slate-100">Dateispezifische Regeln (Gemma 4 Prompt-Vorgaben)</h3>
+        </div>
+        <button id="close-ruleset-modal-btn" class="text-slate-400 hover:text-slate-200 text-sm p-1 hover:bg-slate-800 rounded-lg transition-colors">✕</button>
+      </div>
+      <div class="p-5 flex-1 overflow-y-auto font-mono text-xs text-slate-300 bg-slate-950/40 whitespace-pre-wrap select-text leading-relaxed border-b border-slate-800/80" id="ruleset-modal-content">
+        <!-- Parsed rules content rendered here -->
+      </div>
+      <div class="px-5 py-3 bg-slate-950/60 flex items-center justify-between text-xs text-slate-400">
+        <span id="ruleset-modal-stats">0 Zeichen</span>
+        <div class="flex items-center space-x-2">
+          <button id="copy-ruleset-btn" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors flex items-center space-x-1">
+            <span>📋</span><span>Kopieren</span>
+          </button>
+          <button id="close-ruleset-modal-btn-bottom" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition-colors">
+            Schließen
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Feedback: Gemma's open questions (step by step) -->
+  <div id="fb-questions-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md hidden" role="dialog" aria-modal="true" aria-labelledby="fb-questions-title" aria-describedby="fb-question-text">
+    <div class="fb-questions-card glass-card w-full max-w-lg mx-4 rounded-2xl border border-amber-500/30 bg-slate-900/95 shadow-2xl overflow-hidden">
+      <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
+        <div class="flex items-center gap-2">
+          <span class="text-lg" aria-hidden="true">❓</span>
+          <h3 id="fb-questions-title" class="text-sm font-semibold text-slate-100">Offene Fragen von Gemma</h3>
+        </div>
+        <div class="flex items-center gap-3">
+          <span id="fb-question-counter" class="text-[11px] font-mono text-slate-400">Frage 1 von 1</span>
+          <button id="fb-questions-close-btn" type="button" class="text-slate-400 hover:text-slate-200 text-sm p-1 hover:bg-slate-800 rounded-lg transition-colors" aria-label="Schließen ohne Speichern">✕</button>
+        </div>
+      </div>
+      <div class="p-5 space-y-3">
+        <div id="fb-question-steps" class="fb-question-steps" aria-hidden="true"></div>
+        <p id="fb-question-text" class="fb-question-text text-sm text-slate-100 leading-relaxed"></p>
+        <label for="fb-answer-input" class="block text-[11px] font-semibold text-slate-400">Kurze Antwort (wird unter der Frage in den Bericht übernommen)</label>
+        <textarea id="fb-answer-input" rows="3" maxlength="2000" class="w-full rounded-xl bg-slate-950 border border-slate-800 focus:border-amber-500/60 focus:outline-none p-3 text-xs text-slate-200 resize-y" placeholder="z. B. „Als Bild mit kurzer Beschreibung übertragen“"></textarea>
+        <p class="text-[10px] text-slate-500">Strg/⌘ + Enter: weiter · Übersprungene Fragen bleiben im Bericht als „weiterhin offen“ markiert.</p>
+      </div>
+      <div class="px-5 py-3 bg-slate-950/60 border-t border-slate-800 flex items-center justify-between gap-2">
+        <button id="fb-question-prev-btn" type="button" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 rounded-lg text-xs font-medium transition-colors">← Zurück</button>
+        <div class="flex items-center gap-2">
+          <button id="fb-question-skip-btn" type="button" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors">Überspringen</button>
+          <button id="fb-question-next-btn" type="button" class="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg text-xs font-semibold transition-colors">Weiter →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/app.ts"></script>
+</body>
+</html>

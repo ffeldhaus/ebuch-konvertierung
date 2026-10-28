@@ -1,0 +1,4 @@
+Datei-spezifische Regeln für grundschule_sachkunde:
+1. Dieses Schulbuch verwendet KEINE Schwierigkeitsgrad-Symbole.
+2. Piktogramme neben der Aufgabenüberschrift:
+   - Blaues Zwei-Personen-Piktogramm (bei Aufgabe 4) wird auf der Zeile unter der Aufgabenüberschrift übertragen als: [Partnerarbeit]

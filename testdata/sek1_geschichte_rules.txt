@@ -1,0 +1,6 @@
+Datei-spezifische Regeln für sek1_geschichte:
+1. Schwierigkeitsgrade (Rauten-Symbole in den Aufgabenüberschriften):
+   - ◇ (leere Raute) wird übertragen als: [leicht]
+   - ◈ (halb gefüllte Raute) wird übertragen als: [mittel]
+   - ◆ (gefüllte Raute) wird übertragen als: [schwer]
+2. Die Schwierigkeitsgrade stehen in einer eigenen Zeile direkt unter der Aufgabenüberschrift.

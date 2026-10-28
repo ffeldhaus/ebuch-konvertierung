@@ -1,0 +1,1110 @@
+{
+  "test_educational.pdf": {
+    "description": "Physik Sekundarstufe II: Optik & Dispersion",
+    "total_images": 7,
+    "images": [
+      {
+        "id": "fig_4_1",
+        "page_idx": 0,
+        "physical_page": 45,
+        "filename": "figures/dispersion_prisma.png",
+        "caption": "Abbildung 4.1: Versuchsaufbau zur optischen Dispersion mit einem Glasprisma.",
+        "type": "Zeichnung",
+        "pt_bounds": [
+          156.0,
+          223.0,
+          456.0,
+          423.0
+        ],
+        "pt_size": [
+          300.0,
+          200.0
+        ],
+        "pixel_resolution": [
+          600,
+          400
+        ],
+        "aspect_ratio": 1.5,
+        "normalized_box_1000": [
+          466,
+          255,
+          718,
+          745
+        ]
+      },
+      {
+        "id": "fig_4_2a",
+        "page_idx": 2,
+        "physical_page": 47,
+        "filename": "figures/prisma_front.png",
+        "caption": "Abbildung 4.2a: Prisma von vorne (Schematische Zeichnung).",
+        "type": "Zeichnung",
+        "pt_bounds": [
+          98.5,
+          587.0,
+          233.5,
+          677.0
+        ],
+        "pt_size": [
+          135.0,
+          90.0
+        ],
+        "pixel_resolution": [
+          300,
+          200
+        ],
+        "aspect_ratio": 1.5,
+        "normalized_box_1000": [
+          145,
+          161,
+          259,
+          382
+        ]
+      },
+      {
+        "id": "fig_4_2b",
+        "page_idx": 2,
+        "physical_page": 47,
+        "filename": "figures/prisma_side.png",
+        "caption": "Abbildung 4.2b: Strahlengang im Prisma (Diagramm).",
+        "type": "Diagramm",
+        "pt_bounds": [
+          238.5,
+          587.0,
+          373.5,
+          677.0
+        ],
+        "pt_size": [
+          135.0,
+          90.0
+        ],
+        "pixel_resolution": [
+          300,
+          200
+        ],
+        "aspect_ratio": 1.5,
+        "normalized_box_1000": [
+          145,
+          390,
+          259,
+          610
+        ]
+      },
+      {
+        "id": "fig_4_2c",
+        "page_idx": 2,
+        "physical_page": 47,
+        "filename": "figures/prisma_lab_photo.png",
+        "caption": "Abbildung 4.2c: Reales Glasprisma im Labor (Fotoaufnahme).",
+        "type": "Foto",
+        "pt_bounds": [
+          378.5,
+          587.0,
+          513.5,
+          677.0
+        ],
+        "pt_size": [
+          135.0,
+          90.0
+        ],
+        "pixel_resolution": [
+          300,
+          200
+        ],
+        "aspect_ratio": 1.5,
+        "normalized_box_1000": [
+          145,
+          618,
+          259,
+          839
+        ]
+      },
+      {
+        "id": "fig_4_3a",
+        "page_idx": 2,
+        "physical_page": 47,
+        "filename": "figures/reflexion_spiegel.png",
+        "caption": "Abbildung 4.3a: Reflexionsgesetz am Spiegel (Illustration).",
+        "type": "Zeichnung",
+        "pt_bounds": [
+          111.0,
+          188.0,
+          291.0,
+          283.0
+        ],
+        "pt_size": [
+          180.0,
+          95.0
+        ],
+        "pixel_resolution": [
+          300,
+          200
+        ],
+        "aspect_ratio": 1.89,
+        "normalized_box_1000": [
+          643,
+          181,
+          763,
+          475
+        ]
+      },
+      {
+        "id": "fig_4_3b",
+        "page_idx": 2,
+        "physical_page": 47,
+        "filename": "figures/brechung_wasser_photo.png",
+        "caption": "Abbildung 4.3b: Laserstrahl-Lichtbrechung im Wasser (Foto).",
+        "type": "Foto",
+        "pt_bounds": [
+          321.0,
+          188.0,
+          501.0,
+          283.0
+        ],
+        "pt_size": [
+          180.0,
+          95.0
+        ],
+        "pixel_resolution": [
+          300,
+          200
+        ],
+        "aspect_ratio": 1.89,
+        "normalized_box_1000": [
+          643,
+          525,
+          763,
+          819
+        ]
+      },
+      {
+        "id": "fig_4_4",
+        "page_idx": 3,
+        "physical_page": 48,
+        "filename": "figures/strahlengang.png",
+        "caption": "Abbildung 4.4: Strahlengang bei Totalreflexion.",
+        "type": "Diagramm",
+        "pt_bounds": [
+          112.0,
+          515.0,
+          252.0,
+          605.0
+        ],
+        "pt_size": [
+          140.0,
+          90.0
+        ],
+        "pixel_resolution": [
+          300,
+          200
+        ],
+        "aspect_ratio": 1.56,
+        "normalized_box_1000": [
+          236,
+          183,
+          350,
+          412
+        ]
+      }
+    ]
+  },
+  "deutsch_textanalyse.pdf": {
+    "description": "Literarische Textanalyse: Faust I",
+    "total_images": 0,
+    "images": []
+  },
+  "mathe_grade3.pdf": {
+    "description": "Mathematik 3. Klasse: Rechnen & Geometrie",
+    "total_images": 0,
+    "images": []
+  },
+  "physik_optik_sample.pdf": {
+    "description": "Physik Sekundarstufe II: Optik & Brechung (Physik Libre)",
+    "total_images": 5,
+    "images": [
+      {
+        "id": "fig_11_49",
+        "page_idx": 0,
+        "physical_page": 500,
+        "filename": "images/abb_11_49.png",
+        "caption": "Abbildung 11.49: Lichtweg mit Knick",
+        "type": "Zeichnung"
+      },
+      {
+        "id": "fig_11_50",
+        "page_idx": 0,
+        "physical_page": 500,
+        "filename": "images/abb_11_50.png",
+        "caption": "Abbildung 11.50: Lichtbrechung am Übergang Luft-Glas",
+        "type": "Zeichnung"
+      },
+      {
+        "id": "fig_11_51",
+        "page_idx": 1,
+        "physical_page": 501,
+        "filename": "images/abb_11_51.png",
+        "caption": "Abbildung 11.51: Wie erreicht der Rettungsschwimmer den Ertrinkenden am schnellsten?",
+        "type": "Zeichnung"
+      },
+      {
+        "id": "fig_11_52",
+        "page_idx": 2,
+        "physical_page": 502,
+        "filename": "images/abb_11_52.png",
+        "caption": "Abbildung 11.52: Laufzeit beim Rettungsschwimmer-Problem",
+        "type": "Diagramm"
+      },
+      {
+        "id": "fig_11_53",
+        "page_idx": 3,
+        "physical_page": 503,
+        "filename": "images/abb_11_53.png",
+        "caption": "Abbildung 11.53: Snelliussches Brechungsgesetz",
+        "type": "Diagramm"
+      }
+    ]
+  },
+  "grundschule_mathematik.pdf": {
+    "description": "Grundschule Klasse 3: Mathematik (DIN A4)",
+    "total_images": 3,
+    "images": [
+      {
+        "id": "fig_gs_1",
+        "page_idx": 0,
+        "physical_page": 14,
+        "filename": "figures/gs_zahlenstrahl_1000.png",
+        "caption": "Abb. 1.1: Sprünge am Zahlenstrahl bis 1000",
+        "type": "Zahlenstrahl",
+        "pt_bounds": [
+          48.0,
+          550.9,
+          543.0,
+          693.9
+        ],
+        "pt_size": [
+          495.0,
+          143.0
+        ],
+        "pixel_resolution": [
+          900,
+          260
+        ],
+        "aspect_ratio": 3.46,
+        "normalized_box_1000": [
+          176,
+          81,
+          346,
+          912
+        ]
+      },
+      {
+        "id": "fig_gs_2",
+        "page_idx": 1,
+        "physical_page": 15,
+        "filename": "figures/gs_rechenmauer_dreieck.png",
+        "caption": "Abb. 1.2: Rechenmauer und Rechendreieck mit Lücken",
+        "type": "Rechenmauer und Rechendreieck",
+        "pt_bounds": [
+          48.0,
+          556.9,
+          543.0,
+          754.9
+        ],
+        "pt_size": [
+          495.0,
+          198.0
+        ],
+        "pixel_resolution": [
+          900,
+          360
+        ],
+        "aspect_ratio": 2.5,
+        "normalized_box_1000": [
+          103,
+          81,
+          339,
+          912
+        ]
+      },
+      {
+        "id": "fig_gs_3",
+        "page_idx": 2,
+        "physical_page": 16,
+        "filename": "figures/gs_analoge_uhren.png",
+        "caption": "Abb. 1.3: Drei analoge Uhren im Tagesverlauf",
+        "type": "Uhren-Darstellung",
+        "pt_bounds": [
+          48.0,
+          589.9,
+          543.0,
+          754.9
+        ],
+        "pt_size": [
+          495.0,
+          165.0
+        ],
+        "pixel_resolution": [
+          900,
+          300
+        ],
+        "aspect_ratio": 3.0,
+        "normalized_box_1000": [
+          103,
+          81,
+          299,
+          912
+        ]
+      }
+    ]
+  },
+  "grundschule_sachkunde.pdf": {
+    "description": "Grundschule Klasse 3: Sachunterricht (DIN A4)",
+    "total_images": 1,
+    "images": [
+      {
+        "id": "fig_gs_4",
+        "page_idx": 1,
+        "physical_page": 25,
+        "filename": "figures/gs_nahrungskette_wiese.png",
+        "caption": "Abb. 2.1: Nahrungskette auf der Streuobstwiese",
+        "type": "Strukturdiagramm",
+        "pt_bounds": [
+          48.0,
+          603.9,
+          543.0,
+          752.4
+        ],
+        "pt_size": [
+          495.0,
+          148.5
+        ],
+        "pixel_resolution": [
+          900,
+          270
+        ],
+        "aspect_ratio": 3.33,
+        "normalized_box_1000": [
+          106,
+          81,
+          283,
+          912
+        ]
+      }
+    ]
+  },
+  "sek1_deutsch.pdf": {
+    "description": "Sekundarstufe I Klasse 7: Deutsch (DIN A4)",
+    "total_images": 0,
+    "images": []
+  },
+  "sek1_englisch.pdf": {
+    "description": "Sekundarstufe I Klasse 7/8: Englisch (DIN A4)",
+    "total_images": 1,
+    "images": [
+      {
+        "id": "fig_s1_lang_1",
+        "page_idx": 0,
+        "physical_page": 64,
+        "filename": "figures/sek1_cornwall_coastal_action.png",
+        "caption": "Abb. 4.1: Jugendmagazin-Collage – Clean-up Action at Cornwall Coast",
+        "type": "Jugendmagazin-Collage",
+        "pt_bounds": [
+          48.0,
+          575.9,
+          543.0,
+          751.9
+        ],
+        "pt_size": [
+          495.0,
+          176.0
+        ],
+        "pixel_resolution": [
+          900,
+          320
+        ],
+        "aspect_ratio": 2.81,
+        "normalized_box_1000": [
+          107,
+          81,
+          316,
+          912
+        ]
+      }
+    ]
+  },
+  "sek1_geographie.pdf": {
+    "description": "Sekundarstufe I Klasse 9/10: Geographie (DIN A4)",
+    "total_images": 3,
+    "images": [
+      {
+        "id": "fig_geo_1",
+        "page_idx": 0,
+        "physical_page": 204,
+        "filename": "figures/geo_karte_oberrheingraben.png",
+        "caption": "Abb. 2.1: Physische und thematische Karte des Oberrheingrabens",
+        "type": "Karte",
+        "pt_bounds": [
+          48.0,
+          423.9,
+          543.0,
+          687.9
+        ],
+        "pt_size": [
+          495.0,
+          264.0
+        ],
+        "pixel_resolution": [
+          900,
+          480
+        ],
+        "aspect_ratio": 1.88,
+        "normalized_box_1000": [
+          183,
+          81,
+          497,
+          912
+        ]
+      },
+      {
+        "id": "fig_geo_2a",
+        "page_idx": 1,
+        "physical_page": 205,
+        "filename": "figures/geo_klima_freiburg.png",
+        "caption": "Abb. 2.2a: Klimadiagramm Freiburg im Breisgau (269 m ü. NN)",
+        "type": "Klimadiagramm",
+        "pt_bounds": [
+          48.0,
+          543.9,
+          288.0,
+          719.3
+        ],
+        "pt_size": [
+          240.0,
+          175.4
+        ],
+        "pixel_resolution": [
+          520,
+          380
+        ],
+        "aspect_ratio": 1.37,
+        "normalized_box_1000": [
+          146,
+          81,
+          354,
+          484
+        ]
+      },
+      {
+        "id": "fig_geo_2b",
+        "page_idx": 1,
+        "physical_page": 205,
+        "filename": "figures/geo_klima_feldberg.png",
+        "caption": "Abb. 2.2b: Klimadiagramm Feldberg im Schwarzwald (1493 m ü. NN)",
+        "type": "Klimadiagramm",
+        "pt_bounds": [
+          303.0,
+          543.9,
+          543.0,
+          719.3
+        ],
+        "pt_size": [
+          240.0,
+          175.4
+        ],
+        "pixel_resolution": [
+          520,
+          380
+        ],
+        "aspect_ratio": 1.37,
+        "normalized_box_1000": [
+          146,
+          509,
+          354,
+          912
+        ]
+      }
+    ]
+  },
+  "sek1_geschichte.pdf": {
+    "description": "Sekundarstufe I Klasse 9/10: Geschichte (DIN A4)",
+    "total_images": 1,
+    "images": [
+      {
+        "id": "fig_hist_1",
+        "page_idx": 0,
+        "physical_page": 246,
+        "filename": "figures/hist_zeitleiste_industrialisierung.png",
+        "caption": "Abb. 3.1: Zeitleiste zur Industrialisierung und Urbanisierung in Deutschland (1835–1914)",
+        "type": "Zeitleiste",
+        "pt_bounds": [
+          48.0,
+          595.9,
+          543.0,
+          733.4
+        ],
+        "pt_size": [
+          495.0,
+          137.5
+        ],
+        "pixel_resolution": [
+          900,
+          250
+        ],
+        "aspect_ratio": 3.6,
+        "normalized_box_1000": [
+          129,
+          81,
+          292,
+          912
+        ]
+      }
+    ]
+  },
+  "sek2_chemie.pdf": {
+    "description": "Sekundarstufe II Klasse 11–12: Chemie (DIN A4, 2-spaltig)",
+    "total_images": 1,
+    "images": [
+      {
+        "id": "fig_chem_1",
+        "page_idx": 1,
+        "physical_page": 311,
+        "filename": "figures/chem_strukturformeln_veresterung_glucose.png",
+        "caption": "Abb. 4.1: Strukturformeln der säurekatalysierten Veresterung und der α-D-Glucopyranose",
+        "type": "Strukturformel",
+        "pt_bounds": [
+          48.0,
+          571.9,
+          543.0,
+          758.9
+        ],
+        "pt_size": [
+          495.0,
+          187.0
+        ],
+        "pixel_resolution": [
+          900,
+          340
+        ],
+        "aspect_ratio": 2.65,
+        "normalized_box_1000": [
+          99,
+          81,
+          321,
+          912
+        ]
+      }
+    ]
+  },
+  "sek2_biologie.pdf": {
+    "description": "Sekundarstufe II Klasse 11–12: Biologie (DIN A4, 2-spaltig)",
+    "total_images": 1,
+    "images": [
+      {
+        "id": "fig_bio_1",
+        "page_idx": 0,
+        "physical_page": 412,
+        "filename": "figures/bio_michaelis_menten_kinetik.png",
+        "caption": "Abb. 6.1: Michaelis-Menten-Kinetik und Kompetitive Hemmung",
+        "type": "Diagramm",
+        "pt_bounds": [
+          48.0,
+          543.9,
+          543.0,
+          741.9
+        ],
+        "pt_size": [
+          495.0,
+          198.0
+        ],
+        "pixel_resolution": [
+          900,
+          360
+        ],
+        "aspect_ratio": 2.5,
+        "normalized_box_1000": [
+          119,
+          81,
+          354,
+          912
+        ]
+      }
+    ]
+  },
+  "sek2_physik_verzeichnisse.pdf": {
+    "description": "Sekundarstufe II Klasse 11–12: Physik (Inhalts-, Abbildungs-, Tabellen- und Bildverzeichnis, DIN A4)",
+    "total_images": 1,
+    "images": [
+      {
+        "id": "fig_phys_1",
+        "page_idx": 1,
+        "physical_page": 45,
+        "filename": "figures/physik_doppelspalt_interferenz.png",
+        "caption": "Abb. 5.1: Interferenzmuster und Intensitätsverteilung am Doppelspalt",
+        "type": "Diagramm",
+        "pt_bounds": [
+          48.0,
+          453.9,
+          543.0,
+          629.9
+        ],
+        "pt_size": [
+          495.0,
+          176.0
+        ],
+        "pixel_resolution": [
+          900,
+          320
+        ],
+        "aspect_ratio": 2.81,
+        "normalized_box_1000": [
+          252,
+          81,
+          461,
+          912
+        ]
+      }
+    ]
+  },
+  "openstax_biology_sample.pdf": {
+    "description": "OpenStax Concepts of Biology: Chapter 3 Cell Structure and Function (CC BY 4.0)",
+    "total_images": 5,
+    "images": [
+      {
+        "id": "fig_bio_os_3_1",
+        "page_idx": 0,
+        "physical_page": 57,
+        "filename": "images/openstax_bio_fig_3_1.png",
+        "caption": "FIGURE 3.1 (a) Nasal sinus cells (viewed with a light microscope), (b) onion cells (viewed with a light microscope), and (c) Vibrio tasmaniensis bacterial cells (viewed using a scanning electron microscope) are from very different organisms, yet all share certain characteristics of basic cell structure.",
+        "type": "Foto",
+        "pt_bounds": [
+          72.0,
+          502.9,
+          622.8,
+          687.6
+        ],
+        "pt_size": [
+          550.8,
+          184.7
+        ],
+        "pixel_resolution": [
+          1102,
+          369
+        ],
+        "aspect_ratio": 2.98,
+        "normalized_box_1000": [
+          132,
+          118,
+          365,
+          1000
+        ]
+      },
+      {
+        "id": "fig_bio_os_3_2a",
+        "page_idx": 2,
+        "physical_page": 59,
+        "filename": "images/openstax_bio_fig_3_2a.png",
+        "caption": "FIGURE 3.2 (a) Most light microscopes used in a college biology lab can magnify cells up to approximately 400 times.",
+        "type": "Zeichnung",
+        "pt_bounds": [
+          99.8,
+          474.2,
+          512.2,
+          715.5
+        ],
+        "pt_size": [
+          412.4,
+          241.3
+        ],
+        "pixel_resolution": [
+          825,
+          483
+        ],
+        "aspect_ratio": 1.71,
+        "normalized_box_1000": [
+          97,
+          163,
+          401,
+          837
+        ]
+      },
+      {
+        "id": "fig_bio_os_3_2b",
+        "page_idx": 2,
+        "physical_page": 59,
+        "filename": "images/openstax_bio_fig_3_2b.png",
+        "caption": "FIGURE 3.2 (b) Dissecting microscopes have a lower magnification than light microscopes and are used to examine larger objects, such as tissues.",
+        "type": "Foto",
+        "pt_bounds": [
+          204.8,
+          141.1,
+          407.2,
+          294.9
+        ],
+        "pt_size": [
+          202.4,
+          153.8
+        ],
+        "pixel_resolution": [
+          405,
+          308
+        ],
+        "aspect_ratio": 1.32,
+        "normalized_box_1000": [
+          628,
+          335,
+          822,
+          665
+        ]
+      },
+      {
+        "id": "fig_bio_os_3_3",
+        "page_idx": 3,
+        "physical_page": 60,
+        "filename": "images/openstax_bio_fig_3_3.png",
+        "caption": "FIGURE 3.3 (a) Salmonella bacteria are viewed with a light microscope. (b) This scanning electron micrograph shows Salmonella bacteria (in red) invading human cells.",
+        "type": "Foto",
+        "pt_bounds": [
+          204.8,
+          580.7,
+          407.2,
+          734.4
+        ],
+        "pt_size": [
+          202.4,
+          153.7
+        ],
+        "pixel_resolution": [
+          405,
+          307
+        ],
+        "aspect_ratio": 1.32,
+        "normalized_box_1000": [
+          73,
+          335,
+          267,
+          665
+        ]
+      },
+      {
+        "id": "fig_bio_os_3_4",
+        "page_idx": 3,
+        "physical_page": 60,
+        "filename": "images/openstax_bio_fig_3_4.png",
+        "caption": "FIGURE 3.4 These uterine cervix cells, viewed through a light microscope, were obtained from a Pap smear. Normal cells are on the left. The cells on the right are infected with human papillomavirus.",
+        "type": "Foto",
+        "pt_bounds": [
+          174.8,
+          191.6,
+          437.2,
+          359.0
+        ],
+        "pt_size": [
+          262.4,
+          167.4
+        ],
+        "pixel_resolution": [
+          525,
+          335
+        ],
+        "aspect_ratio": 1.57,
+        "normalized_box_1000": [
+          547,
+          286,
+          758,
+          714
+        ]
+      }
+    ]
+  },
+  "openstax_chemistry_sample.pdf": {
+    "description": "OpenStax Chemistry 2e: Chapter 3.2 Determining Empirical and Molecular Formulas (CC BY 4.0)",
+    "total_images": 2,
+    "images": [
+      {
+        "id": "fig_chem_os_3_11",
+        "page_idx": 2,
+        "physical_page": 129,
+        "filename": "images/openstax_chem_fig_3_11.png",
+        "caption": "FIGURE 3.11 The empirical formula of a compound can be derived from the masses of all elements in the sample.",
+        "type": "Flussdiagramm",
+        "pt_bounds": [
+          72.0,
+          475.6,
+          540.0,
+          583.2
+        ],
+        "pt_size": [
+          468.0,
+          107.6
+        ],
+        "pixel_resolution": [
+          936,
+          215
+        ],
+        "aspect_ratio": 4.35,
+        "normalized_box_1000": [
+          264,
+          118,
+          400,
+          882
+        ]
+      },
+      {
+        "id": "fig_chem_os_3_12",
+        "page_idx": 2,
+        "physical_page": 129,
+        "filename": "images/openstax_chem_fig_3_12.png",
+        "caption": "FIGURE 3.12 Hematite is an iron oxide that is used in jewelry. (credit: Mauro Cateb)",
+        "type": "Foto",
+        "pt_bounds": [
+          189.0,
+          233.2,
+          423.0,
+          377.2
+        ],
+        "pt_size": [
+          234.0,
+          144.0
+        ],
+        "pixel_resolution": [
+          468,
+          288
+        ],
+        "aspect_ratio": 1.63,
+        "normalized_box_1000": [
+          524,
+          309,
+          706,
+          691
+        ]
+      }
+    ]
+  },
+  "openstax_history_sample.pdf": {
+    "description": "OpenStax World History Volume 1: Chapter 3.4 The Indus Valley Civilization (CC BY 4.0)",
+    "total_images": 4,
+    "images": [
+      {
+        "id": "fig_hist_os_3_25",
+        "page_idx": 0,
+        "physical_page": 101,
+        "filename": "images/openstax_hist_fig_3_25.png",
+        "caption": "FIGURE 3.25 The Citadel Mound at Mohenjo-Daro. The stupa at Mohenjo-Daro, located in present-day Pakistan, was built circa 2500 BCE.",
+        "type": "Foto",
+        "pt_bounds": [
+          72.0,
+          609.5,
+          540.0,
+          687.6
+        ],
+        "pt_size": [
+          468.0,
+          78.1
+        ],
+        "pixel_resolution": [
+          936,
+          156
+        ],
+        "aspect_ratio": 5.99,
+        "normalized_box_1000": [
+          132,
+          118,
+          230,
+          882
+        ]
+      },
+      {
+        "id": "fig_hist_os_3_26",
+        "page_idx": 1,
+        "physical_page": 102,
+        "filename": "images/openstax_hist_fig_3_26.png",
+        "caption": "FIGURE 3.26 Indus Valley Trade with Mesopotamia. Significant trade took place between the inhabitants of the Indus River valley and their contemporaries in Mesopotamia.",
+        "type": "Karte",
+        "pt_bounds": [
+          180.0,
+          554.4,
+          432.0,
+          734.4
+        ],
+        "pt_size": [
+          252.0,
+          180.0
+        ],
+        "pixel_resolution": [
+          504,
+          360
+        ],
+        "aspect_ratio": 1.4,
+        "normalized_box_1000": [
+          73,
+          294,
+          300,
+          706
+        ]
+      },
+      {
+        "id": "fig_hist_os_3_27",
+        "page_idx": 1,
+        "physical_page": 102,
+        "filename": "images/openstax_hist_fig_3_27.png",
+        "caption": "FIGURE 3.27 An Indus Valley Seal. On the left is a seal from the Indus valley civilization, and on the right is a modern clay impression made from it.",
+        "type": "Foto",
+        "pt_bounds": [
+          108.0,
+          166.0,
+          504.0,
+          389.6
+        ],
+        "pt_size": [
+          396.0,
+          223.6
+        ],
+        "pixel_resolution": [
+          792,
+          447
+        ],
+        "aspect_ratio": 1.77,
+        "normalized_box_1000": [
+          508,
+          176,
+          790,
+          824
+        ]
+      },
+      {
+        "id": "fig_hist_os_3_28",
+        "page_idx": 3,
+        "physical_page": 104,
+        "filename": "images/openstax_hist_fig_3_28.png",
+        "caption": "FIGURE 3.28 Possible Influence of Indus Valley Religious Imagery. (a) Seal from 2600–1900 BCE discovered at Mohenjo-Daro; (b) sixth-century CE portrayal of Shiva from the Elephanta Caves.",
+        "type": "Foto",
+        "pt_bounds": [
+          90.0,
+          466.0,
+          522.0,
+          701.1
+        ],
+        "pt_size": [
+          432.0,
+          235.1
+        ],
+        "pixel_resolution": [
+          864,
+          470
+        ],
+        "aspect_ratio": 1.84,
+        "normalized_box_1000": [
+          115,
+          147,
+          412,
+          853
+        ]
+      }
+    ]
+  },
+  "grundschule_lesebuch_doppelseite.pdf": {
+    "description": "Grundschule Klasse 2/3: Deutsch Lesebuch im Querformat-Doppelseiten-Spread (240x170 mm)",
+    "total_images": 1,
+    "images": [
+      {
+        "id": "fig_les_1",
+        "page_idx": 0,
+        "physical_page": 18,
+        "filename": "figures/gs_lesebuch_kueste.png",
+        "caption": "Abb. 3.1: Der kleine Leuchtturm weist dem Fischerboot den Weg",
+        "type": "Zeichnung",
+        "pt_bounds": [
+          360.0,
+          266.9,
+          644.0,
+          374.9
+        ],
+        "pt_size": [
+          284.0,
+          108.0
+        ],
+        "pixel_resolution": [
+          840,
+          320
+        ],
+        "aspect_ratio": 2.63,
+        "normalized_box_1000": [
+          222,
+          529,
+          446,
+          947
+        ]
+      }
+    ]
+  },
+  "sek1_informatik.pdf": {
+    "description": "Sekundarstufe I Klasse 7/8: Informatik & Medienbildung im B5+ Standard-Schulbuchformat (190x260 mm)",
+    "total_images": 1,
+    "images": [
+      {
+        "id": "fig_info_1",
+        "page_idx": 0,
+        "physical_page": 18,
+        "filename": "figures/informatik_programmablaufplan.png",
+        "caption": "Abb. 1.1: Programmablaufplan (PAP) zur Hinderniserkennung eines autonomen Roboters",
+        "type": "Strukturdiagramm",
+        "pt_bounds": [
+          40.0,
+          372.0,
+          498.0,
+          547.0
+        ],
+        "pt_size": [
+          458.0,
+          175.0
+        ],
+        "pixel_resolution": [
+          880,
+          340
+        ],
+        "aspect_ratio": 2.62,
+        "normalized_box_1000": [
+          258,
+          74,
+          495,
+          925
+        ]
+      }
+    ]
+  },
+  "sek2_mathematik_analysis.pdf": {
+    "description": "Sekundarstufe II EF/Q1: Mathematik Analysis im B5-Breitformat (195x260 mm)",
+    "total_images": 1,
+    "images": [
+      {
+        "id": "fig_ana_1",
+        "page_idx": 0,
+        "physical_page": 50,
+        "filename": "figures/mathe_analysis_funktionsgraphen.png",
+        "caption": "Abb. 2.1: Funktionsgraph von f(x) und Ableitungsgraph f'(x) mit Extrem-, Wende- und Integralbereich",
+        "type": "Diagramm",
+        "pt_bounds": [
+          42.0,
+          362.0,
+          510.0,
+          552.0
+        ],
+        "pt_size": [
+          468.0,
+          190.0
+        ],
+        "pixel_resolution": [
+          880,
+          360
+        ],
+        "aspect_ratio": 2.46,
+        "normalized_box_1000": [
+          251,
+          76,
+          509,
+          923
+        ]
+      }
+    ]
+  }
+}

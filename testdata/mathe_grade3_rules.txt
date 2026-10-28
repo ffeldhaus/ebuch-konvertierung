@@ -1,0 +1,10 @@
+Datei-spezifische Regeln für mathe_grade3:
+1. Schwierigkeitsgrade (Difficulty Indicators):
+   - □ (leeres Quadrat) wird übertragen als: [leicht]
+   - ◩ (halb gefülltes Quadrat) wird übertragen als: [mittel]
+   - ■ (gefülltes Quadrat) wird übertragen als: [schwer]
+2. Die Symbole befinden sich in oder vor den Aufgabennummern und Titeln und beschreiben den Schwierigkeitsgrad für Schülerinnen und Schüler.
+3. Die Schwierigkeitsgrade müssen unter der Aufgabennummer stehen. Beispiel:
+Aufgabe 1: Kopfrechnen im Hunderterraum
+[leicht]
+Berechne die folgenden Summen und Differenzen.

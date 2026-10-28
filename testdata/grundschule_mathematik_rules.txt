@@ -1,0 +1,9 @@
+Datei-spezifische Regeln für grundschule_mathematik:
+1. Schwierigkeitsgrade (Quadrat-Symbole in den Aufgabenüberschriften):
+   - □ (leeres Quadrat) wird übertragen als: [leicht]
+   - ◩ (halb gefülltes Quadrat) wird übertragen als: [mittel]
+   - ■ (gefülltes Quadrat) wird übertragen als: [schwer]
+2. Piktogramme neben der Aufgabenüberschrift:
+   - Blaues Zwei-Personen-Piktogramm (bei Aufgabe 1) wird übertragen als: [Partnerarbeit]
+   - Gelbes Scheren-Piktogramm (bei Aufgabe 3) wird übertragen als: [Schere und Kleber]
+3. Schwierigkeitsgrade und Piktogramme stehen in einer eigenen Zeile direkt unter der Aufgabenüberschrift.
