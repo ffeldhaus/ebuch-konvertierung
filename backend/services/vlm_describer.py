@@ -262,6 +262,13 @@ def main() -> None:
                 )
                 model.eval()
 
+            if hasattr(processor, "image_processor") and hasattr(
+                processor.image_processor, "max_soft_tokens"
+            ):
+                processor.image_processor.max_soft_tokens = 1120
+            if hasattr(processor, "image_seq_length"):
+                processor.image_seq_length = 1120
+
             for idx, img_path in enumerate(image_paths, 1):
                 if img_path in results:
                     continue

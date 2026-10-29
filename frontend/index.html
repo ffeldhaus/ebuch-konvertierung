@@ -253,15 +253,42 @@
 
       <!-- Panel 1: Original Document (PDF Viewer) -->
       <section id="panel-pdf-container" class="flex-1 flex flex-col h-full bg-slate-900 border border-slate-800 rounded-xl overflow-hidden transition-all duration-200 hidden">
-        <div class="h-9 px-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/80 flex-shrink-0 select-none">
-          <span class="text-xs font-bold text-slate-300">Originaldatei (Vorschau)</span>
-          <div class="flex items-center space-x-1.5 overflow-x-auto max-w-[200px] scrollbar-none" id="pdf-page-pills-container">
-            <!-- Dynamic page jumper pills populated via JS -->
-            <span class="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-750">PDF-Vorschau</span>
+        <div class="h-9 px-3 border-b border-slate-800 flex items-center justify-between bg-slate-900/80 flex-shrink-0 select-none gap-2">
+          <span class="text-xs font-bold text-slate-300 truncate">Originaldatei (Vorschau)</span>
+          <div class="flex items-center space-x-1.5 flex-shrink-0">
+            <div class="flex items-center space-x-1.5 overflow-x-auto max-w-[180px] scrollbar-none" id="pdf-page-pills-container">
+              <!-- Dynamic page jumper pills populated via JS -->
+              <span class="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-750">PDF-Vorschau</span>
+            </div>
+            <button id="btn-toggle-bbox-overlay" type="button" aria-pressed="false" title="Erkannte Layout-Blöcke und Bounding-Boxen auf der PDF-Seite einblenden" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition-colors flex items-center space-x-1 flex-shrink-0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="w-3 h-3" aria-hidden="true">
+                <rect x="2" y="2" width="5" height="4" rx="0.5" />
+                <rect x="9" y="2" width="5" height="6" rx="0.5" />
+                <rect x="2" y="8" width="5" height="6" rx="0.5" />
+                <rect x="9" y="10" width="5" height="4" rx="0.5" />
+              </svg>
+              <span>Layout-Boxen</span>
+            </button>
           </div>
         </div>
-        <div class="flex-1 bg-slate-950">
+        <div class="panel-content flex-1 min-h-0 relative bg-slate-950">
           <iframe id="pdf-viewer-frame" class="w-full h-full border-0" src="about:blank"></iframe>
+          <div id="pdf-bbox-viewer" class="pdf-bbox-viewer hidden absolute inset-0 flex flex-col bg-slate-950">
+            <div class="px-2.5 py-1.5 border-b border-slate-800 bg-slate-900/90 flex flex-wrap items-center justify-between gap-2 flex-shrink-0 select-none">
+              <div class="flex items-center space-x-1">
+                <button id="bbox-prev-page" type="button" disabled aria-label="Vorherige Seite" class="px-1.5 py-0.5 rounded bg-slate-850 border border-slate-750 text-slate-300 hover:text-white text-[11px] font-mono disabled:opacity-40 disabled:cursor-not-allowed transition-colors">‹</button>
+                <span id="bbox-page-indicator" class="px-2 py-0.5 text-[10px] font-mono tabular-nums text-slate-300">Seite 1 / 1</span>
+                <button id="bbox-next-page" type="button" disabled aria-label="Nächste Seite" class="px-1.5 py-0.5 rounded bg-slate-850 border border-slate-750 text-slate-300 hover:text-white text-[11px] font-mono disabled:opacity-40 disabled:cursor-not-allowed transition-colors">›</button>
+              </div>
+              <div id="bbox-filter-chips" class="flex items-center flex-wrap gap-1"></div>
+            </div>
+            <div class="bbox-stage-scroll flex-1 min-h-0 overflow-auto p-3 flex items-start justify-center">
+              <div class="bbox-stage-inner relative inline-block select-none">
+                <img id="bbox-page-img" alt="PDF-Seitenansicht" class="bbox-page-img block max-w-full h-auto rounded border border-slate-800" />
+                <div id="bbox-overlay-layer" class="bbox-overlay-layer absolute inset-0 pointer-events-auto"></div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -338,6 +365,11 @@
           <button data-tag="<Tabelle>  </Tabelle>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-indigo-300 hover:text-white transition-colors">&lt;Tabelle&gt;</button>
           <button data-tag="<Rahmen>  </Rahmen>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-indigo-300 hover:text-white transition-colors">&lt;Rahmen&gt;</button>
           <button data-tag="<Anmerkung>  </Anmerkung>" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-bold text-indigo-300 hover:text-white transition-colors">&lt;Anm&gt;</button>
+          <span class="w-px h-3.5 bg-slate-850"></span>
+          <button id="btn-char-replacements" type="button" title="Nicht-Latin1-Zeichen (> U+00FF) für Eurobraille prüfen und ersetzen" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-[10px] font-semibold text-slate-300 hover:text-white border border-slate-800 hover:border-slate-700 transition-colors flex items-center space-x-1 flex-shrink-0">
+            <span>Sonderzeichen</span>
+            <span id="char-replace-badge" class="char-replace-badge hidden px-1 py-0 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono tabular-nums text-[9px] font-bold">0</span>
+          </button>
         </div>
 
         <!-- Content Area -->
@@ -1028,6 +1060,57 @@
           <button id="fb-question-skip-btn" type="button" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors">Überspringen</button>
           <button id="fb-question-next-btn" type="button" class="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg text-xs font-semibold transition-colors">Weiter →</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Eurobraille / ISO 8859-1 (> U+00FF) Character Replacement Assistant Modal -->
+  <div id="char-replace-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm hidden" role="dialog" aria-modal="true" aria-labelledby="char-replace-modal-title">
+    <div class="bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col mx-4 overflow-hidden">
+      <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
+        <div>
+          <h3 id="char-replace-modal-title" class="text-sm font-semibold text-slate-100">Sonderzeichen-Assistent (ISO 8859-1 / Eurobraille)</h3>
+          <p class="text-[11px] text-slate-400 mt-0.5">Zeichen oberhalb von <code class="font-mono text-slate-300">U+00FF</code> sind nicht im 8-Bit-Zeichensatz Latin-1 / Eurobraille enthalten und können durch FIBS-konforme ASCII- oder LaTeX-Äquivalente ersetzt werden.</p>
+        </div>
+        <button id="close-char-replace-modal" type="button" aria-label="Schließen" class="text-slate-400 hover:text-slate-200 text-sm p-1 hover:bg-slate-800 rounded-lg transition-colors">✕</button>
+      </div>
+      <div class="px-5 py-2.5 border-b border-slate-800 bg-slate-900/80 flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center space-x-2">
+          <button id="btn-suggest-char-replacements" type="button" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            KI-Vorschläge holen
+          </button>
+          <button id="btn-export-char-map" type="button" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition-colors">
+            JSON exportieren
+          </button>
+          <button id="btn-import-char-map" type="button" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition-colors">
+            JSON importieren
+          </button>
+          <input type="file" id="char-map-file-input" class="hidden" accept=".json,application/json" />
+        </div>
+        <span id="char-replace-status" class="text-[11px] text-slate-400 font-mono tabular-nums"></span>
+      </div>
+      <div class="flex-1 overflow-y-auto bg-slate-950/40">
+        <table class="w-full text-left text-xs text-slate-300 border-collapse">
+          <thead class="bg-slate-950/90 text-slate-400 border-b border-slate-800 sticky top-0 z-10 text-[11px] uppercase tracking-wider">
+            <tr>
+              <th scope="col" class="py-2 px-4 font-semibold">Zeichen</th>
+              <th scope="col" class="py-2 px-4 font-semibold">Code</th>
+              <th scope="col" class="py-2 px-4 font-semibold">Anzahl</th>
+              <th scope="col" class="py-2 px-4 font-semibold">Ersetzen durch</th>
+              <th scope="col" class="py-2 px-4 font-semibold text-center">Aktiv</th>
+            </tr>
+          </thead>
+          <tbody id="char-replace-tbody" class="divide-y divide-slate-800/60">
+          </tbody>
+        </table>
+      </div>
+      <div class="px-5 py-3 bg-slate-950/60 border-t border-slate-800 flex items-center justify-end space-x-2">
+        <button id="cancel-char-replace-modal" type="button" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors">
+          Abbrechen
+        </button>
+        <button id="btn-apply-char-replacements" type="button" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold transition-colors">
+          Ersetzungen im Text anwenden
+        </button>
       </div>
     </div>
   </div>

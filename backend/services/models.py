@@ -186,3 +186,63 @@ class SettingSchemaEntry(DomainModel):
     description: str
     """German help text explaining the effect and bounds of the setting."""
 
+
+class LayoutBlock(DomainModel):
+    """A single document layout block with optional normalized ``0..1000`` bounding box."""
+
+    type: str
+    """Semantic block type (e.g. 'title', 'text', 'image', 'table', 'page_header')."""
+    text: str = ""
+    """Extracted text or Markdown snippet associated with the block."""
+    page_idx: int = 0
+    """Zero-based PDF page index on which the block appears."""
+    bbox_1000: list[int] | None = None
+    """Top-left normalized bounding box [x1, y1, x2, y2] in 0..1000 coordinates."""
+    text_level: int | None = None
+    """Optional heading outline level (1..6) for heading/title blocks."""
+    is_callout_box: bool = False
+    """Whether the block lies inside a detected vector callout/info box."""
+
+
+class TaskLayoutResponse(DomainModel):
+    """Response payload returning extracted page layout blocks for a conversion task."""
+
+    task_id: str
+    """Unique identifier of the conversion task."""
+    physical_start_page: int = 1
+    """Detected printed start page number of the uploaded document."""
+    blocks: list[LayoutBlock] = Field(default_factory=list)
+    """Ordered list of layout blocks containing bounding-box metadata."""
+
+
+class CharOccurrence(DomainModel):
+    """A non-Latin1 (> U+00FF) character occurrence outside the Eurobraille charset."""
+
+    ch: str
+    """The single Unicode character outside ISO-8859-1 (> U+00FF)."""
+    code: int
+    """Unicode codepoint integer (ord(ch))."""
+    hex_code: str
+    """Formatted uppercase hexadecimal codepoint string (e.g. 'U+03B1')."""
+    count: int
+    """Total number of occurrences of this character in the inspected text."""
+    replacement: str = ""
+    """Configured or suggested replacement string in Eurobraille/LaTeX notation."""
+    active: bool = True
+    """Whether this replacement entry is active during export."""
+
+
+class CharSuggestRequest(DomainModel):
+    """Request payload for generating Eurobraille/LaTeX replacement suggestions."""
+
+    chars: list[str]
+    """List of non-Latin1 characters for which replacement suggestions are requested."""
+
+
+class CharSuggestResponse(DomainModel):
+    """Response payload mapping non-Latin1 characters to suggested replacements."""
+
+    suggestions: dict[str, str] = Field(default_factory=dict)
+    """Mapping from input character to suggested short LaTeX or German replacement."""
+
+

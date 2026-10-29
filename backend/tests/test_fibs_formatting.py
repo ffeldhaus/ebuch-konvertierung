@@ -361,3 +361,283 @@ def test_post_process_structure_composite_images_and_caption_headings():
     assert "#### Abb. 5.2: Beugung am optischen Gitter" in out
     assert out.count("<Bild>") == 1
 
+
+# ---------------------------------------------------------------------------
+# Phase 3a: PDF Vector Figure Crop, bbox_1000, Heading Clustering & Eurobraille
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_bbox_to_1000_and_render_pdf_figure_crop():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from PIL import Image
+
+    from backend.services.pdf_render_service import (
+        compute_gemma4_optimal_dimensions,
+        normalize_bbox_to_1000,
+        render_pdf_figure_crop,
+    )
+
+    # 1. BOTTOMLEFT origin (standard PDF / Docling default)
+    bbox_bl = SimpleNamespace(l=60.0, b=400.0, r=540.0, t=700.0, coord_origin="BOTTOMLEFT")
+    norm_bl = normalize_bbox_to_1000(bbox_bl, page_width=600.0, page_height=1000.0)
+    assert norm_bl == [100, 300, 900, 600]
+
+    # 2. TOPLEFT origin sequence
+    norm_tl = normalize_bbox_to_1000([30.0, 100.0, 300.0, 500.0], 600.0, 1000.0, coord_origin="TOPLEFT")
+    assert norm_tl == [50, 100, 500, 500]
+
+    # Invalid inputs return None
+    assert normalize_bbox_to_1000(None, 600.0, 1000.0) is None
+    assert normalize_bbox_to_1000([10, 10, 10, 10], 600.0, 1000.0) is None
+
+    # 3. Vector sub-rectangle crop via pypdfium2 page.render(scale=..., crop=...)
+    fake_page = MagicMock()
+    fake_page.get_size.return_value = (600.0, 1000.0)
+    fake_bitmap = MagicMock()
+    fake_bitmap.to_pil.return_value = Image.new("RGB", (1392, 1740), color=(255, 255, 255))
+    fake_page.render.return_value = fake_bitmap
+
+    cropped = render_pdf_figure_crop(
+        fake_page,
+        [100, 200, 500, 500],
+        target_longest_edge=2048,
+        is_normalized_1000=True,
+    )
+    assert cropped is not None
+    assert cropped.size == (1392, 1776)
+    assert cropped.width % 48 == 0 and cropped.height % 48 == 0
+    fake_page.render.assert_called_once()
+    call_kwargs = fake_page.render.call_args.kwargs
+    assert 0.2 <= call_kwargs["scale"] <= 8.0
+    left_cut, bottom_cut, right_cut, top_cut = call_kwargs["crop"]
+    assert pytest.approx(left_cut) == 60.0
+    assert pytest.approx(bottom_cut) == 500.0
+    assert pytest.approx(right_cut) == 300.0
+    assert pytest.approx(top_cut) == 200.0
+
+    # Unaligned mode preserves raw bitmap dimensions directly
+    fake_bitmap.to_pil.return_value = Image.new("RGB", (1024, 768), color=(255, 255, 255))
+    unaligned = render_pdf_figure_crop(
+        fake_page,
+        [100, 200, 500, 500],
+        target_longest_edge=2048,
+        is_normalized_1000=True,
+        align_for_gemma4=False,
+    )
+    assert unaligned is not None
+    assert unaligned.size == (1024, 768)
+
+    # Degenerate tiny box returns None
+    assert render_pdf_figure_crop(fake_page, [100, 100, 101, 101], is_normalized_1000=True) is None
+
+    # 4. Verify Gemma 4 zero-downscaling fixed-point invariant across aspect ratios and token tiers
+    from transformers.models.gemma4_unified.image_processing_gemma4_unified import (
+        get_aspect_ratio_preserving_size,
+    )
+
+    for soft_tokens in (280, 560, 1120):
+        for rw, rh in ((240.0, 300.0), (480.0, 300.0), (160.0, 100.0), (209.0, 963.0), (500.0, 120.0)):
+            opt_w, opt_h = compute_gemma4_optimal_dimensions(rw, rh, max_soft_tokens=soft_tokens)
+            assert opt_w % 48 == 0 and opt_h % 48 == 0
+            assert (opt_w // 48) * (opt_h // 48) <= soft_tokens
+            assert get_aspect_ratio_preserving_size(opt_h, opt_w, 16, soft_tokens * 9, 3) == (
+                opt_h,
+                opt_w,
+            )
+
+    # 5. Smart pure embedded raster extraction vs. hybrid/vector fallback
+    import pypdfium2.raw as pdfium_c
+
+    from backend.services.pdf_render_service import extract_raw_pdf_image
+
+    pure_img_obj = MagicMock()
+    pure_img_obj.type = pdfium_c.FPDF_PAGEOBJ_IMAGE
+    pure_img_obj.get_bounds.return_value = (60.0, 500.0, 300.0, 800.0)
+    pure_img_obj.get_px_size.return_value = (480, 600)
+    pure_img_obj.get_matrix.return_value = SimpleNamespace(a=240.0, b=0.0, c=0.0, d=300.0, e=60.0, f=500.0)
+    pure_bm = MagicMock()
+    pure_bm.to_pil.return_value = Image.new("RGB", (480, 600), color=(120, 160, 200))
+    pure_img_obj.get_bitmap.return_value = pure_bm
+
+    raster_page = MagicMock()
+    raster_page.get_size.return_value = (600.0, 1000.0)
+    raster_page.get_bbox.return_value = (0.0, 0.0, 600.0, 1000.0)
+    raster_page.get_objects.return_value = [pure_img_obj]
+
+    raw_extracted, token_cap = extract_raw_pdf_image(raster_page, 60.0, 500.0, 300.0, 800.0)
+    assert raw_extracted is not None
+    assert raw_extracted.size == (480, 600)
+    assert token_cap == 280  # 480x600 low-res JPEG is capped to 280 soft tokens instead of 1120
+
+    # render_pdf_figure_crop uses direct bitmap without calling raster_page.render()
+    direct_aligned = render_pdf_figure_crop(
+        raster_page,
+        [100, 200, 500, 500],
+        is_normalized_1000=True,
+        align_for_gemma4=True,
+    )
+    assert direct_aligned is not None
+    assert direct_aligned.width % 48 == 0 and direct_aligned.height % 48 == 0
+    assert (direct_aligned.width // 48) * (direct_aligned.height // 48) <= 280
+    raster_page.render.assert_not_called()
+
+    # Hybrid figure with overlaid text label inside bbox falls back to vector page.render()
+    overlaid_text_obj = MagicMock()
+    overlaid_text_obj.type = pdfium_c.FPDF_PAGEOBJ_TEXT
+    overlaid_text_obj.get_bounds.return_value = (120.0, 600.0, 180.0, 620.0)
+    raster_page.get_objects.return_value = [pure_img_obj, overlaid_text_obj]
+    raster_page.render.return_value = fake_bitmap
+
+    raw_hybrid, hybrid_cap = extract_raw_pdf_image(raster_page, 60.0, 500.0, 300.0, 800.0)
+    assert raw_hybrid is None
+    assert hybrid_cap is None
+
+    hybrid_rendered = render_pdf_figure_crop(
+        raster_page,
+        [100, 200, 500, 500],
+        is_normalized_1000=True,
+        align_for_gemma4=True,
+    )
+    assert hybrid_rendered is not None
+    raster_page.render.assert_called_once()
+
+    # Image with transparent SMask (alpha < 250) falls back to page.render() but preserves native token cap
+    raster_page.render.reset_mock()
+    smask_rgba = Image.new("RGBA", (480, 600), color=(120, 160, 200, 0))
+    pure_bm.to_pil.return_value = smask_rgba
+    raster_page.get_objects.return_value = [pure_img_obj]
+
+    raw_smask, smask_cap = extract_raw_pdf_image(raster_page, 60.0, 500.0, 300.0, 800.0)
+    assert raw_smask is None
+    assert smask_cap == 280
+
+
+def test_cluster_heading_heights_and_clamp_heading_outline_levels():
+    from backend.services.extraction_postprocess import (
+        clamp_heading_outline_levels,
+        cluster_heading_heights,
+    )
+
+    # Descending height clustering within tolerance
+    means = cluster_heading_heights([28.0, 26.0, 18.0, 17.0, 11.0], tol=4.0)
+    assert means == [27.0, 17.5, 11.0]
+    assert cluster_heading_heights([]) == []
+
+    # Sequential outline clamping without breaking FIBS '### Aufgabe N:' under H1/H2
+    raw_md = (
+        "# Kapitel 1: Grundlagen\n\n"
+        "#### 1.1 Übersprungene Ebene\n\n"
+        "Text.\n\n"
+        "# Kapitel 2: Übungen\n\n"
+        "### Aufgabe 1: Direkte FIBS-Aufgabe unter H1\n"
+    )
+    clamped = clamp_heading_outline_levels(raw_md)
+    assert "## 1.1 Übersprungene Ebene" in clamped
+    assert "### Aufgabe 1: Direkte FIBS-Aufgabe unter H1" in clamped
+
+
+def test_find_non_latin1_chars_and_parse_suggestions():
+    from backend.services.prompts import build_char_replacement_prompt
+
+    sample = "Winkel α = 30°, Pfeil → und H₂O sowie α erneut und ☐ Kästchen."
+    found = ff.find_non_latin1_chars(sample, existing_map={"→": {"replacement": "\\rightarrow", "active": False}})
+    chars_by_glyph = {item.ch: item for item in found}
+
+    # ASCII and Latin-1 ('°' is U+00B0 <= U+00FF) must be excluded
+    assert "°" not in chars_by_glyph
+    assert "A" not in chars_by_glyph
+
+    # Non-Latin-1 characters (> U+00FF) are counted and sorted by codepoint
+    assert [item.ch for item in found] == sorted([item.ch for item in found], key=ord)
+    assert chars_by_glyph["α"].count == 2
+    assert chars_by_glyph["α"].hex_code == "U+03B1"
+    assert chars_by_glyph["α"].replacement == "\\alpha"
+    assert chars_by_glyph["→"].replacement == "\\rightarrow"
+    assert chars_by_glyph["→"].active is False
+    assert chars_by_glyph["₂"].replacement == "_2"
+    assert chars_by_glyph["☐"].replacement == "[ ]"
+
+    prompt = build_char_replacement_prompt("α (Code U+03B1)\n🔊 (Code U+1F50A)")
+    assert "EuroBraille-Zeichensatz" in prompt
+    assert "U+03B1" in prompt
+
+    # JSON response with <think> block and code fences
+    raw_json = (
+        "<think>Überlege passende LaTeX-Ersetzungen...</think>\n"
+        "```json\n"
+        '{"vorschlaege": [\n'
+        '  {"code": "U+03B1", "zeichen": "α", "ersetzung": "Greek alpha: `\\\\alpha`"},\n'
+        '  {"code": "U+1F50A", "zeichen": "🔊", "ersetzung": "Lautsprecher: [Audio]"},\n'
+        '  {"code": "U+9999", "zeichen": "香", "ersetzung": "[Unangefragt]"}\n'
+        "]}\n"
+        "```"
+    )
+    parsed_json = ff.parse_char_replacement_suggestions(raw_json, ["α", "🔊"])
+    assert parsed_json == {"α": "\\alpha", "🔊": "[Audio]"}
+
+    # Line-based fallback format
+    raw_lines = "- U+03B2: \\beta\n- → → `\\to`"
+    parsed_lines = ff.parse_char_replacement_suggestions(raw_lines, ["β", "→"])
+    assert parsed_lines == {"β": "\\beta", "→": "\\to"}
+
+
+def test_layout_and_char_replacement_api_endpoints(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    import backend.main as main_mod
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("E2E_MOCK", "true")
+
+    task_id = "test-layout-task-123"
+    auto_dir = tmp_path / task_id / "auto"
+    auto_dir.mkdir(parents=True)
+    cl_path = auto_dir / "sample_content_list.json"
+    cl_path.write_text(
+        json.dumps([
+            {
+                "type": "title",
+                "text": "Kapitel 1",
+                "page_idx": 0,
+                "text_level": 1,
+                "bbox": [0, 0, 200, 18.0],
+                "bbox_1000": [100, 80, 600, 130],
+                "is_callout_box": False,
+            },
+            {
+                "type": "image",
+                "text": "![](images/pic0.png)",
+                "page_idx": 0,
+                "bbox_1000": [120, 200, 800, 550],
+            },
+        ]),
+        encoding="utf-8",
+    )
+
+    client = TestClient(main_mod.app)
+    res_layout = client.get(f"/api/tasks/{task_id}/layout")
+    assert res_layout.status_code == 200
+    body = res_layout.json()
+    assert body["task_id"] == task_id
+    assert body["physical_start_page"] == 1
+    assert len(body["blocks"]) == 2
+    assert body["blocks"][0]["bbox_1000"] == [100, 80, 600, 130]
+    assert body["blocks"][1]["type"] == "image"
+
+    res_missing = client.get("/api/tasks/nonexistent-task-id/layout")
+    assert res_missing.status_code == 404
+
+    res_suggest = client.post(
+        "/api/char-replacements/suggest",
+        json={"chars": ["α", "→", "☐", "🔊"]},
+    )
+    assert res_suggest.status_code == 200
+    suggestions = res_suggest.json()["suggestions"]
+    assert suggestions["α"] == "\\alpha"
+    assert suggestions["→"] == "\\to"
+    assert suggestions["☐"] == "[ ]"
+    assert suggestions["🔊"] == "[Audio]"
+
+

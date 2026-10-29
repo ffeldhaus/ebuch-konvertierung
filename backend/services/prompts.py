@@ -567,3 +567,37 @@ Durch Korrektur behobene Linter-Regeln: {fixed_json}
 """
     )
 
+
+def build_char_replacement_prompt(chars_block: str) -> str:
+    """Builds the prompt for suggesting Eurobraille/LaTeX replacements for non-Latin1 characters.
+
+    Uses Python 3.14 ``Template`` literals (``t"..."``) and ``render_prompt()``.
+
+    Args:
+        chars_block: Newline-separated list of characters and codepoints (e.g. ``"α (Code U+03B1)"``).
+
+    Returns:
+        Rendered prompt string instructing the LLM to output a JSON object of replacements.
+    """
+    cleaned_block = (chars_block or "").strip()
+    return render_prompt(
+        t"Für diese Sonderzeichen (Glyphe und Code), die im erkannten Text vorkommen, gibt es\n"
+        t"keine Entsprechung im EuroBraille-Zeichensatz. Schlage für JEDES Zeichen eine kurze,\n"
+        t"im Text lesbare Ersetzung vor.\n\n"
+        t"Regeln:\n"
+        t"1. Gibt es einen üblichen LaTeX-Befehl, nimm diesen (z. B. \\alpha, \\le, \\rightarrow) - das hat Vorrang.\n"
+        t"2. Gibt es ein vergleichbares Zeichen im EuroBraille-Zeichensatz, dann nimm dieses.\n"
+        t"3. Lässt sich ein Zeichen hier nicht darstellen, nutze den Code und dein Wissen über das Zeichen für eine kurze DEUTSCHE Beschreibung in eckigen Klammern (z. B. [Audio] für ein Lautsprechersymbol, [ ] für ein leeres Kästchen).\n"
+        t"4. GENAU EIN Vorschlag pro Zeichen – nur die Ersetzung selbst, ohne den Namen oder\n"
+        t'   eine Beschreibung des Zeichens (also \\rightarrow statt "Right Arrow): \\rightarrow").\n'
+        t"5. Höchstens 24 Zeichen pro Vorschlag, keine Erklärungen, keine Zeilennummern.\n"
+        t"6. Wenn du ein Zeichen nicht deuten kannst, lass die Zeile weg.\n\n"
+        t"Antworte AUSSCHLIESSLICH mit einem JSON-Objekt – kein Fließtext, keine\n"
+        t"Einleitung, keine Codeblöcke, keine Tabelle:\n"
+        t'{{"vorschlaege":[{{"code":"U+XXXX","zeichen":"<Zeichen>","ersetzung":"<Ersetzung>"}}]}}\n\n'
+        t"Beispiele für Ersetzungen: α → \\alpha, 🔊 → [Audio], ☐ → [ ], ₄ → _4, ⁴ → ^4\n\n"
+        t"Diese Zeichen:\n"
+        t"{cleaned_block:strip_markers}"
+    )
+
+

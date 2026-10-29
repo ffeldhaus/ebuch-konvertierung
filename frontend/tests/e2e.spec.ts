@@ -711,6 +711,156 @@ test.describe('E-Buch Standard Konverter E2E Flow', () => {
     await expect(page.locator(`#resume-btn-${taskId}`)).toHaveCount(0);
   });
 
+  test('Phase 3b: interactive grounding BBox overlay and Eurobraille (> U+00FF) character replacement assistant', async ({ page }) => {
+    test.setTimeout(30000);
+    const taskId = 'e2e-phase3b-task';
+    const now = Date.now() / 1000;
+    const completedTask = {
+      task_id: taskId,
+      original_name: 'physik_seite45.pdf',
+      extension: '.pdf',
+      engine: 'infinity',
+      pages: '45-46',
+      physical_start_page: 45,
+      page_count: 2,
+      status: 'completed',
+      resumable: false,
+      created_at: now - 120,
+      started_at: now - 120,
+      finished_at: now - 10,
+      progress: { percent: 100, current: 2, total: 2, phase: 'Abgeschlossen' },
+      raw_markdown: '((45))\n\n# 1 Mechanik\n\nWinkel α ≤ 90° → Kraft wirkt nach rechts.',
+      standardised_markdown: '((45))\n\n# 1 Mechanik\n\nWinkel α ≤ 90° → Kraft wirkt nach rechts.\n\n((46))\n\nZweite Seite mit Pfeil →.',
+    };
+
+    // 1x1 transparent PNG
+    const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const pngBuffer = Buffer.from(pngBase64, 'base64');
+
+    await page.route('**/api/tasks', r => r.fulfill({ json: [completedTask] }));
+    await page.route(`**/api/tasks/${taskId}/state`, r => r.fulfill({ json: completedTask }));
+    await page.route(`**/api/pdf/${taskId}**`, r => r.fulfill({ contentType: 'application/pdf', body: '%PDF-1.4' }));
+    await page.route(`**/api/feedback/jobs/${taskId}/pages/**`, r => r.fulfill({
+      contentType: 'image/png',
+      body: pngBuffer,
+    }));
+    await page.route(`**/api/tasks/${taskId}/layout`, r => r.fulfill({
+      json: {
+        task_id: taskId,
+        physical_start_page: 45,
+        blocks: [
+          {
+            type: 'title',
+            text: '# 1 Mechanik',
+            page_idx: 0,
+            bbox_1000: [80, 60, 520, 120],
+            text_level: 1,
+            is_callout_box: false,
+          },
+          {
+            type: 'text',
+            text: 'Winkel α ≤ 90° → Kraft wirkt nach rechts.',
+            page_idx: 0,
+            bbox_1000: [80, 150, 880, 260],
+            text_level: null,
+            is_callout_box: false,
+          },
+          {
+            type: 'text',
+            text: 'Zweite Seite mit Pfeil →.',
+            page_idx: 1,
+            bbox_1000: [80, 100, 750, 200],
+            text_level: null,
+            is_callout_box: false,
+          },
+        ],
+      },
+    }));
+    let suggestedChars: string[] = [];
+    await page.route('**/api/char-replacements/suggest', async r => {
+      const body = r.request().postDataJSON();
+      suggestedChars = body.chars || [];
+      await r.fulfill({
+        json: {
+          suggestions: {
+            'α': '\\alpha',
+            '≤': '\\le',
+            '→': '\\rightarrow',
+          },
+        },
+      });
+    });
+
+    await page.goto(`/?task_id=${taskId}`);
+    await expect(page.locator('#standardised-markdown-textarea')).toHaveValue(/Winkel α ≤ 90° → Kraft/);
+
+    // 1. Verify BBox Overlay toggle & rendering
+    await page.click('#toggle-pane-pdf');
+    await expect(page.locator('#panel-pdf-container')).toBeVisible();
+    await expect(page.locator('#btn-toggle-bbox-overlay')).toHaveAttribute('aria-pressed', 'false');
+
+    await page.click('#btn-toggle-bbox-overlay');
+    await expect(page.locator('#btn-toggle-bbox-overlay')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#pdf-bbox-viewer')).toBeVisible();
+    await expect(page.locator('#bbox-page-indicator')).toHaveText('Seite 1 / 2');
+
+    const rects = page.locator('#bbox-overlay-layer .bbox-rect');
+    await expect(rects).toHaveCount(2);
+    await expect(rects.nth(0)).toHaveAttribute('data-block-type', 'title');
+    await expect(rects.nth(1)).toHaveAttribute('data-block-type', 'text');
+
+    // Filter chip test
+    await page.locator('#bbox-filter-chips .bbox-filter-chip[data-filter="title"]').click();
+    await expect(rects).toHaveCount(1);
+    await page.locator('#bbox-filter-chips .bbox-filter-chip[data-filter="all"]').click();
+    await expect(rects).toHaveCount(2);
+
+    // Next page navigation in BBox overlay
+    await page.click('#bbox-next-page');
+    await expect(page.locator('#bbox-page-indicator')).toHaveText('Seite 2 / 2');
+    await expect(rects).toHaveCount(1);
+
+    // 2. Verify Eurobraille (> U+00FF) Character Replacement Assistant
+    // Characters > U+00FF in document: α (U+03B1), → (U+2192), ≤ (U+2264). Note: ° (U+00B0) and ä/ü are <= U+00FF.
+    const badge = page.locator('#char-replace-badge');
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveText('3');
+
+    await page.click('#btn-char-replacements');
+    const modal = page.locator('#char-replace-modal');
+    await expect(modal).toBeVisible();
+
+    const rows = page.locator('#char-replace-tbody tr[data-char]');
+    await expect(rows).toHaveCount(3);
+    await expect(page.locator('#char-replace-tbody')).toContainText('U+03B1');
+    await expect(page.locator('#char-replace-tbody')).toContainText('U+2192');
+    await expect(page.locator('#char-replace-tbody')).toContainText('U+2264');
+
+    // Fetch AI suggestions via POST /api/char-replacements/suggest
+    await page.click('#btn-suggest-char-replacements');
+    await expect.poll(() => suggestedChars.length).toBe(3);
+    await expect(page.locator('.char-replace-input[data-char="α"]')).toHaveValue('\\alpha');
+    await expect(page.locator('.char-replace-input[data-char="≤"]')).toHaveValue('\\le');
+    await expect(page.locator('.char-replace-input[data-char="→"]')).toHaveValue('\\rightarrow');
+
+    // Apply replacements to Markdown editor
+    await page.click('#btn-apply-char-replacements');
+    await expect(modal).toBeHidden();
+    await expect(page.locator('#standardised-markdown-textarea')).toHaveValue(
+      '((45))\n\n# 1 Mechanik\n\nWinkel \\alpha \\le 90° \\rightarrow Kraft wirkt nach rechts.\n\n((46))\n\nZweite Seite mit Pfeil \\rightarrow.'
+    );
+    await expect(badge).toBeHidden();
+
+    // Verify localStorage persistence
+    const savedStorage = await page.evaluate(() => localStorage.getItem('ebuch_char_replacements_v1'));
+    expect(savedStorage).toBeTruthy();
+    expect(JSON.parse(savedStorage!)).toMatchObject({
+      'α': { replacement: '\\alpha', active: true },
+      '≤': { replacement: '\\le', active: true },
+      '→': { replacement: '\\rightarrow', active: true },
+    });
+  });
+
 });
 
 

@@ -122,7 +122,7 @@ async function waitForUrl(url, timeoutMs = 25000) {
     try {
       const res = await fetch(url);
       if (res.ok) return true;
-    } catch {}
+    } catch { }
     await new Promise(r => setTimeout(r, 300));
   }
   throw new Error(`Timeout waiting for ${url}`);

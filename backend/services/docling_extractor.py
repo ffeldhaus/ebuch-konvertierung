@@ -17,6 +17,10 @@ from backend.services.extraction_postprocess import (
     parse_furniture_opening_header,
 )
 from backend.services.formula_service import convert_pdf_formula_bbox_text_to_latex
+from backend.services.pdf_render_service import (
+    normalize_bbox_to_1000,
+    render_pdf_figure_crop,
+)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DOCLING_MODELS_PATH = os.path.join(PROJECT_ROOT, "assets", "models", "docling")
@@ -199,8 +203,35 @@ def main(cli_args=None):
     sys.stdout.write(f"Processing pages: 60%| {max(1, total_pages // 2)}/{total_pages}\n")
     sys.stdout.flush()
 
+    # Open pypdfium2 document once for vector figure rendering, formula bbox text, and page sizes
+    pdf_doc_shared = None
+    page_sizes_by_idx: dict[int, tuple[float, float]] = {}
+    if is_pdf:
+        try:
+            import pypdfium2 as pdfium
+
+            pdf_doc_shared = pdfium.PdfDocument(args.input)
+            for p_i in range(len(pdf_doc_shared)):
+                page_sizes_by_idx[p_i] = pdf_doc_shared[p_i].get_size()
+        except Exception:
+            pdf_doc_shared = None
+
+    if doc.pages:
+        page_entries = (
+            doc.pages.items()
+            if isinstance(doc.pages, dict)
+            else [(idx + 1, pm) for idx, pm in enumerate(doc.pages)]
+        )
+        for p_no, page_meta in page_entries:
+            p_idx = max(0, int(p_no) - 1)
+            if p_idx not in page_sizes_by_idx and getattr(page_meta, "size", None):
+                sz = page_meta.size
+                if getattr(sz, "width", 0) and getattr(sz, "height", 0):
+                    page_sizes_by_idx[p_idx] = (float(sz.width), float(sz.height))
+
     # Save pictures and map picture paths (filtering tiny uncaptioned decorative icons/banner strips while preserving index alignment)
     image_names: list[str | None] = []
+    picture_blocks: list[dict[str, Any]] = []
     if doc.pictures:
         for idx, picture in enumerate(doc.pictures):
             try:
@@ -215,12 +246,34 @@ def main(cli_args=None):
                     if is_tiny_or_banner and not cap_txt:
                         image_names.append(None)
                         continue
+                    pic_p_idx = 0
+                    pic_bbox_1000 = None
+                    if getattr(picture, "prov", None) and len(picture.prov) > 0:
+                        prov0 = picture.prov[0]
+                        pic_p_idx = max(0, prov0.page_no - 1)
+                        pw_p, ph_p = page_sizes_by_idx.get(pic_p_idx, (0.0, 0.0))
+                        pic_bbox_1000 = normalize_bbox_to_1000(prov0.bbox, pw_p, ph_p)
+                        if pdf_doc_shared is not None and pic_p_idx < len(pdf_doc_shared):
+                            vec_img = render_pdf_figure_crop(
+                                pdf_doc_shared[pic_p_idx],
+                                prov0.bbox,
+                                target_longest_edge=2048,
+                            )
+                            if vec_img is not None:
+                                pil_img = vec_img
                     img_bytes = pil_img.tobytes()
                     img_hash = hashlib.sha256(img_bytes).hexdigest()[:16]
                     img_filename = f"picture_{idx}_{img_hash}.png"
                     img_path = os.path.join(images_dir, img_filename)
                     pil_img.save(img_path, format="PNG")
                     image_names.append(img_filename)
+                    if pic_bbox_1000 is not None:
+                        picture_blocks.append({
+                            "type": "image",
+                            "text": f"![](images/{img_filename})",
+                            "page_idx": pic_p_idx,
+                            "bbox_1000": pic_bbox_1000,
+                        })
                 else:
                     image_names.append(None)
             except Exception as e:
@@ -229,37 +282,34 @@ def main(cli_args=None):
 
     # Populate any undecoded FormulaItem before export_to_markdown() using FormulaItem.orig or PDF bbox text
     try:
-        pdf_doc_for_formulas = None
         for item, _lvl in doc.iterate_items(included_content_layers={ContentLayer.BODY}):
             lbl = str(getattr(item, "label", "")).split(".")[-1].lower()
             if lbl == "formula" and not (getattr(item, "text", "") or "").strip():
                 orig_txt = (getattr(item, "orig", "") or "").strip()
                 if not orig_txt and is_pdf and getattr(item, "prov", None):
                     try:
-                        import pypdfium2 as pdfium
-                        if pdf_doc_for_formulas is None:
-                            pdf_doc_for_formulas = pdfium.PdfDocument(args.input)
-                        prov0 = item.prov[0]
-                        p_i = max(0, prov0.page_no - 1)
-                        if p_i < len(pdf_doc_for_formulas):
-                            page_f = pdf_doc_for_formulas[p_i]
-                            _, ph_f = page_f.get_size()
-                            bb = prov0.bbox
-                            # Convert bbox to BOTTOMLEFT PDF coordinates if needed
-                            coord_origin = str(getattr(bb, "coord_origin", "BOTTOMLEFT")).upper()
-                            l_f = min(bb.l, bb.r)
-                            r_f = max(bb.l, bb.r)
-                            if "TOP" in coord_origin:
-                                b_f = ph_f - max(bb.t, bb.b)
-                                t_f = ph_f - min(bb.t, bb.b)
-                            else:
-                                b_f = min(bb.b, bb.t)
-                                t_f = max(bb.b, bb.t)
-                            orig_txt = (
-                                page_f.get_textpage()
-                                .get_text_bounded(max(0, l_f - 2), max(0, b_f - 2), r_f + 2, t_f + 2)
-                                or ""
-                            ).strip()
+                        if pdf_doc_shared is not None:
+                            prov0 = item.prov[0]
+                            p_i = max(0, prov0.page_no - 1)
+                            if p_i < len(pdf_doc_shared):
+                                page_f = pdf_doc_shared[p_i]
+                                _, ph_f = page_f.get_size()
+                                bb = prov0.bbox
+                                # Convert bbox to BOTTOMLEFT PDF coordinates if needed
+                                coord_origin = str(getattr(bb, "coord_origin", "BOTTOMLEFT")).upper()
+                                l_f = min(bb.l, bb.r)
+                                r_f = max(bb.l, bb.r)
+                                if "TOP" in coord_origin:
+                                    b_f = ph_f - max(bb.t, bb.b)
+                                    t_f = ph_f - min(bb.t, bb.b)
+                                else:
+                                    b_f = min(bb.b, bb.t)
+                                    t_f = max(bb.b, bb.t)
+                                orig_txt = (
+                                    page_f.get_textpage()
+                                    .get_text_bounded(max(0, l_f - 2), max(0, b_f - 2), r_f + 2, t_f + 2)
+                                    or ""
+                                ).strip()
                     except Exception:
                         pass
                 if orig_txt:
@@ -267,10 +317,14 @@ def main(cli_args=None):
                     latex_inner = re.sub(r"^\$\$+|\$\$+$", "", latex_rep).strip()
                     if latex_inner:
                         item.text = latex_inner
-        if pdf_doc_for_formulas is not None:
-            pdf_doc_for_formulas.close()
     except Exception as ex:
         logger.warning(f"Pre-export FormulaItem decoding fallback failed: {ex}")
+    finally:
+        if pdf_doc_shared is not None:
+            try:
+                pdf_doc_shared.close()
+            except Exception:
+                pass
 
     # Export markdown
     raw_md = doc.export_to_markdown()
@@ -365,27 +419,38 @@ def main(cli_args=None):
             p_idx = max(0, item.prov[0].page_no - 1)
             bbox_obj = item.prov[0].bbox
 
+        lbl = str(getattr(item, "label", "")).split(".")[-1].lower()
+        layer = getattr(item, "content_layer", ContentLayer.BODY)
+        pw_i, ph_i = page_sizes_by_idx.get(p_idx, (0.0, 0.0))
+        bbox_1000 = normalize_bbox_to_1000(bbox_obj, pw_i, ph_i) if bbox_obj else None
+
         text = ""
         if hasattr(item, "text"):
             text = item.text or ""
         elif hasattr(item, "caption_text"):
             text = item.caption_text(doc) or ""
         text = text.strip()
+        if not text and lbl == "table" and hasattr(item, "export_to_markdown"):
+            try:
+                text = (item.export_to_markdown(doc=doc) or "").strip()
+            except Exception:
+                text = ""
         if not text:
             continue
 
-        lbl = str(getattr(item, "label", "")).split(".")[-1].lower()
-        layer = getattr(item, "content_layer", ContentLayer.BODY)
         h = round(abs(bbox_obj.t - bbox_obj.b), 2) if bbox_obj else 0.0
         w = round(abs(bbox_obj.r - bbox_obj.l), 2) if bbox_obj else 0.0
 
         if layer == ContentLayer.FURNITURE or lbl in ("page_header", "page_footer"):
             f_type = "page_header" if "header" in lbl else "page_footer"
-            blocks.append({
+            furn_entry: dict[str, Any] = {
                 "type": f_type,
                 "text": text,
                 "page_idx": p_idx,
-            })
+            }
+            if bbox_1000 is not None:
+                furn_entry["bbox_1000"] = bbox_1000
+            blocks.append(furn_entry)
             if f_type == "page_header":
                 open_hdr = parse_furniture_opening_header(text, seen_opening_keys)
                 if open_hdr:
@@ -406,11 +471,12 @@ def main(cli_args=None):
 
         raw_items_info.append({
             "lbl": lbl,
-            "b_type": item.__class__.__name__.lower(),
+            "b_type": "table" if lbl == "table" else item.__class__.__name__.lower(),
             "text": text,
             "page_idx": p_idx,
             "h": h,
             "w": w,
+            "bbox_1000": bbox_1000,
             "in_callout_rect": in_callout_rect,
         })
 
@@ -425,14 +491,14 @@ def main(cli_args=None):
     for ri in raw_items_info:
         p_idx = ri["page_idx"]
         txt = ri["text"]
-        if p_idx not in first_body_text_by_page and len(txt) > 3:
+        if p_idx not in first_body_text_by_page and len(txt) > 3 and ri["b_type"] != "table":
             first_body_text_by_page[p_idx] = txt
         if ri["lbl"] in ("section_header", "title"):
             single_h = ri["h"]
             if ri["w"] > 0 and ri["w"] < 260 and len(txt) >= 35 and ri["h"] > max_single_h * 1.35:
                 single_h = round(ri["h"] / 2.48, 2)
             is_body_sized = bool(body_line_h > 0 and single_h <= body_line_h * 1.04)
-            blocks.append({
+            title_entry: dict[str, Any] = {
                 "type": "title",
                 "text": txt,
                 "text_level": 1,
@@ -440,13 +506,21 @@ def main(cli_args=None):
                 "bbox": [0, 0, ri["w"], single_h],
                 "is_body_sized": is_body_sized,
                 "is_callout_box": ri.get("in_callout_rect", False),
-            })
+            }
+            if ri.get("bbox_1000") is not None:
+                title_entry["bbox_1000"] = ri["bbox_1000"]
+            blocks.append(title_entry)
         else:
-            blocks.append({
+            body_entry: dict[str, Any] = {
                 "type": ri["b_type"],
                 "text": txt,
                 "page_idx": p_idx,
-            })
+            }
+            if ri.get("bbox_1000") is not None:
+                body_entry["bbox_1000"] = ri["bbox_1000"]
+            blocks.append(body_entry)
+
+    blocks.extend(picture_blocks)
 
     # Prepend any chapter/section opening headers from FURNITURE right before the first body element of that page
     for p_idx, open_hdrs in opening_headers_by_page.items():

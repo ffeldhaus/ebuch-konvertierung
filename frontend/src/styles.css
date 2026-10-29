@@ -548,3 +548,83 @@ html.theme-high-contrast .fb-question-step.is-answered { background: #ffffff; }
 .settings-status[data-kind="error"] { color: rgb(253 164 175); }
 .settings-status[data-kind="info"] { color: rgb(148 163 184); }
 .settings-input:user-invalid { border-color: rgb(244 63 94); }
+
+/* ------------------------------------------------------------------ */
+/* Interactive Grounding BBox Overlay (#pdf-bbox-viewer)               */
+/* ------------------------------------------------------------------ */
+.bbox-stage-scroll {
+  overscroll-behavior: contain;
+}
+
+.bbox-rect {
+  position: absolute;
+  border: 1.5px solid var(--bbox-color, #2563eb);
+  background-color: color-mix(in srgb, var(--bbox-color, #2563eb) 14%, transparent);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background-color 140ms ease-out, border-color 140ms ease-out;
+}
+
+.bbox-rect:hover,
+.bbox-rect.is-active {
+  background-color: color-mix(in srgb, var(--bbox-color, #2563eb) 28%, transparent);
+  z-index: 20;
+}
+
+.bbox-tag {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  color: #ffffff;
+  background-color: var(--bbox-color, #2563eb);
+  border-radius: 1px 0 2px 0;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.bbox-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid var(--slate-700);
+  background-color: var(--slate-850);
+  color: var(--slate-300);
+  cursor: pointer;
+  transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
+}
+
+.bbox-filter-chip[aria-pressed="true"] {
+  border-color: var(--bbox-color, #6366f1);
+  background-color: color-mix(in srgb, var(--bbox-color, #6366f1) 20%, var(--slate-900));
+  color: var(--slate-100);
+}
+
+.bbox-filter-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background-color: var(--bbox-color, #64748b);
+}
+
+html.theme-high-contrast .bbox-rect {
+  border-color: #ffff00 !important;
+  background-color: rgba(255, 255, 0, 0.18) !important;
+}
+
+html.theme-high-contrast .bbox-tag {
+  background-color: #ffff00 !important;
+  color: #000000 !important;
+}
+
+#char-replace-modal {
+  overscroll-behavior: contain;
+}

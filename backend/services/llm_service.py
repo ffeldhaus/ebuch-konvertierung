@@ -34,6 +34,7 @@ from backend.services.fibs_formatting import (
     bild_tag_from_vlm,
     format_bild_tag,
     has_caption_context,
+    parse_char_replacement_suggestions,
 )
 from backend.services.fibs_postprocess import (
     optimize_markdown_fallback,
@@ -51,6 +52,7 @@ from backend.services.prompts import (
     OPTIMIZE_SYSTEM_INSTRUCTION,
     SYSTEM_PROMPTS,
     VLM_IMAGE_PROMPT,
+    build_char_replacement_prompt,
     build_chunk_section_message,
     build_custom_rules_block,
     build_optimize_user_prompt,
@@ -1911,6 +1913,80 @@ async def optimize_markdown_async(
 
     logger.info("=== RUNNING LOCAL FALLBACK FOR OPTIMIZATION (NO LLM AVAILABLE OR FAILED) ===")
     return await asyncio.to_thread(optimize_markdown_fallback, current_markdown, feedback)
+
+
+async def suggest_char_replacements_async(chars: list[str]) -> dict[str, str]:
+    """Generates Eurobraille/LaTeX replacement suggestions for non-Latin1 characters.
+
+    Uses ``EUROBRAILLE_CHAR_FALLBACK_MAP`` as a deterministic baseline and queries the
+    local Gemma LLM via ``AsyncOpenAI`` (when not in ``E2E_MOCK`` mode and LLM is reachable)
+    for any requested characters.
+
+    Args:
+        chars: Sequence of non-Latin1 character strings (``ord(ch) > 0xFF``).
+
+    Returns:
+        Dictionary mapping each recognized character to its suggested replacement string.
+    """
+    unique_chars: list[str] = []
+    seen: set[str] = set()
+    for raw_c in chars or []:
+        if not isinstance(raw_c, str) or not raw_c:
+            continue
+        ch = raw_c[0]
+        if ord(ch) > 0xFF and not ch.isspace() and ch not in seen:
+            seen.add(ch)
+            unique_chars.append(ch)
+
+    if not unique_chars:
+        return {}
+
+    fallback_suggestions: dict[str, str] = {}
+    for ch in unique_chars:
+        if ch in fc.EUROBRAILLE_CHAR_FALLBACK_MAP:
+            fallback_suggestions[ch] = fc.EUROBRAILLE_CHAR_FALLBACK_MAP[ch]
+        else:
+            import unicodedata
+
+            uname = unicodedata.name(ch, "").strip()
+            if uname:
+                short_name = uname.title()[:20].strip()
+                fallback_suggestions[ch] = f"[{short_name}]"
+            else:
+                fallback_suggestions[ch] = f"[U+{ord(ch):04X}]"
+
+    if os.environ.get("E2E_MOCK") == "true":
+        return fallback_suggestions
+
+    chars_block = "\n".join(f"{ch} (Code U+{ord(ch):04X})" for ch in unique_chars)
+    user_prompt = build_char_replacement_prompt(chars_block)
+    system_instruction = (
+        "Du bist ein Experte für den E-Buch-Standard (FIBS Übertragungsregeln) und "
+        "den EuroBraille-Zeichensatz (ISO-8859-1). Antworte ausschließlich mit validem JSON."
+    )
+
+    client = await start_rapid_mlx_async()
+    if client is not None:
+        try:
+            raw_gen = await _stream_chat_completion_async(
+                client,
+                system_instruction,
+                user_prompt,
+                1024,
+                None,
+            )
+            reset_idle_timer()
+            if raw_gen:
+                parsed = parse_char_replacement_suggestions(raw_gen, unique_chars)
+                if parsed:
+                    merged = dict(fallback_suggestions)
+                    merged.update(parsed)
+                    return merged
+        except Exception as e:
+            logger.warning(f"LLM character replacement suggestion fallback due to error: {e}")
+
+    return fallback_suggestions
+
 
 
 # ---------------------------------------------------------------------------

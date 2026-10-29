@@ -33,8 +33,16 @@ from backend.services.llm_service import (
     optimize_markdown_async,
     release_gpu_memory,
     standardise_markdown_async,
+    suggest_char_replacements_async,
 )
-from backend.services.models import DomainModel
+from backend.services.models import (
+    CharSuggestRequest,
+    CharSuggestResponse,
+    DomainModel,
+    LayoutBlock,
+    TaskLayoutResponse,
+)
+from backend.services.pdf_render_service import normalize_bbox_to_1000
 from backend.services.task_manager import TaskManager
 
 # Configure logging
@@ -420,6 +428,144 @@ async def get_task_state(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
     return task.to_state_dict()
+
+
+def _load_task_layout_blocks(task_id: str) -> list[LayoutBlock]:
+    """Loads layout blocks with ``bbox_1000`` from ``*_content_list.json`` in the task output directory.
+
+    Args:
+        task_id: Conversion task identifier.
+
+    Returns:
+        List of ``LayoutBlock`` domain models.
+    """
+    import glob
+
+    task_dir = os.path.join(OUTPUT_DIR, task_id)
+    if not os.path.isdir(task_dir):
+        return []
+
+    json_files = sorted(
+        glob.glob(os.path.join(task_dir, "**", "*_content_list.json"), recursive=True)
+    )
+    if not json_files:
+        json_files = sorted(
+            glob.glob(os.path.join(task_dir, "**", "*content_list*.json"), recursive=True)
+        )
+    if not json_files:
+        return []
+
+    try:
+        with open(json_files[0], encoding="utf-8") as f:
+            raw_data = json.load(f)
+    except Exception as exc:
+        logger.warning(f"Could not read layout JSON for task {task_id}: {exc}")
+        return []
+
+    if isinstance(raw_data, dict):
+        raw_blocks = raw_data.get("blocks", raw_data.get("content", []))
+    elif isinstance(raw_data, list) and raw_data and isinstance(raw_data[0], list):
+        raw_blocks = []
+        for p_idx, page_list in enumerate(raw_data):
+            for entry in page_list:
+                if isinstance(entry, dict):
+                    item_copy = dict(entry)
+                    item_copy.setdefault("page_idx", p_idx)
+                    raw_blocks.append(item_copy)
+    elif isinstance(raw_data, list):
+        raw_blocks = raw_data
+    else:
+        raw_blocks = []
+
+    layout_blocks: list[LayoutBlock] = []
+    for b in raw_blocks:
+        if not isinstance(b, dict):
+            continue
+        b_type = str(b.get("type") or b.get("label") or "text").strip()
+        text = str(b.get("text") or "").strip()
+        page_idx = int(b.get("page_idx", 0) or 0)
+        text_level_raw = b.get("text_level")
+        text_level = int(text_level_raw) if isinstance(text_level_raw, (int, float)) else None
+        is_callout = bool(b.get("is_callout_box", False))
+
+        bbox_1000 = b.get("bbox_1000")
+        if (
+            isinstance(bbox_1000, list)
+            and len(bbox_1000) == 4
+            and all(isinstance(v, (int, float)) for v in bbox_1000)
+        ):
+            norm_bbox = [max(0, min(1000, int(round(v)))) for v in bbox_1000]
+        else:
+            norm_bbox = None
+            raw_bbox = b.get("bbox")
+            if (
+                isinstance(raw_bbox, list)
+                and len(raw_bbox) == 4
+                and all(isinstance(v, (int, float)) for v in raw_bbox)
+            ):
+                x1, y1, x2, y2 = (
+                    float(raw_bbox[0]),
+                    float(raw_bbox[1]),
+                    float(raw_bbox[2]),
+                    float(raw_bbox[3]),
+                )
+                # Synthetic heading height bbox [0, 0, w, single_h] is not a spatial page box unless valid coordinates are given
+                if not (x1 == 0.0 and y1 == 0.0 and y2 <= 30.0):
+                    if max(x2, y2) <= 1000.0 and x2 > x1 and y2 > y1:
+                        norm_bbox = [
+                            max(0, min(1000, int(round(x1)))),
+                            max(0, min(1000, int(round(y1)))),
+                            max(0, min(1000, int(round(x2)))),
+                            max(0, min(1000, int(round(y2)))),
+                        ]
+                    else:
+                        norm_bbox = normalize_bbox_to_1000(
+                            [x1, y1, x2, y2],
+                            595.0,
+                            842.0,
+                            coord_origin="TOPLEFT",
+                        )
+
+        if norm_bbox is None:
+            continue
+
+        layout_blocks.append(
+            LayoutBlock(
+                type=b_type,
+                text=text,
+                page_idx=page_idx,
+                bbox_1000=norm_bbox,
+                text_level=text_level,
+                is_callout_box=is_callout,
+            )
+        )
+    return layout_blocks
+
+
+@app.get("/api/tasks/{task_id}/layout", response_model=TaskLayoutResponse)
+async def get_task_layout(task_id: str) -> TaskLayoutResponse:
+    """Returns extracted layout blocks with ``bbox_1000`` coordinates for a conversion task."""
+    task = await task_manager.get(task_id)
+    task_dir = os.path.join(OUTPUT_DIR, task_id)
+    if not task and not os.path.isdir(task_dir):
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    physical_start = int(getattr(task, "physical_start_page", 1) or 1) if task else 1
+    blocks = await asyncio.to_thread(_load_task_layout_blocks, task_id)
+    return TaskLayoutResponse(
+        task_id=task_id,
+        physical_start_page=physical_start,
+        blocks=blocks,
+    )
+
+
+@app.post("/api/char-replacements/suggest", response_model=CharSuggestResponse)
+async def suggest_char_replacements_endpoint(
+    payload: CharSuggestRequest,
+) -> CharSuggestResponse:
+    """Generates Eurobraille/LaTeX replacement suggestions for non-Latin1 characters."""
+    suggestions = await suggest_char_replacements_async(payload.chars)
+    return CharSuggestResponse(suggestions=suggestions)
 
 
 @app.get("/api/tasks/{task_id}/images/{image_name}")

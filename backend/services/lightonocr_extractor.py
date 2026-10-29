@@ -19,7 +19,10 @@ from backend.services.extraction_postprocess import (
     extract_docling_page_layout,
     fuse_vlm_page_with_docling,
 )
-from backend.services.pdf_render_service import render_pdf_page_for_vlm
+from backend.services.pdf_render_service import (
+    render_pdf_figure_crop,
+    render_pdf_page_for_vlm,
+)
 
 logger = logging.getLogger("lightonocr_extractor")
 
@@ -94,12 +97,28 @@ def parse_grounding_blocks(
     images_dir: str | None = None,
     page_idx: int = 0,
     has_existing_images: bool = False,
+    pdf_page: Any = None,
+    grounding_meta_out: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[str]]:
-    """Parses LightOnOCR-3 grounding output (![label](x1,y1,x2,y2) content):
-    - Drops 'header', 'footer', and 'page_number' blocks.
-    - Preserves 'footnote' blocks (required by E-Buch standard).
-    - Merges 'text+' continuation blocks onto the previous 'text' block even across intervening figures.
-    - Crops 'image' / 'chart' bounding boxes (normalized 0..1000) as PNG fallback when Docling found no pictures.
+    """Parses LightOnOCR-3 grounding output (``![label](x1,y1,x2,y2) content``).
+
+    - Drops ``header``, ``footer``, and ``page_number`` blocks.
+    - Preserves ``footnote`` blocks (required by E-Buch standard).
+    - Merges ``text+`` continuation blocks onto the previous ``text`` block even across intervening figures.
+    - Crops ``image`` / ``chart`` bounding boxes (normalized 0..1000) via vector PDF rendering
+      (or PIL crop fallback) when Docling found no pictures.
+
+    Args:
+        raw_text: Raw LightOnOCR-3 grounding output string.
+        page_pil_img: Optional rendered PIL page image for fallback cropping.
+        images_dir: Directory where cropped PNG images should be stored.
+        page_idx: 0-based page index.
+        has_existing_images: Whether Docling already extracted pictures for this page.
+        pdf_page: Optional open ``pypdfium2.PdfPage`` for vector figure cropping.
+        grounding_meta_out: Optional list populated with parsed layout blocks including ``bbox_1000``.
+
+    Returns:
+        Tuple of ``(assembled_markdown, cropped_image_filenames)``.
     """
     if not raw_text or not _GROUNDING_BLOCK_RE.search(raw_text):
         return raw_text, []
@@ -111,21 +130,38 @@ def parse_grounding_blocks(
     for m in _GROUNDING_BLOCK_RE.finditer(raw_text):
         label = m.group(1).strip().lower()
         x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+        bbox_1000 = [
+            max(0, min(1000, x1)),
+            max(0, min(1000, y1)),
+            max(0, min(1000, x2)),
+            max(0, min(1000, y2)),
+        ]
         body = m.group(6).strip()
 
         if label in ("header", "footer", "page_number"):
             continue
 
         if label in ("image", "chart"):
-            if not has_existing_images and page_pil_img is not None and images_dir:
+            fname = None
+            if not has_existing_images and images_dir and (pdf_page is not None or page_pil_img is not None):
                 try:
-                    w, h = page_pil_img.size
-                    px1 = max(0, min(w, int(round(x1 * w / 1000.0))))
-                    py1 = max(0, min(h, int(round(y1 * h / 1000.0))))
-                    px2 = max(0, min(w, int(round(x2 * w / 1000.0))))
-                    py2 = max(0, min(h, int(round(y2 * h / 1000.0))))
-                    if px2 - px1 >= 30 and py2 - py1 >= 30:
-                        cropped = page_pil_img.crop((px1, py1, px2, py2))
+                    cropped = None
+                    if pdf_page is not None:
+                        cropped = render_pdf_figure_crop(
+                            pdf_page,
+                            bbox_1000,
+                            target_longest_edge=2048,
+                            is_normalized_1000=True,
+                        )
+                    if cropped is None and page_pil_img is not None:
+                        w, h = page_pil_img.size
+                        px1 = max(0, min(w, int(round(x1 * w / 1000.0))))
+                        py1 = max(0, min(h, int(round(y1 * h / 1000.0))))
+                        px2 = max(0, min(w, int(round(x2 * w / 1000.0))))
+                        py2 = max(0, min(h, int(round(y2 * h / 1000.0))))
+                        if px2 - px1 >= 30 and py2 - py1 >= 30:
+                            cropped = page_pil_img.crop((px1, py1, px2, py2))
+                    if cropped is not None and cropped.width >= 30 and cropped.height >= 30:
                         img_hash = hashlib.sha256(cropped.tobytes()).hexdigest()[:16]
                         fname = f"picture_{page_idx}_{crop_counter}_{img_hash}.png"
                         cropped.save(os.path.join(images_dir, fname), format="PNG")
@@ -133,7 +169,12 @@ def parse_grounding_blocks(
                         crop_counter += 1
                 except Exception as e:
                     logger.debug(f"Could not crop grounding bbox on page {page_idx}: {e}")
-            blocks.append({"label": "image", "text": "<!-- image -->"})
+            blocks.append({
+                "label": "image",
+                "text": "<!-- image -->",
+                "bbox_1000": bbox_1000,
+                "image_file": fname,
+            })
             continue
 
         if label == "text+":
@@ -149,14 +190,26 @@ def parse_grounding_blocks(
                     merged = True
                     break
             if not merged and body:
-                blocks.append({"label": "text", "text": body})
+                blocks.append({"label": "text", "text": body, "bbox_1000": bbox_1000})
             continue
 
         if label == "title" and body and not body.startswith("#"):
             body = f"## {body}"
 
         if body:
-            blocks.append({"label": label, "text": body})
+            blocks.append({"label": label, "text": body, "bbox_1000": bbox_1000})
+
+    if grounding_meta_out is not None:
+        for b in blocks:
+            lbl = b["label"]
+            b_type = "heading" if lbl == "title" else ("image" if lbl in ("image", "chart") else lbl)
+            txt = f"![](images/{b['image_file']})" if b.get("image_file") else b["text"]
+            grounding_meta_out.append({
+                "type": b_type,
+                "text": txt,
+                "page_idx": page_idx,
+                "bbox_1000": b["bbox_1000"],
+            })
 
     assembled = "\n\n".join(b["text"] for b in blocks if b["text"])
     return assembled, cropped_files
@@ -171,11 +224,25 @@ def post_process_lightonocr_page(
     page_pil_img: Image.Image | None = None,
     images_dir: str | None = None,
     page_idx: int = 0,
+    pdf_page: Any = None,
+    grounding_meta_out: list[dict[str, Any]] | None = None,
 ) -> str:
     """Clean raw OCR markdown from LightOnOCR-3 and fuse with Docling layout.
 
-    - Parses grounding blocks if present
-    - Delegates to shared fuse_vlm_page_with_docling() pipeline
+    Args:
+        raw_text: Raw OCR string emitted by LightOnOCR-3.
+        page_images: Pre-extracted Docling picture filenames on this page.
+        phys_num: Physical printed book page number.
+        page_tables: Optional Docling TableFormer markdown tables for this page.
+        opening_headers: Optional chapter/section opening headers from FURNITURE.
+        page_pil_img: Optional PIL page image for grounding crop fallback.
+        images_dir: Directory where cropped images are written.
+        page_idx: 0-based page index.
+        pdf_page: Optional open ``pypdfium2.PdfPage`` for vector figure cropping.
+        grounding_meta_out: Optional list populated with grounding block metadata.
+
+    Returns:
+        Fused and post-processed page Markdown string.
     """
     text, bbox_cropped = parse_grounding_blocks(
         raw_text,
@@ -183,6 +250,8 @@ def post_process_lightonocr_page(
         images_dir=images_dir,
         page_idx=page_idx,
         has_existing_images=bool(page_images),
+        pdf_page=pdf_page,
+        grounding_meta_out=grounding_meta_out,
     )
     all_page_images = list(page_images) if page_images else list(bbox_cropped)
     return fuse_vlm_page_with_docling(
@@ -303,8 +372,9 @@ def main(cli_args: list[str] | None = None):
 
     all_markdown: list[str] = []
     blocks: list[dict[str, Any]] = []
-    # Seed blocks with Docling heading bbox metadata and furniture metadata for downstream post-processing
+    # Seed blocks with Docling heading bbox metadata, layout blocks, and furniture metadata for downstream post-processing
     blocks.extend(layout_info.get("heading_blocks", []))
+    blocks.extend(layout_info.get("layout_blocks", []))
     for p_furn in layout_info.get("furniture_by_page", {}).values():
         blocks.extend(p_furn)
 
@@ -415,6 +485,8 @@ def main(cli_args: list[str] | None = None):
         page_images = list(layout_info.get("pictures_by_page", {}).get(p_idx, []))
         page_tables = list(layout_info.get("tables_by_page", {}).get(p_idx, []))
         opening_headers = list(layout_info.get("opening_headers_by_page", {}).get(p_idx, []))
+        grounding_meta: list[dict[str, Any]] = []
+        raw_pdf_page = pdf[p_idx] if (pdf is not None and p_idx < len(pdf)) else None
 
         cleaned_text = post_process_lightonocr_page(
             page_text,
@@ -425,7 +497,10 @@ def main(cli_args: list[str] | None = None):
             page_pil_img=pil_img,
             images_dir=images_dir,
             page_idx=p_idx,
+            pdf_page=raw_pdf_page,
+            grounding_meta_out=grounding_meta,
         )
+        blocks.extend(grounding_meta)
         all_markdown.append(cleaned_text)
 
         try:

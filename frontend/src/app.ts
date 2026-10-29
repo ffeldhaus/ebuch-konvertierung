@@ -122,6 +122,30 @@ class AppController {
 
   private pdfPagePillsContainer = document.getElementById('pdf-page-pills-container') as HTMLElement;
 
+  // Interactive Grounding BBox Overlay elements
+  private btnToggleBboxOverlay = document.getElementById('btn-toggle-bbox-overlay') as HTMLButtonElement | null;
+  private pdfBboxViewer = document.getElementById('pdf-bbox-viewer') as HTMLDivElement | null;
+  private bboxPrevPageBtn = document.getElementById('bbox-prev-page') as HTMLButtonElement | null;
+  private bboxNextPageBtn = document.getElementById('bbox-next-page') as HTMLButtonElement | null;
+  private bboxPageIndicator = document.getElementById('bbox-page-indicator') as HTMLSpanElement | null;
+  private bboxFilterChips = document.getElementById('bbox-filter-chips') as HTMLDivElement | null;
+  private bboxPageImg = document.getElementById('bbox-page-img') as HTMLImageElement | null;
+  private bboxOverlayLayer = document.getElementById('bbox-overlay-layer') as HTMLDivElement | null;
+
+  // Eurobraille / ISO 8859-1 (> U+00FF) Character Replacement Assistant elements
+  private btnCharReplacements = document.getElementById('btn-char-replacements') as HTMLButtonElement | null;
+  private charReplaceBadge = document.getElementById('char-replace-badge') as HTMLSpanElement | null;
+  private charReplaceModal = document.getElementById('char-replace-modal') as HTMLDivElement | null;
+  private closeCharReplaceModalBtn = document.getElementById('close-char-replace-modal') as HTMLButtonElement | null;
+  private cancelCharReplaceModalBtn = document.getElementById('cancel-char-replace-modal') as HTMLButtonElement | null;
+  private btnSuggestCharReplacements = document.getElementById('btn-suggest-char-replacements') as HTMLButtonElement | null;
+  private btnExportCharMap = document.getElementById('btn-export-char-map') as HTMLButtonElement | null;
+  private btnImportCharMap = document.getElementById('btn-import-char-map') as HTMLButtonElement | null;
+  private charMapFileInput = document.getElementById('char-map-file-input') as HTMLInputElement | null;
+  private charReplaceStatus = document.getElementById('char-replace-status') as HTMLSpanElement | null;
+  private charReplaceTbody = document.getElementById('char-replace-tbody') as HTMLTableSectionElement | null;
+  private btnApplyCharReplacements = document.getElementById('btn-apply-char-replacements') as HTMLButtonElement | null;
+
   // Top Navigation Tabs & Views
   private mainModeSelect = document.getElementById('main-mode-select') as HTMLSelectElement;
   private headerStepper = document.getElementById('header-stepper') as HTMLDivElement;
@@ -212,6 +236,25 @@ class AppController {
   private isRawRendered = false;
   private isStandardisedRendered = false;
 
+  // Grounding BBox Overlay state
+  private isBboxOverlayActive = false;
+  private currentBboxPageIdx = 0;
+  private activeBboxFilter = 'all';
+  private layoutCache = new Map<string, {
+    physical_start_page: number;
+    blocks: Array<{
+      type: string;
+      text: string;
+      page_idx: number;
+      bbox_1000: number[];
+      text_level?: number | null;
+      is_callout_box?: boolean;
+    }>;
+  }>();
+
+  // Eurobraille Character Replacement state
+  private charReplacements = new Map<string, { replacement: string; active: boolean }>();
+
   constructor() {
     if (this.describeImagesToggle) {
       this.describeImagesToggle.checked = true;
@@ -219,7 +262,10 @@ class AppController {
     if (this.engineSelect) {
       this.engineSelect.value = 'infinity';
     }
+    this.loadCharReplacementsFromStorage();
     this.initEventListeners();
+    this.initBboxOverlayEvents();
+    this.initCharReplacementEvents();
     this.handleEngineChange();
     this.updatePaneVisibility();
     this.initTaskManager();
@@ -228,6 +274,7 @@ class AppController {
     this.initScrollSync();
     this.initBenchmarkEvents();
     this.updateRulesetUploadState(false);
+    this.updateCharReplaceBadge();
   }
 
   private initEventListeners() {
@@ -328,6 +375,10 @@ class AppController {
     // Textarea input & page pill updates
     this.standardisedMarkdownTextarea.addEventListener('input', () => {
       this.updatePagePills();
+      this.updateCharReplaceBadge();
+    });
+    this.rawMarkdownTextarea.addEventListener('input', () => {
+      this.updateCharReplaceBadge();
     });
 
     // Bidirectional cursor tracking: sync editor cursor position to PDF page
@@ -509,6 +560,7 @@ class AppController {
     } else if (textarea === this.standardisedMarkdownTextarea && this.isStandardisedRendered) {
       this.updateStandardisedRenderPreview();
     }
+    this.updateCharReplaceBadge();
   }
 
   private parseMarkdownTables(text: string): string {
@@ -1140,6 +1192,9 @@ class AppController {
     this.isStandardisedPaneVisible = true;
     this.updatePaneVisibility();
     this.setStandardisedPanelMode('edit');
+    this.setBboxOverlayActive(false);
+    this.updatePagePills();
+    this.updateCharReplaceBadge();
 
     this.log('Datei zurückgesetzt.');
     this.updateStepper('idle');
@@ -1641,6 +1696,11 @@ class AppController {
         this.standardisedMarkdownTextarea.value = this.currentStandardisedMarkdown;
         if (this.isStandardisedRendered) this.updateStandardisedRenderPreview();
       }
+      this.updatePagePills();
+      this.updateCharReplaceBadge();
+      if (this.isBboxOverlayActive) {
+        this.loadAndRenderBboxOverlay();
+      }
 
       if (data.status === 'processing') {
         // Show progress bar container and reset bar width
@@ -1682,6 +1742,8 @@ class AppController {
         this.currentStandardisedMarkdown = data.standardised_markdown || '';
         this.standardisedMarkdownTextarea.value = this.currentStandardisedMarkdown;
         if (this.isStandardisedRendered) this.updateStandardisedRenderPreview();
+        this.updatePagePills();
+        this.updateCharReplaceBadge();
         
         this.updateStepper('ready_to_export');
         this.downloadActions.classList.remove('hidden');
@@ -2161,6 +2223,8 @@ class AppController {
       
       this.currentStandardisedMarkdown = optimizedData.markdown;
       this.standardisedMarkdownTextarea.value = this.currentStandardisedMarkdown;
+      this.updatePagePills();
+      this.updateCharReplaceBadge();
       this.log('E-Buch Markdown erfolgreich optimiert.', 'success');
       this.optimizationPromptInput.value = '';
 
@@ -2324,9 +2388,15 @@ class AppController {
   private updatePdfPage(pageNum: number) {
     if (pageNum === this.currentPdfPage || pageNum <= 0) return;
     this.currentPdfPage = pageNum;
+    const relativePage = this.physicalStartPage > 0 ? (pageNum - this.physicalStartPage + 1) : pageNum;
+    if (relativePage >= 1) {
+      this.currentBboxPageIdx = relativePage - 1;
+      if (this.isBboxOverlayActive) {
+        this.renderBboxPage();
+      }
+    }
     if (this.pdfViewerFrame && this.taskId) {
       try {
-        const relativePage = this.physicalStartPage > 0 ? (pageNum - this.physicalStartPage + 1) : pageNum;
         if (relativePage >= 1) {
           const url = `/api/pdf/${this.taskId}#page=${relativePage}`;
           const iframeWindow = this.pdfViewerFrame.contentWindow;
@@ -2338,7 +2408,6 @@ class AppController {
         }
       } catch (e) {
         console.error('Error syncing PDF scroll page:', e);
-        const relativePage = this.physicalStartPage > 0 ? (pageNum - this.physicalStartPage + 1) : pageNum;
         if (relativePage >= 1) {
           this.pdfViewerFrame.src = `/api/pdf/${this.taskId}#page=${relativePage}`;
         }
@@ -2626,6 +2695,7 @@ class AppController {
         this.jumpToPage(p);
       });
     });
+    this.updateCharReplaceBadge();
   }
 
   private jumpToPage(pageNum: number) {
@@ -2657,6 +2727,666 @@ class AppController {
         el.className = 'pdf-page-pill text-[9px] bg-slate-800 hover:bg-indigo-600 hover:text-white text-slate-300 px-1.5 py-0.5 rounded border border-slate-700 transition-colors cursor-pointer flex-shrink-0';
       }
     });
+  }
+
+  // -------------------------------------------------------------
+  // Interactive Grounding BBox Overlay (#pdf-bbox-viewer)
+  // -------------------------------------------------------------
+
+  private initBboxOverlayEvents() {
+    if (this.btnToggleBboxOverlay) {
+      this.btnToggleBboxOverlay.addEventListener('click', () => {
+        this.setBboxOverlayActive(!this.isBboxOverlayActive);
+      });
+    }
+    if (this.bboxPrevPageBtn) {
+      this.bboxPrevPageBtn.addEventListener('click', () => {
+        if (this.currentBboxPageIdx > 0) {
+          this.currentBboxPageIdx--;
+          this.renderBboxPage();
+          const physPage = (this.physicalStartPage || 1) + this.currentBboxPageIdx;
+          this.currentPdfPage = physPage;
+          this.highlightPagePill(physPage);
+        }
+      });
+    }
+    if (this.bboxNextPageBtn) {
+      this.bboxNextPageBtn.addEventListener('click', () => {
+        const totalPages = this.getTotalBboxPages();
+        if (this.currentBboxPageIdx < totalPages - 1) {
+          this.currentBboxPageIdx++;
+          this.renderBboxPage();
+          const physPage = (this.physicalStartPage || 1) + this.currentBboxPageIdx;
+          this.currentPdfPage = physPage;
+          this.highlightPagePill(physPage);
+        }
+      });
+    }
+  }
+
+  private setBboxOverlayActive(active: boolean) {
+    this.isBboxOverlayActive = active;
+    if (this.btnToggleBboxOverlay) {
+      this.btnToggleBboxOverlay.setAttribute('aria-pressed', String(active));
+      if (active) {
+        this.btnToggleBboxOverlay.classList.remove('bg-slate-800', 'text-slate-300', 'border-slate-700');
+        this.btnToggleBboxOverlay.classList.add('bg-indigo-600', 'text-white', 'border-indigo-500');
+      } else {
+        this.btnToggleBboxOverlay.classList.remove('bg-indigo-600', 'text-white', 'border-indigo-500');
+        this.btnToggleBboxOverlay.classList.add('bg-slate-800', 'text-slate-300', 'border-slate-700');
+      }
+    }
+
+    if (active) {
+      if (!this.isPdfPaneVisible) {
+        this.isPdfPaneVisible = true;
+        this.updatePaneVisibility();
+      }
+      this.pdfViewerFrame.classList.add('hidden');
+      this.pdfBboxViewer?.classList.remove('hidden');
+      this.loadAndRenderBboxOverlay();
+    } else {
+      this.pdfBboxViewer?.classList.add('hidden');
+      this.pdfViewerFrame.classList.remove('hidden');
+    }
+  }
+
+  private getTotalBboxPages(): number {
+    const cached = this.taskId ? this.layoutCache.get(this.taskId) : undefined;
+    let maxBlockPage = 0;
+    if (cached && cached.blocks.length > 0) {
+      for (const b of cached.blocks) {
+        if (b.page_idx + 1 > maxBlockPage) {
+          maxBlockPage = b.page_idx + 1;
+        }
+      }
+    }
+    return Math.max(1, this.activePageCount, maxBlockPage);
+  }
+
+  private async loadAndRenderBboxOverlay() {
+    if (!this.taskId) {
+      this.renderBboxPage();
+      return;
+    }
+    const taskId = this.taskId;
+    if (!this.layoutCache.has(taskId)) {
+      try {
+        const res = await fetch(`/api/tasks/${taskId}/layout`);
+        if (res.ok) {
+          const data = await res.json();
+          this.layoutCache.set(taskId, {
+            physical_start_page: data.physical_start_page || this.physicalStartPage || 1,
+            blocks: Array.isArray(data.blocks) ? data.blocks : [],
+          });
+          if (data.physical_start_page) {
+            this.physicalStartPage = data.physical_start_page;
+          }
+        } else {
+          this.layoutCache.set(taskId, { physical_start_page: this.physicalStartPage || 1, blocks: [] });
+        }
+      } catch (e) {
+        console.warn('Could not load layout blocks for task:', e);
+        this.layoutCache.set(taskId, { physical_start_page: this.physicalStartPage || 1, blocks: [] });
+      }
+    }
+    this.renderBboxPage();
+  }
+
+  private getBboxCategoryMeta(block: { type: string; is_callout_box?: boolean }): {
+    key: string;
+    tagLabel: string;
+    chipLabel: string;
+    color: string;
+  } {
+    const rawType = (block.type || 'text').toLowerCase();
+    if (block.is_callout_box || rawType === 'callout' || rawType === 'aside_text') {
+      return { key: rawType, tagLabel: 'callout', chipLabel: 'Rahmen', color: '#ea580c' };
+    }
+    if (rawType === 'title' || rawType === 'section_header' || rawType === 'heading' || rawType === 'section') {
+      return { key: rawType, tagLabel: 'title', chipLabel: 'Überschrift', color: '#d97706' };
+    }
+    if (rawType === 'image' || rawType === 'picture' || rawType === 'figure' || rawType === 'chart') {
+      return { key: rawType, tagLabel: 'image', chipLabel: 'Bild', color: '#0d9488' };
+    }
+    if (rawType === 'table') {
+      return { key: rawType, tagLabel: 'table', chipLabel: 'Tabelle', color: '#dc2626' };
+    }
+    if (rawType === 'formula' || rawType === 'equation') {
+      return { key: rawType, tagLabel: 'formula', chipLabel: 'Formel', color: '#0891b2' };
+    }
+    if (
+      rawType === 'page_header' ||
+      rawType === 'page_footer' ||
+      rawType === 'header' ||
+      rawType === 'footer' ||
+      rawType === 'page_number' ||
+      rawType === 'furniture'
+    ) {
+      return { key: rawType, tagLabel: 'furniture', chipLabel: 'Kopf-/Fußzeile', color: '#64748b' };
+    }
+    if (rawType === 'list' || rawType === 'list_item') {
+      return { key: rawType, tagLabel: 'text', chipLabel: 'Liste', color: '#0284c7' };
+    }
+    if (rawType === 'caption' || rawType === 'footnote') {
+      return { key: rawType, tagLabel: 'text', chipLabel: 'Bildtext', color: '#b45309' };
+    }
+    return { key: rawType, tagLabel: 'text', chipLabel: 'Text', color: '#2563eb' };
+  }
+
+  private renderBboxPage() {
+    if (!this.bboxOverlayLayer || !this.bboxFilterChips || !this.bboxPageIndicator) return;
+
+    const totalPages = this.getTotalBboxPages();
+    if (this.currentBboxPageIdx >= totalPages) {
+      this.currentBboxPageIdx = Math.max(0, totalPages - 1);
+    }
+    if (this.currentBboxPageIdx < 0) {
+      this.currentBboxPageIdx = 0;
+    }
+
+    this.bboxPageIndicator.textContent = `Seite ${this.currentBboxPageIdx + 1} / ${totalPages}`;
+    if (this.bboxPrevPageBtn) {
+      this.bboxPrevPageBtn.disabled = this.currentBboxPageIdx <= 0;
+    }
+    if (this.bboxNextPageBtn) {
+      this.bboxNextPageBtn.disabled = this.currentBboxPageIdx >= totalPages - 1;
+    }
+
+    if (this.bboxPageImg && this.taskId) {
+      const targetSrc = `/api/feedback/jobs/${this.taskId}/pages/${this.currentBboxPageIdx}?scale=2.0`;
+      if (this.bboxPageImg.getAttribute('src') !== targetSrc) {
+        this.bboxPageImg.src = targetSrc;
+      }
+    }
+
+    const cached = this.taskId ? this.layoutCache.get(this.taskId) : undefined;
+    const allBlocks = cached?.blocks || [];
+    const pageBlocks = allBlocks.filter(b => (b.page_idx || 0) === this.currentBboxPageIdx);
+
+    // Count blocks by type on current page
+    const countsByType = new Map<string, { count: number; chipLabel: string; color: string }>();
+    for (const b of pageBlocks) {
+      const meta = this.getBboxCategoryMeta(b);
+      const existing = countsByType.get(meta.key);
+      if (existing) {
+        existing.count++;
+      } else {
+        countsByType.set(meta.key, { count: 1, chipLabel: meta.chipLabel, color: meta.color });
+      }
+    }
+
+    // If active filter is not present on this page, reset to 'all'
+    if (this.activeBboxFilter !== 'all' && !countsByType.has(this.activeBboxFilter)) {
+      this.activeBboxFilter = 'all';
+    }
+
+    // Render filter chips
+    this.bboxFilterChips.replaceChildren();
+    const allChip = document.createElement('button');
+    allChip.type = 'button';
+    allChip.className = 'bbox-filter-chip';
+    allChip.dataset.filter = 'all';
+    allChip.setAttribute('aria-pressed', String(this.activeBboxFilter === 'all'));
+    allChip.innerHTML = `<span>Alle</span><span class="font-mono tabular-nums text-[9px] opacity-80">${pageBlocks.length}</span>`;
+    allChip.addEventListener('click', () => {
+      this.activeBboxFilter = 'all';
+      this.renderBboxPage();
+    });
+    this.bboxFilterChips.appendChild(allChip);
+
+    for (const [typeKey, info] of countsByType.entries()) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'bbox-filter-chip';
+      chip.dataset.filter = typeKey;
+      chip.style.setProperty('--bbox-color', info.color);
+      chip.setAttribute('aria-pressed', String(this.activeBboxFilter === typeKey));
+      chip.innerHTML = `<span class="bbox-filter-chip-dot"></span><span>${info.chipLabel}</span><span class="font-mono tabular-nums text-[9px] opacity-80">${info.count}</span>`;
+      chip.addEventListener('click', () => {
+        this.activeBboxFilter = this.activeBboxFilter === typeKey ? 'all' : typeKey;
+        this.renderBboxPage();
+      });
+      this.bboxFilterChips.appendChild(chip);
+    }
+
+    // Render bounding box rectangles
+    this.bboxOverlayLayer.replaceChildren();
+    pageBlocks.forEach((b, idx) => {
+      const meta = this.getBboxCategoryMeta(b);
+      if (this.activeBboxFilter !== 'all' && meta.key !== this.activeBboxFilter) return;
+      if (!Array.isArray(b.bbox_1000) || b.bbox_1000.length < 4) return;
+
+      const [x1, y1, x2, y2] = b.bbox_1000;
+      const rect = document.createElement('div');
+      rect.className = 'bbox-rect';
+      rect.dataset.blockType = b.type;
+      rect.dataset.blockIdx = String(idx);
+      rect.style.left = `${x1 / 10}%`;
+      rect.style.top = `${y1 / 10}%`;
+      rect.style.width = `${Math.max(0.5, (x2 - x1) / 10)}%`;
+      rect.style.height = `${Math.max(0.5, (y2 - y1) / 10)}%`;
+      rect.style.setProperty('--bbox-color', meta.color);
+
+      const snippet = (b.text || '').trim();
+      rect.title = snippet ? `[${meta.tagLabel}] ${snippet}` : `[${meta.tagLabel}]`;
+
+      const tag = document.createElement('span');
+      tag.className = 'bbox-tag';
+      tag.textContent = meta.tagLabel;
+      rect.appendChild(tag);
+
+      rect.addEventListener('mouseenter', () => {
+        rect.classList.add('is-active');
+      });
+      rect.addEventListener('mouseleave', () => {
+        rect.classList.remove('is-active');
+      });
+      rect.addEventListener('click', () => {
+        this.bboxOverlayLayer?.querySelectorAll('.bbox-rect.is-active').forEach(el => el.classList.remove('is-active'));
+        rect.classList.add('is-active');
+        if (snippet) {
+          this.highlightMarkdownSnippet(snippet);
+        }
+      });
+
+      this.bboxOverlayLayer!.appendChild(rect);
+    });
+  }
+
+  private highlightMarkdownSnippet(snippet: string) {
+    const cleaned = snippet.replace(/^#+\s*/, '').trim();
+    if (!cleaned) return;
+
+    const candidates = [
+      cleaned,
+      cleaned.split(/\r?\n/)[0].trim(),
+      cleaned.slice(0, 32).trim(),
+    ].filter(Boolean);
+
+    const trySelectInTextarea = (textarea: HTMLTextAreaElement): boolean => {
+      const content = textarea.value;
+      if (!content) return false;
+      for (const needle of candidates) {
+        const idx = content.indexOf(needle);
+        if (idx !== -1) {
+          textarea.focus();
+          textarea.setSelectionRange(idx, idx + needle.length);
+          const linesBefore = content.slice(0, idx).split('\n').length;
+          const totalLines = Math.max(1, content.split('\n').length);
+          textarea.scrollTop = Math.max(0, (linesBefore / totalLines) * textarea.scrollHeight - textarea.clientHeight * 0.35);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (this.isStandardisedPaneVisible && !this.standardisedMarkdownTextarea.classList.contains('hidden')) {
+      if (trySelectInTextarea(this.standardisedMarkdownTextarea)) return;
+    }
+    if (this.isRawPaneVisible && !this.rawMarkdownTextarea.classList.contains('hidden')) {
+      if (trySelectInTextarea(this.rawMarkdownTextarea)) return;
+    }
+    if (! trySelectInTextarea(this.standardisedMarkdownTextarea)) {
+      trySelectInTextarea(this.rawMarkdownTextarea);
+    }
+  }
+
+  // -------------------------------------------------------------
+  // Eurobraille / ISO 8859-1 (> U+00FF) Character Replacement Assistant
+  // -------------------------------------------------------------
+
+  private loadCharReplacementsFromStorage() {
+    try {
+      const raw = localStorage.getItem('ebuch_char_replacements_v1');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return;
+      for (const [ch, entry] of Object.entries(parsed)) {
+        if (typeof entry === 'string') {
+          this.charReplacements.set(ch, { replacement: entry, active: true });
+        } else if (entry && typeof entry === 'object') {
+          const obj = entry as { replacement?: string; value?: string; active?: boolean };
+          this.charReplacements.set(ch, {
+            replacement: String(obj.replacement ?? obj.value ?? ''),
+            active: obj.active !== false,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Could not load ebuch_char_replacements_v1 from localStorage:', e);
+    }
+  }
+
+  private saveCharReplacementsToStorage() {
+    try {
+      const serialized: Record<string, { replacement: string; active: boolean }> = {};
+      for (const [ch, cfg] of this.charReplacements.entries()) {
+        serialized[ch] = { replacement: cfg.replacement, active: cfg.active };
+      }
+      localStorage.setItem('ebuch_char_replacements_v1', JSON.stringify(serialized));
+    } catch (e) {
+      console.warn('Could not persist ebuch_char_replacements_v1:', e);
+    }
+  }
+
+  private getActiveMarkdownForCharScan(): string {
+    return this.standardisedMarkdownTextarea.value || this.rawMarkdownTextarea.value || '';
+  }
+
+  private scanNonLatin1Chars(text: string): Array<{ char: string; code: string; count: number }> {
+    const counts = new Map<string, number>();
+    for (const ch of text) {
+      const cp = ch.codePointAt(0) ?? 0;
+      if (cp <= 0xff || /\s/.test(ch)) continue;
+      counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([char, count]) => {
+        const cp = char.codePointAt(0) ?? 0;
+        const code = 'U+' + cp.toString(16).toUpperCase().padStart(4, '0');
+        return { char, code, count };
+      })
+      .sort((a, b) => (a.char.codePointAt(0) ?? 0) - (b.char.codePointAt(0) ?? 0));
+  }
+
+  private updateCharReplaceBadge() {
+    if (!this.charReplaceBadge) return;
+    const items = this.scanNonLatin1Chars(this.getActiveMarkdownForCharScan());
+    if (items.length > 0) {
+      this.charReplaceBadge.textContent = String(items.length);
+      this.charReplaceBadge.classList.remove('hidden');
+    } else {
+      this.charReplaceBadge.textContent = '0';
+      this.charReplaceBadge.classList.add('hidden');
+    }
+  }
+
+  private initCharReplacementEvents() {
+    if (this.btnCharReplacements) {
+      this.btnCharReplacements.addEventListener('click', () => this.openCharReplaceModal());
+    }
+    if (this.closeCharReplaceModalBtn) {
+      this.closeCharReplaceModalBtn.addEventListener('click', () => this.closeCharReplaceModal());
+    }
+    if (this.cancelCharReplaceModalBtn) {
+      this.cancelCharReplaceModalBtn.addEventListener('click', () => this.closeCharReplaceModal());
+    }
+    if (this.charReplaceModal) {
+      this.charReplaceModal.addEventListener('click', (e) => {
+        if (e.target === this.charReplaceModal) {
+          this.closeCharReplaceModal();
+        }
+      });
+    }
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.charReplaceModal && !this.charReplaceModal.classList.contains('hidden')) {
+        this.closeCharReplaceModal();
+      }
+    });
+    if (this.btnSuggestCharReplacements) {
+      this.btnSuggestCharReplacements.addEventListener('click', () => this.fetchCharReplacementSuggestions());
+    }
+    if (this.btnApplyCharReplacements) {
+      this.btnApplyCharReplacements.addEventListener('click', () => this.applyCharReplacements());
+    }
+    if (this.btnExportCharMap) {
+      this.btnExportCharMap.addEventListener('click', () => this.exportCharReplacementsJson());
+    }
+    if (this.btnImportCharMap && this.charMapFileInput) {
+      this.btnImportCharMap.addEventListener('click', () => this.charMapFileInput!.click());
+      this.charMapFileInput.addEventListener('change', () => this.importCharReplacementsJson());
+    }
+  }
+
+  private openCharReplaceModal() {
+    if (!this.charReplaceModal) return;
+    this.renderCharReplaceTable();
+    this.charReplaceModal.classList.remove('hidden');
+  }
+
+  private closeCharReplaceModal() {
+    if (!this.charReplaceModal) return;
+    this.charReplaceModal.classList.add('hidden');
+  }
+
+  private syncCharTableInputsToMap() {
+    if (!this.charReplaceTbody) return;
+    const rows = this.charReplaceTbody.querySelectorAll('tr[data-char]');
+    rows.forEach(row => {
+      const ch = row.getAttribute('data-char');
+      if (!ch) return;
+      const input = row.querySelector('.char-replace-input') as HTMLInputElement | null;
+      const checkbox = row.querySelector('.char-replace-active') as HTMLInputElement | null;
+      this.charReplacements.set(ch, {
+        replacement: input ? input.value : '',
+        active: checkbox ? checkbox.checked : true,
+      });
+    });
+  }
+
+  private renderCharReplaceTable() {
+    if (!this.charReplaceTbody) return;
+    const items = this.scanNonLatin1Chars(this.getActiveMarkdownForCharScan());
+    this.charReplaceTbody.replaceChildren();
+
+    if (items.length === 0) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="5" class="py-6 px-4 text-center text-slate-500 italic">Keine Zeichen oberhalb von U+00FF im aktuellen Dokument gefunden.</td>';
+      this.charReplaceTbody.appendChild(tr);
+      if (this.charReplaceStatus) {
+        this.charReplaceStatus.textContent = '0 Zeichen > U+00FF';
+      }
+      return;
+    }
+
+    let unresolvedCount = 0;
+    for (const item of items) {
+      const saved = this.charReplacements.get(item.char) ?? { replacement: '', active: true };
+      if (!saved.replacement.trim()) unresolvedCount++;
+
+      const tr = document.createElement('tr');
+      tr.dataset.char = item.char;
+      tr.className = 'hover:bg-slate-900/50 transition-colors';
+
+      const tdChar = document.createElement('td');
+      tdChar.className = 'py-2 px-4 font-mono text-sm font-bold text-slate-100';
+      tdChar.textContent = item.char;
+
+      const tdCode = document.createElement('td');
+      tdCode.className = 'py-2 px-4 font-mono tabular-nums text-slate-400';
+      tdCode.textContent = item.code;
+
+      const tdCount = document.createElement('td');
+      tdCount.className = 'py-2 px-4 font-mono tabular-nums text-slate-300';
+      tdCount.textContent = String(item.count);
+
+      const tdInput = document.createElement('td');
+      tdInput.className = 'py-2 px-4';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'char-replace-input w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-xs font-mono text-slate-100 focus:outline-none focus:border-indigo-500';
+      input.value = saved.replacement;
+      input.dataset.char = item.char;
+      input.placeholder = 'z. B. \\rightarrow';
+      input.setAttribute('aria-label', `Ersetzung für ${item.char} (${item.code})`);
+      input.addEventListener('input', () => {
+        const cur = this.charReplacements.get(item.char) ?? { replacement: '', active: true };
+        this.charReplacements.set(item.char, { replacement: input.value, active: cur.active });
+        this.saveCharReplacementsToStorage();
+      });
+      tdInput.appendChild(input);
+
+      const tdActive = document.createElement('td');
+      tdActive.className = 'py-2 px-4 text-center';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'char-replace-active rounded border-slate-700 bg-slate-950 text-indigo-600 focus:ring-indigo-500 cursor-pointer';
+      checkbox.checked = saved.active;
+      checkbox.dataset.char = item.char;
+      checkbox.setAttribute('aria-label', `Ersetzung für ${item.char} aktivieren`);
+      checkbox.addEventListener('change', () => {
+        const cur = this.charReplacements.get(item.char) ?? { replacement: input.value, active: true };
+        this.charReplacements.set(item.char, { replacement: cur.replacement, active: checkbox.checked });
+        this.saveCharReplacementsToStorage();
+      });
+      tdActive.appendChild(checkbox);
+
+      tr.append(tdChar, tdCode, tdCount, tdInput, tdActive);
+      this.charReplaceTbody.appendChild(tr);
+    }
+
+    if (this.charReplaceStatus) {
+      this.charReplaceStatus.textContent = unresolvedCount > 0
+        ? `${items.length} Zeichen > U+00FF (${unresolvedCount} offen)`
+        : `${items.length} Zeichen > U+00FF (alle zugeordnet)`;
+    }
+  }
+
+  private async fetchCharReplacementSuggestions() {
+    this.syncCharTableInputsToMap();
+    const items = this.scanNonLatin1Chars(this.getActiveMarkdownForCharScan());
+    if (items.length === 0) return;
+
+    const unresolved = items
+      .filter(it => !(this.charReplacements.get(it.char)?.replacement.trim()))
+      .map(it => it.char);
+    const charsToQuery = unresolved.length > 0 ? unresolved : items.map(it => it.char);
+
+    if (this.btnSuggestCharReplacements) {
+      this.btnSuggestCharReplacements.disabled = true;
+    }
+    if (this.charReplaceStatus) {
+      this.charReplaceStatus.textContent = `Lade Vorschläge für ${charsToQuery.length} Zeichen…`;
+    }
+
+    try {
+      const res = await fetch('/api/char-replacements/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chars: charsToQuery }),
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const suggestions: Record<string, string> = data.suggestions || {};
+      let appliedCount = 0;
+      for (const [ch, val] of Object.entries(suggestions)) {
+        if (typeof val === 'string' && val.trim()) {
+          this.charReplacements.set(ch, { replacement: val.trim(), active: true });
+          appliedCount++;
+        }
+      }
+      this.saveCharReplacementsToStorage();
+      this.renderCharReplaceTable();
+      if (this.charReplaceStatus) {
+        this.charReplaceStatus.textContent = `${appliedCount} Vorschläge übernommen`;
+      }
+    } catch (e: any) {
+      if (this.charReplaceStatus) {
+        this.charReplaceStatus.textContent = `Fehler: ${e.message || 'Vorschläge fehlgeschlagen'}`;
+      }
+    } finally {
+      if (this.btnSuggestCharReplacements) {
+        this.btnSuggestCharReplacements.disabled = false;
+      }
+    }
+  }
+
+  private applyCharReplacements() {
+    this.syncCharTableInputsToMap();
+    this.saveCharReplacementsToStorage();
+
+    const useStandardised = Boolean(this.standardisedMarkdownTextarea.value);
+    let targetText = useStandardised
+      ? this.standardisedMarkdownTextarea.value
+      : this.rawMarkdownTextarea.value;
+
+    let replacedOccurrences = 0;
+    for (const [ch, cfg] of this.charReplacements.entries()) {
+      if (!cfg.active || !cfg.replacement) continue;
+      if (targetText.includes(ch)) {
+        const parts = targetText.split(ch);
+        replacedOccurrences += parts.length - 1;
+        targetText = parts.join(cfg.replacement);
+      }
+    }
+
+    if (useStandardised) {
+      this.standardisedMarkdownTextarea.value = targetText;
+      this.currentStandardisedMarkdown = targetText;
+      if (this.isStandardisedRendered) {
+        this.updateStandardisedRenderPreview();
+      }
+      if (this.btnDiffStandardised.classList.contains('bg-indigo-600')) {
+        this.updateDiffView();
+      }
+    } else {
+      this.rawMarkdownTextarea.value = targetText;
+      this.currentRawMarkdown = targetText;
+      if (this.isRawRendered) {
+        this.updateRawRenderPreview();
+      }
+    }
+
+    this.updatePagePills();
+    this.updateCharReplaceBadge();
+    this.closeCharReplaceModal();
+    if (replacedOccurrences > 0) {
+      this.log(`${replacedOccurrences} Sonderzeichen (> U+00FF) im Text ersetzt.`, 'success');
+    }
+  }
+
+  private exportCharReplacementsJson() {
+    this.syncCharTableInputsToMap();
+    this.saveCharReplacementsToStorage();
+    const out: Record<string, string> = {};
+    for (const [ch, cfg] of this.charReplacements.entries()) {
+      if (cfg.replacement) {
+        out[ch] = cfg.replacement;
+      }
+    }
+    const jsonStr = JSON.stringify(out, null, 2);
+    const el = document.createElement('a');
+    el.setAttribute('href', 'data:application/json;charset=utf-8,' + encodeURIComponent(jsonStr));
+    el.setAttribute('download', 'sonderzeichen-ersetzungen.json');
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    el.click();
+    document.body.removeChild(el);
+  }
+
+  private async importCharReplacementsJson() {
+    const file = this.charMapFileInput?.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object') {
+        for (const [ch, val] of Object.entries(parsed)) {
+          if (typeof val === 'string') {
+            this.charReplacements.set(ch, { replacement: val, active: true });
+          } else if (val && typeof val === 'object') {
+            const obj = val as { replacement?: string; value?: string; active?: boolean };
+            this.charReplacements.set(ch, {
+              replacement: String(obj.replacement ?? obj.value ?? ''),
+              active: obj.active !== false,
+            });
+          }
+        }
+        this.saveCharReplacementsToStorage();
+        this.renderCharReplaceTable();
+      }
+    } catch (e: any) {
+      if (this.charReplaceStatus) {
+        this.charReplaceStatus.textContent = `JSON-Import fehlgeschlagen: ${e.message}`;
+      }
+    } finally {
+      if (this.charMapFileInput) {
+        this.charMapFileInput.value = '';
+      }
+    }
   }
 
   // -------------------------------------------------------------

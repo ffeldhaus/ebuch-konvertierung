@@ -79,17 +79,17 @@ def get_e2e_mock_extraction_fixture(original_name: str, base_name: str) -> tuple
             "<Anmerkung> 1 Brechung an der Grenzfläche zweier Medien. </Anmerkung>\n"
         )
         mock_blocks = [
-            {"type": "title", "text": "Optik und Wellenlehre", "page_idx": 0},
-            {"type": "title", "text": "Lichtbrechung am Prisma", "page_idx": 0},
-            {"type": "paragraph", "text": "Trifft weißes Licht auf ein optisches Prisma, so wird es beim Eintritt und Austritt gebrochen.", "page_idx": 0},
-            {"type": "image", "text": "<Bild> Zeichnung: Versuchsaufbau eines optischen Experiments mit Prismen zur Lichtbrechung. </Bild>", "page_idx": 0},
-            {"type": "paragraph", "text": "Formel für den Brechungsindex: $n = \\frac{c_0}{c}$", "page_idx": 0},
-            {"type": "paragraph", "text": "Hier ist eine Erläuterung{1}.", "page_idx": 0},
-            {"type": "footnote", "text": "<Anmerkung> 1 Brechung an der Grenzfläche zweier Medien. </Anmerkung>", "page_idx": 0},
+            {"type": "title", "text": "Optik und Wellenlehre", "page_idx": 0, "bbox_1000": [100, 80, 750, 140]},
+            {"type": "title", "text": "Lichtbrechung am Prisma", "page_idx": 0, "bbox_1000": [100, 160, 680, 210]},
+            {"type": "paragraph", "text": "Trifft weißes Licht auf ein optisches Prisma, so wird es beim Eintritt und Austritt gebrochen.", "page_idx": 0, "bbox_1000": [100, 230, 880, 320]},
+            {"type": "image", "text": "<Bild> Zeichnung: Versuchsaufbau eines optischen Experiments mit Prismen zur Lichtbrechung. </Bild>", "page_idx": 0, "bbox_1000": [150, 350, 820, 650]},
+            {"type": "paragraph", "text": "Formel für den Brechungsindex: $n = \\frac{c_0}{c}$", "page_idx": 0, "bbox_1000": [100, 680, 700, 730]},
+            {"type": "paragraph", "text": "Hier ist eine Erläuterung{1}.", "page_idx": 0, "bbox_1000": [100, 750, 500, 790]},
+            {"type": "footnote", "text": "<Anmerkung> 1 Brechung an der Grenzfläche zweier Medien. </Anmerkung>", "page_idx": 0, "bbox_1000": [100, 880, 850, 930]},
         ]
     else:
         mock_md = f"Mock raw content for {base_name}"
-        mock_blocks = [{"type": "text", "text": mock_md, "page_idx": 0}]
+        mock_blocks = [{"type": "text", "text": mock_md, "page_idx": 0, "bbox_1000": [100, 100, 900, 200]}]
 
     return mock_md, mock_blocks
 

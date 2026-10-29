@@ -8,6 +8,11 @@ import re
 import statistics
 from typing import Any
 
+from backend.services.pdf_render_service import (
+    normalize_bbox_to_1000,
+    render_pdf_figure_crop,
+)
+
 logger = logging.getLogger("extraction_postprocess")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -207,6 +212,7 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
         "tables_by_page": {},
         "furniture_by_page": {},
         "heading_blocks": [],
+        "layout_blocks": [],
         "opening_headers_by_page": {},
         "body_line_height": 0.0,
     }
@@ -242,17 +248,52 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
         conv_res = converter.convert(pdf_path)
         doc = conv_res.document
 
+        pdf_doc_shared = None
+        page_sizes_by_idx: dict[int, tuple[float, float]] = {}
+        try:
+            import pypdfium2 as pdfium
+
+            pdf_doc_shared = pdfium.PdfDocument(pdf_path)
+            for p_i in range(len(pdf_doc_shared)):
+                page_sizes_by_idx[p_i] = pdf_doc_shared[p_i].get_size()
+        except Exception:
+            pdf_doc_shared = None
+
+        if getattr(doc, "pages", None):
+            page_entries = (
+                doc.pages.items()
+                if isinstance(doc.pages, dict)
+                else [(idx + 1, pm) for idx, pm in enumerate(doc.pages)]
+            )
+            for p_no, page_meta in page_entries:
+                p_idx = max(0, int(p_no) - 1)
+                if p_idx not in page_sizes_by_idx and getattr(page_meta, "size", None):
+                    sz = page_meta.size
+                    if getattr(sz, "width", 0) and getattr(sz, "height", 0):
+                        page_sizes_by_idx[p_idx] = (float(sz.width), float(sz.height))
+
         # 1. Tables per page
         if getattr(doc, "tables", None):
             for t_item in doc.tables:
                 p_no = 1
+                t_bbox_obj = None
                 if getattr(t_item, "prov", None) and len(t_item.prov) > 0:
                     p_no = t_item.prov[0].page_no
+                    t_bbox_obj = t_item.prov[0].bbox
                 p_idx = max(0, p_no - 1)
                 try:
                     t_md = t_item.export_to_markdown(doc=doc).strip()
                     if t_md and "|" in t_md:
                         result["tables_by_page"].setdefault(p_idx, []).append(t_md)
+                        pw_t, ph_t = page_sizes_by_idx.get(p_idx, (0.0, 0.0))
+                        t_bbox_1000 = normalize_bbox_to_1000(t_bbox_obj, pw_t, ph_t) if t_bbox_obj else None
+                        if t_bbox_1000 is not None:
+                            result["layout_blocks"].append({
+                                "type": "table",
+                                "text": t_md,
+                                "page_idx": p_idx,
+                                "bbox_1000": t_bbox_1000,
+                            })
                 except Exception:
                     pass
 
@@ -260,20 +301,45 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
         if getattr(doc, "pictures", None):
             for idx, pic in enumerate(doc.pictures):
                 p_no = 1
+                pic_bbox_obj = None
                 if getattr(pic, "prov", None) and len(pic.prov) > 0:
                     p_no = pic.prov[0].page_no
+                    pic_bbox_obj = pic.prov[0].bbox
                 p_idx = max(0, p_no - 1)
                 try:
                     pil_img = pic.get_image(doc)
                     if pil_img is not None and pil_img.width >= 30 and pil_img.height >= 30:
+                        if pic_bbox_obj is not None and pdf_doc_shared is not None and p_idx < len(pdf_doc_shared):
+                            vec_img = render_pdf_figure_crop(
+                                pdf_doc_shared[p_idx],
+                                pic_bbox_obj,
+                                target_longest_edge=2048,
+                            )
+                            if vec_img is not None:
+                                pil_img = vec_img
                         img_bytes = pil_img.tobytes()
                         img_hash = hashlib.sha256(img_bytes).hexdigest()[:16]
                         img_filename = f"picture_{p_idx}_{idx}_{img_hash}.png"
                         img_path = os.path.join(images_dir, img_filename)
                         pil_img.save(img_path, format="PNG")
                         result["pictures_by_page"].setdefault(p_idx, []).append(img_filename)
+                        pw_p, ph_p = page_sizes_by_idx.get(p_idx, (0.0, 0.0))
+                        pic_bbox_1000 = normalize_bbox_to_1000(pic_bbox_obj, pw_p, ph_p) if pic_bbox_obj else None
+                        if pic_bbox_1000 is not None:
+                            result["layout_blocks"].append({
+                                "type": "image",
+                                "text": f"![](images/{img_filename})",
+                                "page_idx": p_idx,
+                                "bbox_1000": pic_bbox_1000,
+                            })
                 except Exception:
                     pass
+
+        if pdf_doc_shared is not None:
+            try:
+                pdf_doc_shared.close()
+            except Exception:
+                pass
 
         # 3. Collect single-line body heights, furniture, vector callout boxes, and heading bboxes
         callout_rects_by_page = detect_pdf_callout_rects_by_page(pdf_path)
@@ -298,14 +364,19 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
 
             h = round(abs(bbox_obj.t - bbox_obj.b), 2) if bbox_obj else 0.0
             w = round(abs(bbox_obj.r - bbox_obj.l), 2) if bbox_obj else 0.0
+            pw_i, ph_i = page_sizes_by_idx.get(p_idx, (0.0, 0.0))
+            bbox_1000 = normalize_bbox_to_1000(bbox_obj, pw_i, ph_i) if bbox_obj else None
 
             if layer == ContentLayer.FURNITURE or lbl in ("page_header", "page_footer"):
                 f_type = "page_header" if "header" in lbl else "page_footer"
-                result["furniture_by_page"].setdefault(p_idx, []).append({
+                furn_entry: dict[str, Any] = {
                     "type": f_type,
                     "text": txt,
                     "page_idx": p_idx,
-                })
+                }
+                if bbox_1000 is not None:
+                    furn_entry["bbox_1000"] = bbox_1000
+                result["furniture_by_page"].setdefault(p_idx, []).append(furn_entry)
                 if f_type == "page_header":
                     open_hdr = parse_furniture_opening_header(txt, seen_opening_keys)
                     if open_hdr:
@@ -321,6 +392,7 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                     "page_idx": p_idx,
                     "h": h,
                     "w": w,
+                    "bbox_1000": bbox_1000,
                     "in_callout": in_callout,
                 })
 
@@ -340,7 +412,7 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
             if w > 0 and w < 260 and len(txt) >= 35 and h > max_single_h * 1.35:
                 single_h = round(h / 2.48, 2)
             is_body_sized = bool(body_line_h > 0 and single_h <= body_line_h * 1.04)
-            result["heading_blocks"].append({
+            hb_entry: dict[str, Any] = {
                 "type": "title",
                 "text": txt,
                 "text_level": 1,
@@ -348,7 +420,10 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                 "bbox": [0, 0, w, single_h],
                 "is_body_sized": is_body_sized,
                 "is_callout_box": rh.get("in_callout", False),
-            })
+            }
+            if rh.get("bbox_1000") is not None:
+                hb_entry["bbox_1000"] = rh["bbox_1000"]
+            result["heading_blocks"].append(hb_entry)
 
     except Exception as e:
         logger.warning(f"Docling page layout extraction fallback: {e}")
@@ -924,6 +999,70 @@ def _normalize_allcaps_german_heading(text: str) -> str:
     return f"{prefix}{' '.join(out_words)}"
 
 
+def cluster_heading_heights(heights: list[float], tol: float = 6.0) -> list[float]:
+    """Clusters heading bounding-box heights in descending order within ``tol`` and returns cluster means.
+
+    Ported from ``lightonocr/lib.mjs`` (``clusterHeadingHeights``): the largest observed
+    heading height defines level 1, and each subsequent height smaller by at least ``tol``
+    starts a new lower heading level cluster.
+
+    Args:
+        heights: Sequence of positive heading heights (in ``0..1000`` grid units or PDF points).
+        tol: Minimum height difference required to start a new cluster.
+
+    Returns:
+        List of cluster mean heights in descending order.
+    """
+    valid = sorted((float(h) for h in heights if h and float(h) > 0), reverse=True)
+    if not valid:
+        return []
+    clusters: list[list[float]] = []
+    anchors: list[float] = []
+    for h in valid:
+        if not anchors or h <= anchors[-1] - tol:
+            anchors.append(h)
+            clusters.append([h])
+        else:
+            clusters[-1].append(h)
+    return [round(sum(c) / len(c), 2) for c in clusters]
+
+
+def clamp_heading_outline_levels(markdown_text: str) -> str:
+    """Clamps Markdown heading levels sequentially so no heading skips an outline level.
+
+    Applies ``min(level, outline_top + 1, 6)`` across the document while preserving
+    standard FIBS ``### Aufgabe N:`` headings when preceded by ``#`` or ``##``.
+
+    Args:
+        markdown_text: Input Markdown text containing ATX headings.
+
+    Returns:
+        Markdown text with sequential heading levels clamped to prevent level skips.
+    """
+    if not markdown_text:
+        return markdown_text
+    lines = markdown_text.split("\n")
+    outline_top = 0
+    for idx, line in enumerate(lines):
+        m = re.match(r"^([ \t]*)(#{1,6})\s+(.+)$", line)
+        if not m:
+            continue
+        indent, hashes, title = m.group(1), m.group(2), m.group(3).strip()
+        lvl = len(hashes)
+        is_fibs_task = bool(
+            lvl == 3
+            and outline_top in (1, 2)
+            and re.match(r"^(?:Aufgabe|Übung|Versuch|Experiment)\b", title, re.IGNORECASE)
+        )
+        if not is_fibs_task:
+            max_allowed = 1 if outline_top == 0 else min(outline_top + 1, 6)
+            if lvl > max_allowed:
+                lvl = max_allowed
+                lines[idx] = f"{indent}{'#' * lvl} {title}"
+        outline_top = lvl
+    return "\n".join(lines)
+
+
 def reconstruct_title_hierarchy(
     markdown_content: str,
     content_list_path: str | None = None,
@@ -1010,12 +1149,7 @@ def reconstruct_title_hierarchy(
                         else:
                             bbox_levels[txt] = 3
                 else:
-                    raw_heights = sorted(list(set(h for _, h in title_blocks)), reverse=True)
-                    clusters: list[float] = []
-                    for h in raw_heights:
-                        if not clusters or abs(clusters[-1] - h) > 0.6:
-                            clusters.append(h)
-
+                    clusters = cluster_heading_heights([h for _, h in title_blocks], tol=0.6)
                     for txt, h in title_blocks:
                         rank = min(range(len(clusters)), key=lambda idx: abs(clusters[idx] - h))
                         target_level = min(rank + 1, 4)
@@ -1151,11 +1285,7 @@ def reconstruct_title_hierarchy(
                         else:
                             bbox_levels[txt] = 3
                 else:
-                    raw_heights = sorted(list(set(h for _, h in filtered_tb)), reverse=True)
-                    clusters = []
-                    for h in raw_heights:
-                        if not clusters or abs(clusters[-1] - h) > 0.6:
-                            clusters.append(h)
+                    clusters = cluster_heading_heights([h for _, h in filtered_tb], tol=0.6)
                     for txt, h in filtered_tb:
                         rank = min(range(len(clusters)), key=lambda idx: abs(clusters[idx] - h))
                         bbox_levels[txt] = min(rank + 1, 4)

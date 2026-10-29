@@ -164,6 +164,7 @@ def main(cli_args: list[str] | None = None):
     all_markdown = []
     blocks = []
     blocks.extend(layout_info.get("heading_blocks", []))
+    blocks.extend(layout_info.get("layout_blocks", []))
     for p_furn in layout_info.get("furniture_by_page", {}).values():
         blocks.extend(p_furn)
 

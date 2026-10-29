@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
+from typing import Any
 
 from backend.services import fibs_constants as fc
-from backend.services.models import VlmDescriptionResult
+from backend.services.models import CharOccurrence, VlmDescriptionResult
 
 
 def _clean_context_text(text: str) -> str:
@@ -411,3 +413,221 @@ def normalize_versalien(markdown: str) -> str:
         last = m.end()
     out.append(markdown[last:])
     return "".join(out)
+
+
+def clean_repl_value(value: Any) -> str:
+    """Sanitizes a raw LLM/VLM replacement suggestion down to the pure replacement string.
+
+    Ported from ``lightonocr/lib.mjs`` (``cleanReplValue``): extracts the last backticked
+    code span if present, isolates a single LaTeX command or script token, strips leading
+    descriptive prefixes before ``:``/``=``, removes control characters, and caps length at 40.
+
+    Args:
+        value: Raw replacement value returned by the model.
+
+    Returns:
+        Cleaned replacement string (at most 40 characters), or ``""`` if invalid.
+    """
+    v = re.sub(r"[\x00-\x1f\x7f]", "", str(value or "")).strip()
+    if not v:
+        return ""
+    ticks = list(re.finditer(r"`([^`]+)`", v))
+    if ticks:
+        v = ticks[-1].group(1).strip()
+    if "\\" in v:
+        m = re.search(r"\\[a-zA-Z]+|\\[^a-zA-Z\s]|[\^_~]\{[^}]*\}|[\^_~][\w\d]", v)
+        if m:
+            v = m.group(0).strip()
+    else:
+        m = re.search(r"[:=]\s*(.+)$", v)
+        if m:
+            v = m.group(1).strip()
+    v = re.split(r"\s*[,;]\s*", v)[0].strip()
+    v = re.sub(r"^[\"'`]+|[\"'`]+$", "", v)
+    v = re.sub(r"\s*[.,;]\s*$", "", v).strip()
+    return "" if len(v) > 40 else v
+
+
+def find_non_latin1_chars(
+    text: str,
+    existing_map: dict[str, dict[str, Any]] | None = None,
+) -> list[CharOccurrence]:
+    """Scans text for non-Latin1 characters (``ord(ch) > 0xFF``) outside Eurobraille.
+
+    Counts occurrences, sorts by Unicode codepoint ascending, and merges any known
+    replacements from ``existing_map`` or ``EUROBRAILLE_CHAR_FALLBACK_MAP``.
+
+    Args:
+        text: Input Markdown or document text to scan.
+        existing_map: Optional mapping ``{ch: {"replacement": str, "active": bool}}``
+            of user-configured replacements to merge.
+
+    Returns:
+        List of ``CharOccurrence`` domain models sorted by codepoint.
+    """
+    counts: Counter[str] = Counter()
+    for ch in str(text or ""):
+        cp = ord(ch)
+        if cp <= 0xFF or ch.isspace():
+            continue
+        counts[ch] += 1
+
+    existing = existing_map or {}
+    occurrences: list[CharOccurrence] = []
+    for ch, count in sorted(counts.items(), key=lambda item: ord(item[0])):
+        cp = ord(ch)
+        hex_code = f"U+{cp:04X}"
+        entry = existing.get(ch) or existing.get(hex_code) or {}
+        if isinstance(entry, str):
+            repl = entry
+            active = True
+        elif isinstance(entry, dict):
+            repl = str(entry.get("replacement", "") or "")
+            active = bool(entry.get("active", True))
+        else:
+            repl = ""
+            active = True
+        if not repl and ch in fc.EUROBRAILLE_CHAR_FALLBACK_MAP:
+            repl = fc.EUROBRAILLE_CHAR_FALLBACK_MAP[ch]
+        occurrences.append(
+            CharOccurrence(
+                ch=ch,
+                code=cp,
+                hex_code=hex_code,
+                count=count,
+                replacement=repl,
+                active=active,
+            )
+        )
+    return occurrences
+
+
+def parse_char_replacement_suggestions(
+    raw_output: str,
+    requested_chars: list[str],
+) -> dict[str, str]:
+    """Parses LLM output into a validated ``{char: replacement}`` mapping for ``requested_chars``.
+
+    Strips ``<think>...</think>`` blocks and Markdown code fences, parses either a JSON
+    object/array (``{"vorschlaege": [...]}``) or line-based ``U+XXXX: ...`` / ``<ch>: ...``
+    fallbacks, sanitizes values via ``clean_repl_value``, and discards unrequested characters.
+
+    Args:
+        raw_output: Raw text or JSON response from the LLM.
+        requested_chars: List of characters (> U+00FF) that were requested.
+
+    Returns:
+        Dictionary mapping each matched requested character to its sanitized replacement.
+    """
+    valid_chars: set[str] = {
+        ch[0]
+        for ch in (requested_chars or [])
+        if isinstance(ch, str) and len(ch) >= 1 and ord(ch[0]) > 0xFF
+    }
+    if not valid_chars or not raw_output:
+        return {}
+
+    cp_map: dict[str, str] = {f"{ord(c):04X}": c for c in valid_chars}
+    out: dict[str, str] = {}
+
+    quelltext = re.sub(r"<think>[\s\S]*?</think>", "", str(raw_output), flags=re.IGNORECASE).strip()
+
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", quelltext, flags=re.IGNORECASE)
+    candidate = ""
+    if fence:
+        candidate = fence.group(1).strip()
+    else:
+        a_brace, b_brace = quelltext.find("{"), quelltext.rfind("}")
+        a_brack, b_brack = quelltext.find("["), quelltext.rfind("]")
+        if a_brace >= 0 and b_brace > a_brace:
+            candidate = quelltext[a_brace : b_brace + 1]
+        elif a_brack >= 0 and b_brack > a_brack:
+            candidate = quelltext[a_brack : b_brack + 1]
+
+    if candidate:
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, list):
+                items = obj
+            elif isinstance(obj, dict):
+                items = (
+                    obj.get("vorschlaege")
+                    or obj.get("suggestions")
+                    or obj.get("items")
+                    or obj.get("ersetzungen")
+                    or obj.get("replacements")
+                )
+                if items is None:
+                    # Support direct {"α": "\\alpha", "U+03B1": "\\alpha"} dictionary format
+                    for k, v in obj.items():
+                        k_str = str(k).strip()
+                        code_key = re.sub(r"^U\+?", "", k_str.upper()).zfill(4)
+                        ch = cp_map.get(code_key) or (k_str if k_str in valid_chars else None)
+                        val = clean_repl_value(v)
+                        if ch and val and ch not in out:
+                            out[ch] = val
+                    if out:
+                        return out
+                    items = []
+            else:
+                items = []
+
+            for entry in items if isinstance(items, list) else []:
+                if not isinstance(entry, dict):
+                    continue
+                code_raw = str(
+                    entry.get("code") or entry.get("codepoint") or entry.get("cp") or ""
+                ).upper()
+                code_norm = re.sub(r"^U\+?", "", code_raw).zfill(4) if code_raw else ""
+                zeichen = str(
+                    entry.get("zeichen") or entry.get("char") or entry.get("glyph") or ""
+                )
+                ch = cp_map.get(code_norm) or (zeichen if zeichen in valid_chars else None)
+                wert = clean_repl_value(
+                    entry.get("ersetzung")
+                    or entry.get("replacement")
+                    or entry.get("value")
+                    or entry.get("text")
+                    or ""
+                )
+                if not ch or not wert:
+                    continue
+                if ch not in out:
+                    out[ch] = wert
+            if out:
+                return out
+        except Exception:
+            pass
+
+    for raw_line in quelltext.splitlines():
+        line = raw_line.strip()
+        line = re.sub(r"^[-*•]\s*", "", line)
+        line = re.sub(r"^\d+[.)]\s*", "", line)
+        line = line.replace("**", "")
+        line = re.sub(r"^\||\|$", "", line).strip()
+        if not line or len(line) > 200:
+            continue
+        ch = None
+        rest = ""
+        m_code = re.search(
+            r"\bU?\+?([0-9A-Fa-f]{2,6})\b\s*(?:[:=→>\-–—|]+|\s)\s*(.+)$",
+            line,
+        )
+        if m_code:
+            ch = cp_map.get(m_code.group(1).upper().zfill(4))
+            rest = m_code.group(2)
+        else:
+            first_ch = line[0]
+            if first_ch in valid_chars:
+                ch = first_ch
+                rest = re.sub(r"^\s*[:=→>\-–—|]+\s*", "", line[1:])
+        if not ch or not rest:
+            continue
+        wert = clean_repl_value(re.sub(r"^\|", "", rest))
+        if not wert or "\n" in wert:
+            continue
+        if ch not in out:
+            out[ch] = wert
+
+    return out
+
