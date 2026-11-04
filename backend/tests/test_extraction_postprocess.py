@@ -1,19 +1,18 @@
 import json
 import os
 import tempfile
-import pytest
 
 from backend.services.extraction_postprocess import (
     apply_extraction_postprocess,
     associate_image_captions,
-    clean_duplicate_itemization,
     clean_markdown_fences,
     clean_running_headers_and_footers,
     convert_html_tables_to_markdown,
     fix_escaped_dollars,
+    fuse_vlm_page_with_docling,
+    reconstruct_title_hierarchy,
     recover_table_truncation,
     recover_text_truncation,
-    reconstruct_title_hierarchy,
     sanitize_runaway_repetitions,
 )
 
@@ -467,6 +466,37 @@ def test_one_col_toc_unroll_and_post_process_boxes_and_split_tables():
     stage2 = post_process_structure(stage1, raw_markdown=stage1)
     assert "<Rahmen>\n_Bio-Kompakt: Wichtige Begriffe_" in stage2
     assert stage2.count("<Tabelle>") == 1
+
+
+def test_suspended_hyphen_ergaenzungsstrich_preserved_before_prepositions_and_conjunctions():
+    from backend.services.fibs_postprocess import post_process_structure
+
+    page_md = (
+        "## Vom Ruhe- zum Aktionspotenzial\n\n"
+        "Beim Übergang vom Eingangs- zur Ausgangsspannung sowie bei Auf-\n"
+        "gegen Abbauprozessen treten Vor- wie Nachteile auf.\n"
+        "Die Zellkompartimen- ten bleiben intakt."
+    )
+    fused = fuse_vlm_page_with_docling(page_md, [], 12)
+    assert "Vom Ruhe- zum Aktionspotenzial" in fused
+    assert "Eingangs- zur Ausgangsspannung" in fused
+    assert "Vor- wie Nachteile" in fused
+    assert "Zellkompartimenten" in fused
+
+    stage1 = apply_extraction_postprocess(fused)
+    assert "Vom Ruhe- zum Aktionspotenzial" in stage1
+    assert "Eingangs- zur Ausgangsspannung" in stage1
+    assert "Auf- gegen Abbauprozessen" in stage1
+    assert "Vor- wie Nachteile" in stage1
+    assert "Zellkompartimenten" in stage1
+
+    stage2 = post_process_structure(stage1, raw_markdown=stage1)
+    assert "Vom Ruhe- zum Aktionspotenzial" in stage2
+    assert "Eingangs- zur Ausgangsspannung" in stage2
+    assert "Auf- gegen Abbauprozessen" in stage2
+    assert "Vor- wie Nachteile" in stage2
+    assert "Zellkompartimenten" in stage2
+
 
 
 

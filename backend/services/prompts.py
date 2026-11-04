@@ -601,3 +601,54 @@ def build_char_replacement_prompt(chars_block: str) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Golden Ground-Truth Verification & Repair Prompts (Stage-1 RAW + Stage-2 FIBS)
+# ---------------------------------------------------------------------------
+
+OCR_RAW_GOLDEN_RULES: Final[str] = (
+    "OCR RAW GOLDEN RULES (`<id>.raw.golden.md`):\n"
+    "1. Verbatim Completeness & Reading Order: Every word, number, label, table cell, and task on the PDF page must be transcribed verbatim in natural reading order.\n"
+    "2. Two-Up Double-Page Spreads (Doppelseiten auf einer PDF-Seite): If a single PDF page contains two textbook pages side-by-side (left page and right page), the ENTIRE left textbook page must be transcribed top-to-bottom BEFORE the right textbook page begins. Never interleave columns, material boxes (M1..M8), or tasks across the central gutter. Strip standalone margin double-page numbers (`52 53`, `16 17`, `88 89`) and `.indd`/`.indb` print-production slugs.\n"
+    "3. Physical Page Markers: Keep the exact physical page markers `((num))` matching `physical_pages` on standalone lines separated by blank lines.\n"
+    "4. Structure & Formatting: Format chapter/section/material/task titles with Markdown headings (`#`, `##`, `###`), tables as Markdown pipe tables (`| ... |`), math/science formulas as `$...$` LaTeX, and retain all `![...](...)` image links intact.\n"
+    "5. Zero Broken Hyphens (Trennstriche): Join all mid-word line-break hyphens (`Aufga-ben` -> `Aufgaben`) while keeping true compound hyphens (`Klima- und Vegetationszonen`, `Nord- oder Südpol`)."
+)
+
+
+def build_golden_verification_prompt(
+    doc_id: str,
+    pdf_path: str,
+    preview_png_path: str,
+    raw_path: str,
+    fibs_path: str,
+    physical_pages: list[int],
+    ruleset_key: str = "uebertragungsregeln_09_2025",
+) -> str:
+    """Builds the canonical prompt for Gemini 4 (`agy --print=...`) Golden Ground-Truth verification and repair.
+
+    Embeds both ``OCR_RAW_GOLDEN_RULES`` and ``SYSTEM_PROMPTS[ruleset_key]`` so ``ebuch-testdaten``
+    never drifts when ``ebuch-konvertierung`` rules evolve.
+    """
+    fibs_rules = SYSTEM_PROMPTS.get(ruleset_key, SYSTEM_PROMPTS["uebertragungsregeln_09_2025"])
+    return render_prompt(
+        t"You are auditing and repairing the Golden Ground-Truth files for document `{doc_id}`.\n"
+        t"- Source PDF page 1 visual render: `{preview_png_path}` (from `{pdf_path}`, physical_pages: `{physical_pages}`)\n"
+        t"- Stage-1 OCR RAW Golden file: `{raw_path}`\n"
+        t"- Stage-2 FIBS 09/2025 Golden file: `{fibs_path}`\n\n"
+        t"INSTRUCTIONS:\n"
+        t"1. Call `read_file` on `{preview_png_path}`, `{raw_path}` (StartLine=1, EndLine=170), and `{fibs_path}` (StartLine=1, EndLine=190) in a single turn. Do NOT invoke subagents, do NOT run bash commands, and do NOT read additional slices unless editing.\n"
+        t"2. Visually verify from `{preview_png_path}` whether the page is a 2-up double-page spread (two textbook pages side-by-side). Verify that the left page is completely transcribed before the right page, that columns/boxes/tasks are not interleaved across the gutter, and that standalone margin page pairs (`52 53`, `16 17`, `88 89`) and `.indd`/`.indb` slugs are removed.\n"
+        t"3. Verify and actively improve `{raw_path}` and `{fibs_path}` using `edit_file` if any structural, heading, `<Rahmen>`, or task formatting defect is visible, following:\n\n"
+        t"{OCR_RAW_GOLDEN_RULES}\n\n"
+        t"FIBS 09/2025 ÜBERTRAGUNGSREGELN (`<id>.uebertragungsregeln_09_2025.golden.md`):\n"
+        t"{fibs_rules}\n\n"
+        t"CRITICAL INVARIANTS WHEN EDITING:\n"
+        t"- Preserve the exact physical page markers `{physical_pages}` as `((num))` in monotonic order.\n"
+        t"- Preserve all `![...](...)` tags in `{raw_path}` and all `<Bild>...</Bild>` blocks in `{fibs_path}`.\n"
+        t"- Never delete textbook body words (word recall against the PDF must remain >= 98.5%).\n"
+        t"- Preserve footnote/forecast asterisks on years or coordinates (e.g. `2030* 2040* 2050*`).\n"
+        t"- Perform at most 1-2 targeted `edit_file` calls if needed, then immediately output a concise 5-line summary of what you verified and repaired and stop."
+    )
+
+
+

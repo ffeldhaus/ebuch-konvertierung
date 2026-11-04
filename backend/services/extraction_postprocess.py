@@ -8,6 +8,7 @@ import re
 import statistics
 from typing import Any
 
+from backend.services import fibs_constants as fc
 from backend.services.pdf_render_service import (
     normalize_bbox_to_1000,
     render_pdf_figure_crop,
@@ -645,11 +646,7 @@ def fuse_vlm_page_with_docling(
             cleaned_text = appended_imgs + "\n\n" + cleaned_text
 
     # 6. Clean stray space after hyphens in broken words (e.g. Zellkompartimen- ten -> Zellkompartimenten)
-    cleaned_text = re.sub(
-        r"([a-zA-ZäöüÄÖÜß]{2,})-\s+(?!und\b|oder\b|bzw\b|sowie\b|bis\b)([a-zäöüß][a-zA-ZäöüÄÖÜß]{2,})",
-        r"\1\2",
-        cleaned_text,
-    )
+    cleaned_text = fc.INLINE_HYPHEN_SPACE_RE.sub(r"\1\2", cleaned_text)
 
     # 7. Prepend physical page boundary marker if not already present
     if f"(({phys_num}))" not in cleaned_text:
@@ -790,11 +787,14 @@ def _is_preserved_lowercase_compound(part1: str, part2: str, full_text: str = ""
     return False
 
 
-def dehyphenate_inline_broken_words(text: str, pdf_path: str | None = None) -> str:
-    """Joins broken mid-word German line-break hyphens (`part1-part2` where `part2` starts with lowercase).
+_PDF_DEHYPHEN_CACHE: dict[tuple[str, float], tuple[set[tuple[str, str]], set[str]]] = {}
 
-    If `pdf_path` is provided, inspects the PDF text layer to find words split by `\\u00ad`, `\\ufffe`,
-    or line-end `-\\r?\\n` and unconditionally joins those exact pairs, then joins remaining syllabic
+
+def dehyphenate_inline_broken_words(text: str, pdf_path: str | None = None) -> str:
+    r"""Joins broken mid-word German line-break hyphens (`part1-part2` where `part2` starts with lowercase).
+
+    If `pdf_path` is provided, inspects the PDF text layer to find words split by `\u00ad`, `\ufffe`,
+    or line-end `-\r?\n` and unconditionally joins those exact pairs, then joins remaining syllabic
     line-break artifacts while preserving legitimate lowercase hyphenated compounds.
     """
     if not text:
@@ -804,33 +804,36 @@ def dehyphenate_inline_broken_words(text: str, pdf_path: str | None = None) -> s
     pdf_unbroken_lower: set[str] = set()
     if pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
         try:
-            import pypdfium2 as pdfium
-            pdoc = pdfium.PdfDocument(pdf_path)
-            for page in pdoc:
-                raw_pt = page.get_textpage().get_text_range() or ""
-                # Normalize control-char ligatures (\x13/\x16 -> ff, \x14 -> fi, \x15 -> fl)
-                raw_pt = raw_pt.replace("\x13", "ff").replace("\x16", "ff").replace("\x14", "fi").replace("\x15", "fl")
-                # Collect tokens containing \u00ad or \ufffe (including multi-soft-hyphen words)
-                for tok in re.findall(r"[a-zA-ZäöüÄÖÜß]+(?:[\u00ad\ufffe-][a-zA-ZäöüÄÖÜß]+)+", raw_pt):
-                    if "\u00ad" in tok or "\ufffe" in tok:
-                        subparts = re.split(r"[\u00ad\ufffe]+", tok)
-                        for idx in range(len(subparts) - 1):
-                            left = "".join(subparts[: idx + 1]).lstrip("-")
-                            right = "".join(subparts[idx + 1 :]).rstrip("-")
-                            if len(left) >= 2 and len(right) >= 2:
-                                pdf_split_pairs.add((left, right))
-                            if len(subparts[idx]) >= 2 and len(subparts[idx + 1]) >= 2:
-                                pdf_split_pairs.add((subparts[idx], subparts[idx + 1]))
-                # Also collect line-break splits across \r?\n
-                for m in re.finditer(
-                    r"([a-zA-ZäöüÄÖÜß]{2,})(?:[\u00ad\ufffe]\s*|\-\s*\r?\n\s*)([a-zäöüß][a-zA-ZäöüÄÖÜß]{1,})",
-                    raw_pt,
-                ):
-                    pdf_split_pairs.add((m.group(1), m.group(2)))
-                cleaned_pt = re.sub(r"[\u00ad\ufffe]", "", raw_pt)
-                for w in re.findall(r"\b[a-zA-ZäöüÄÖÜß]{4,}\b", cleaned_pt):
-                    pdf_unbroken_lower.add(w.lower())
-            pdoc.close()
+            cache_key = (os.path.abspath(pdf_path), os.path.getmtime(pdf_path))
+            cached = _PDF_DEHYPHEN_CACHE.get(cache_key)
+            if cached is not None:
+                pdf_split_pairs, pdf_unbroken_lower = cached
+            else:
+                import pypdfium2 as pdfium
+                pdoc = pdfium.PdfDocument(pdf_path)
+                for page in pdoc:
+                    raw_pt = page.get_textpage().get_text_range() or ""
+                    raw_pt = raw_pt.replace("\x13", "ff").replace("\x16", "ff").replace("\x14", "fi").replace("\x15", "fl")
+                    for tok in re.findall(r"[a-zA-ZäöüÄÖÜß]+(?:[\u00ad\ufffe-][a-zA-ZäöüÄÖÜß]+)+", raw_pt):
+                        if "\u00ad" in tok or "\ufffe" in tok:
+                            subparts = re.split(r"[\u00ad\ufffe]+", tok)
+                            for idx in range(len(subparts) - 1):
+                                left = "".join(subparts[: idx + 1]).lstrip("-")
+                                right = "".join(subparts[idx + 1 :]).rstrip("-")
+                                if len(left) >= 2 and len(right) >= 2:
+                                    pdf_split_pairs.add((left, right))
+                                if len(subparts[idx]) >= 2 and len(subparts[idx + 1]) >= 2:
+                                    pdf_split_pairs.add((subparts[idx], subparts[idx + 1]))
+                    for m in re.finditer(
+                        r"([a-zA-ZäöüÄÖÜß]{2,})(?:[\u00ad\ufffe]\s*|\-\s*\r?\n\s*)([a-zäöüß][a-zA-ZäöüÄÖÜß]{1,})",
+                        raw_pt,
+                    ):
+                        pdf_split_pairs.add((m.group(1), m.group(2)))
+                    cleaned_pt = re.sub(r"[\u00ad\ufffe]", "", raw_pt)
+                    for w in re.findall(r"\b[a-zA-ZäöüÄÖÜß]{4,}\b", cleaned_pt):
+                        pdf_unbroken_lower.add(w.lower())
+                pdoc.close()
+                _PDF_DEHYPHEN_CACHE[cache_key] = (pdf_split_pairs, pdf_unbroken_lower)
         except Exception:
             pass
 
@@ -855,9 +858,218 @@ def dehyphenate_inline_broken_words(text: str, pdf_path: str | None = None) -> s
     return out
 
 
+def is_two_up_spread_page(page: Any) -> bool:
+    """Returns True if the PDF page is a 2-up textbook double-page spread (``pw >= 900`` and ``pw > ph * 1.18``).
+
+    Excludes single-page A5 landscape workbooks (``pw < 750``).
+    """
+    pw, ph = page.get_size()
+    return bool(pw >= 900.0 and pw > ph * 1.18)
+
+
+def extract_two_up_spread_page_text(page: Any) -> str:
+    """Extracts text from a 2-up landscape textbook spread (``pw >= 900``, ``pw > ph * 1.18``)
+    by splitting lines at the vertical gutter ``x = pw / 2`` so that:
+      1. Full-spread top titles spanning across the gutter appear first,
+      2. All left-page (``x_center < pw / 2``) lines/blocks appear next,
+      3. All right-page (``x_center >= pw / 2``) lines/blocks appear after the left page,
+      4. Standalone printed spread page numbers (``52 53``, ``16 17``, ``88 89``) in the top/bottom
+         margins and ``.indd`` / ``.indb`` print-production slugs are stripped.
+    """
+    pw, ph = page.get_size()
+    gutter_x = pw * 0.5
+    tp = page.get_textpage()
+    full_txt = tp.get_text_range() or ""
+
+    span_header_items: list[tuple[str, float, float]] = []
+    left_items: list[tuple[str, float, float]] = []
+    right_items: list[tuple[str, float, float]] = []
+    right_bottom_tasks: list[tuple[str, float, float]] = []
+
+    pos = 0
+    raw_lines = full_txt.split("\r\n")
+    in_right_bottom_tasks = False
+
+    for line in raw_lines:
+        n = len(line)
+        ls = line.strip()
+        if not ls:
+            pos += n + 2
+            continue
+
+        char_boxes: list[tuple[int, float, float, float, float]] = []
+        for idx in range(pos, pos + n):
+            box = tp.get_charbox(idx)
+            if box:
+                left_x, b, r, t = box
+                if r > left_x and t > b:
+                    char_boxes.append((idx - pos, left_x, b, r, t))
+        pos += n + 2
+
+        if not char_boxes:
+            left_items.append((ls, 0.0, 0.0))
+            continue
+
+        segments: list[tuple[str, float, float, float]] = []
+        seg_start_char = 0
+        seg_xs: list[float] = []
+        seg_ys: list[float] = []
+
+        for k, (rel_i, left_x, b, r, t) in enumerate(char_boxes):
+            xc = (left_x + r) * 0.5
+            yc = (b + t) * 0.5
+            if k > 0:
+                _prev_rel_i, _prev_l, _prev_b, prev_r, _prev_t = char_boxes[k - 1]
+                if prev_r < pw * 0.48 and left_x > pw * 0.52 and (left_x - prev_r) > 40.0:
+                    seg_str = line[seg_start_char:rel_i].strip()
+                    if seg_str and seg_xs:
+                        segments.append((seg_str, min(seg_xs), max(seg_xs), sum(seg_ys) / len(seg_ys)))
+                    seg_start_char = rel_i
+                    seg_xs = []
+                    seg_ys = []
+            seg_xs.append(xc)
+            seg_ys.append(yc)
+
+        tail_str = line[seg_start_char:].strip()
+        if tail_str and seg_xs:
+            segments.append((tail_str, min(seg_xs), max(seg_xs), sum(seg_ys) / len(seg_ys)))
+
+        for seg_str, x_min, x_max, y_avg in segments:
+            if (y_avg < ph * 0.09 or y_avg > ph * 0.91) and re.fullmatch(
+                r"(?:Seite\s*)?\d{1,4}(?:\s+(?:Seite\s*)?\d{1,4})?",
+                seg_str,
+                re.IGNORECASE,
+            ):
+                continue
+            if re.search(r"\.ind[db]\s+\d{1,4}(?:[–-]\d{1,4})?\s+\d{2}\.\d{2}\.\d{4}", seg_str, re.IGNORECASE):
+                continue
+
+            x_mid = (x_min + x_max) * 0.5
+            if x_min < pw * 0.42 and x_max > pw * 0.58 and y_avg > ph * 0.82:
+                span_header_items.append((seg_str, x_min, y_avg))
+            elif x_mid < gutter_x:
+                in_right_bottom_tasks = False
+                left_items.append((seg_str, x_min, y_avg))
+            else:
+                if re.match(r"^Aufgaben\b", seg_str) and y_avg < ph * 0.32:
+                    in_right_bottom_tasks = True
+                elif in_right_bottom_tasks and y_avg > ph * 0.40:
+                    in_right_bottom_tasks = False
+
+                if in_right_bottom_tasks:
+                    right_bottom_tasks.append((seg_str, x_min, y_avg))
+                else:
+                    right_items.append((seg_str, x_min, y_avg))
+
+    tp.close()
+
+    def _join_column_items(items: list[tuple[str, float, float]]) -> str:
+        if not items:
+            return ""
+        chunks: list[str] = [items[0][0]]
+        for idx in range(1, len(items)):
+            curr_txt, curr_x, curr_y = items[idx]
+            _prev_txt, prev_x, prev_y = items[idx - 1]
+            dy = prev_y - curr_y
+            dx = abs(curr_x - prev_x)
+            is_new_block = (
+                dx > 40.0
+                or dy < 4.0
+                or dy > 24.0
+                or bool(
+                    re.match(
+                        r"^(?:M\d+\b|Aufgaben\b|Extra\b|Kannst du schon\b|Zeig, was du kannst\b|[1-9]\d?\.\s|[1-9]\s+[A-ZÄÖÜ]|[a-z]\)\s|[–•-]\s)",
+                        curr_txt,
+                    )
+                )
+            )
+            if is_new_block:
+                chunks.append("\n\n" + curr_txt)
+            else:
+                chunks.append("\n" + curr_txt)
+        return "".join(chunks)
+
+    parts = [
+        _join_column_items(span_header_items),
+        _join_column_items(left_items),
+        _join_column_items(right_items),
+        _join_column_items(right_bottom_tasks),
+    ]
+    return "\n\n".join(p for p in parts if p.strip())
+
+
+def clean_pdf_text_preserving_structure(text: str, pdf_path: str | None = None) -> str:
+    """Cleans control-char ligatures, soft hyphens, PUA glyphs, small-caps encoding artefacts,
+    and ``.indd``/``.indb`` print-production slugs while preserving paragraph newlines.
+    """
+    if not text:
+        return text
+    s = text.replace("\x13", "ff").replace("\x16", "ff").replace("\x14", "fi").replace("\x15", "fl")
+    s = re.sub(r"\.2175\$+\s*\$*UJXPHQW", ".2175 UJXPHQW", s)
+    s = re.sub(r"\$+UJXPHQW", "UJXPHQW", s)
+    s = re.sub(r"\bLeRnBoX\b|\bLeRnBOX\b", "LERNBOX", s)
+    s = re.sub(r"\bAuSBlICK\b", "AUSBLICK", s)
+    s = re.sub(r"\bZu SeiTe\b", "Zu Seite", s)
+    s = re.sub(
+        r"\S+\.ind[db]\s+\d{1,4}(?:[–-]\d{1,4})?\s+\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?(?:\s*Uhr)?)?(?:\s*©[^\r\n]*)?",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(r"\S*_Inhalt_S\d+\s+\d+\s+\d{2}\.\d{2}\.\d{4}[^\r\n]*", "", s, flags=re.IGNORECASE)
+    while re.search(r"([a-zA-ZäöüÄÖÜß])[\u00ad\ufffe]([a-zäöüß])", s):
+        s = re.sub(r"([a-zA-ZäöüÄÖÜß])[\u00ad\ufffe]([a-zäöüß])", r"\1\2", s)
+    s = s.replace("\u00ad", "").replace("\ufffe", "")
+    s = re.sub(r"[\ue000-\uf8ff\ufff0-\uffff]", "", s)
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]+", " ", s)
+    if pdf_path:
+        s = dehyphenate_inline_broken_words(s, pdf_path=pdf_path)
+    return s
+
+
+def clean_pdf_text_for_eval(text: str, pdf_path: str | None = None) -> str:
+    """Canonical PDF text layer cleaner for word-recall evaluation against Golden Ground Truths.
+
+    Normalizes ligatures, strips ``.indd``/``.indb`` print slugs, joins soft and line-break
+    hyphens across newlines, removes PUA/zero-width glyphs, and collapses horizontal whitespace.
+    """
+    if not text:
+        return ""
+    s = text.replace("\x13", "ff").replace("\x16", "ff").replace("\x14", "fi").replace("\x15", "fl")
+    s = re.sub(
+        r"\S+\.ind[db]\s+\d{1,4}(?:[–-]\d{1,4})?\s+\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?(?:\s*Uhr)?)?(?:\s*©[^\r\n]*)?",
+        " ",
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(
+        r"\S*_Inhalt_S\d+\s+\d+\s+\d{2}\.\d{2}\.\d{4}[^\r\n]*",
+        " ",
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(
+        r"([a-zA-ZäöüÄÖÜß]{2,})[\u00ad\ufffe-][ \t]*\r?\n+[ \t]*([a-zäöüß][a-zA-ZäöüÄÖÜß]*)",
+        r"\1\2",
+        s,
+    )
+    while re.search(r"([a-zA-ZäöüÄÖÜß])[\u00ad\ufffe]([a-zäöüß])", s):
+        s = re.sub(r"([a-zA-ZäöüÄÖÜß])[\u00ad\ufffe]([a-zäöüß])", r"\1\2", s)
+    s = s.replace("\u00ad", "").replace("\ufffe", "")
+    s = re.sub(r"[\ue000-\uf8ff\ufff0-\uffff]", " ", s)
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]+", " ", s)
+    s = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", s)
+    if pdf_path:
+        s = dehyphenate_inline_broken_words(s, pdf_path=pdf_path)
+    return re.sub(r"[ \t]+", " ", s).strip()
+
+
+clean_pdf_text = clean_pdf_text_for_eval
+
+
 def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) -> str:
-    """Subtask 1: Text-Truncation & De-Hyphenation Recovery
-    - Strips PDF print-production slugs (.indd timestamps), soft hyphens (\u00ad, \ufffe), and PUA glyphs.
+    r"""Subtask 1: Text-Truncation & De-Hyphenation Recovery
+    - Strips PDF print-production slugs (.indd/.indb timestamps), soft hyphens (\u00ad, \ufffe), and PUA glyphs.
     - Joins soft wraps and hyphenated words across line, column, and page boundaries.
     - Preserves Markdown structure, headings, lists, tables, and page boundaries.
     - Cleans runaway token repetition loops.
@@ -866,6 +1078,12 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
         return markdown_content
 
     processed = fix_escaped_dollars(markdown_content)
+    processed = processed.replace("\x13", "ff").replace("\x16", "ff").replace("\x14", "fi").replace("\x15", "fl")
+    processed = re.sub(r"\.2175\$+\s*\$*UJXPHQW", ".2175 UJXPHQW", processed)
+    processed = re.sub(r"\$+UJXPHQW", "UJXPHQW", processed)
+    processed = re.sub(r"\bLeRnBoX\b|\bLeRnBOX\b", "LERNBOX", processed)
+    processed = re.sub(r"\bAuSBlICK\b", "AUSBLICK", processed)
+    processed = re.sub(r"\bZu SeiTe\b", "Zu Seite", processed)
 
     # 0a. If a digital PDF page was largely swallowed into a picture bbox (< 25 words extracted and PDF has > 2x tokens),
     #     recover the embedded PDF text layer lines via pypdfium2.
@@ -878,7 +1096,11 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
                 pdoc = pdfium.PdfDocument(pdf_path)
                 pdf_lines = []
                 for page in pdoc:
-                    raw_pt = page.get_textpage().get_text_range() or ""
+                    raw_pt = (
+                        extract_two_up_spread_page_text(page)
+                        if is_two_up_spread_page(page)
+                        else (page.get_textpage().get_text_range() or "")
+                    )
                     for ln in raw_pt.splitlines():
                         ls = ln.strip()
                         if ls and not re.fullmatch(r"\d{1,4}", ls):
@@ -896,13 +1118,13 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
     # 0b. Strip InDesign print-production slug lines and inline fragments
     # (e.g. 'DO01_...indd 18 11.11.2025 15:08:08', '110796_...indd 26-27 12.07.2021 15:46:49 Uhr © ...', '01_..._Inhalt_S001 1 20.06.2023 11:02:30')
     processed = re.sub(
-        r"(?m)^[ \t]*\S+\.indd[ \t]+\d{1,4}(?:[–-]\d{1,4})?[ \t]+\d{2}\.\d{2}\.\d{4}(?:[ \t]+\d{2}:\d{2}(?::\d{2})?(?:[ \t]*Uhr)?)?(?:[ \t]*©[^\n]*)?[ \t]*\n?",
+        r"(?m)^[ \t]*\S+\.ind[db][ \t]+\d{1,4}(?:[–-]\d{1,4})?[ \t]+\d{2}\.\d{2}\.\d{4}(?:[ \t]+\d{2}:\d{2}(?::\d{2})?(?:[ \t]*Uhr)?)?(?:[ \t]*©[^\n]*)?[ \t]*\n?",
         "",
         processed,
         flags=re.IGNORECASE,
     )
     processed = re.sub(
-        r"\S+\.indd\s+\d{1,4}(?:[–-]\d{1,4})?\s+\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?(?:\s*Uhr)?)?(?:\s*©[^\n]*)?",
+        r"\S+\.ind[db]\s+\d{1,4}(?:[–-]\d{1,4})?\s+\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?(?:\s*Uhr)?)?(?:\s*©[^\n]*)?",
         "",
         processed,
         flags=re.IGNORECASE,
@@ -929,7 +1151,7 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
         page_break = match.group(2)
         part2 = match.group(3)
         punct = match.group(4) or ""
-        if part2.lower() in {"und", "oder", "bzw", "sowie", "bis"}:
+        if part2.lower() in fc.SUSPENDED_HYPHEN_FOLLOWERS:
             joined = f"{part1}- {part2}{punct} "
         elif part1[0].isupper() and part2 in {
             "Hütte", "Tor", "Straße", "Weg", "Platz", "See", "Fluss", "Berg", "Gebirge",
@@ -954,11 +1176,7 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
         processed,
     )
     # Join in-line hyphenated words with spaces where second part starts with lowercase (e.g. 'Brechungs- winkel' -> 'Brechungswinkel')
-    processed = re.sub(
-        r"\b([a-zA-ZäöüÄÖÜß]{3,})-\s+(?!und\b|oder\b|bzw\b|sowie\b|bis\b)([a-zäöüß][a-zA-ZäöüÄÖÜß]{2,})\b",
-        r"\1\2",
-        processed,
-    )
+    processed = fc.INLINE_HYPHEN_SPACE_RE.sub(r"\1\2", processed)
     # Join broken mid-word inline hyphens (e.g. 'Aufga-ben' -> 'Aufgaben')
     processed = dehyphenate_inline_broken_words(processed, pdf_path=pdf_path)
 
@@ -1146,6 +1364,11 @@ DIDACTIC_CALLOUT_PREFIXES = (
     r"Check Your Learning\b|"
     r"Solution\b|"
     r"EXAMPLE\s+\d+(?:\.\d+)?\b|"
+    r"Lernbox\b|"
+    r"Sprachbox\b|"
+    r"Nach\s+Niveau\s+differenzieren\b|"
+    r"Kreative\s+Zusatzaufgaben\b|"
+    r"Gestärkt\s+in\s+die\s+Klassenarbeit\b|"
     r"(?:Fortgeschrittener\s+)?Arbeitsauftrag\s*:?$"
 )
 

@@ -6,7 +6,10 @@ import re
 
 from backend.services.fibs_constants import CAPTION_BLOCK_RE
 from backend.services.fibs_formatting import convert_unicode_scripts, normalize_bild_tags
-from backend.services.fibs_postprocess import deduplicate_page_numbers
+from backend.services.fibs_postprocess import (
+    deduplicate_page_numbers,
+    restore_false_positive_trailing_asterisks,
+)
 from backend.services.models import LintIssue, LintReport
 
 
@@ -563,6 +566,11 @@ def autofix_markdown(content: str) -> tuple[str, list[str]]:
             "<Bild>-Blöcke in das mehrzeilige FIBS-Format (Bildart / Beschreibung) überführt."
         )
         result_text = normalized
+
+    restored_stars = restore_false_positive_trailing_asterisks(result_text)
+    if restored_stars != result_text:
+        applied_fixes.append("Falsch umgewandelte Fußnoten-Sterne (z.B. 2030* 2040*) wiederhergestellt.")
+        result_text = restored_stars
 
     result_text = re.sub(r"\n{3,}", "\n\n", result_text)
 

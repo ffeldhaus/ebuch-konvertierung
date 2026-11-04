@@ -641,3 +641,61 @@ def test_layout_and_char_replacement_api_endpoints(tmp_path, monkeypatch):
     assert suggestions["🔊"] == "[Audio]"
 
 
+def test_trailing_asterisk_preservation_and_shared_golden_helpers():
+    from backend.services.a11y_linter import autofix_markdown
+    from backend.services.extraction_postprocess import (
+        clean_pdf_text_for_eval,
+        clean_pdf_text_preserving_structure,
+    )
+    from backend.services.fibs_postprocess import (
+        format_spread_tasks_and_materials,
+        preserve_only_physical_page_markers,
+        restore_false_positive_trailing_asterisks,
+        split_golden_by_physical_pages,
+        standardise_markdown_fallback,
+    )
+    from backend.services.prompts import (
+        OCR_RAW_GOLDEN_RULES,
+        build_golden_verification_prompt,
+    )
+
+    raw_line = "1990 2000 2010 2020 2030* 2040* 2050*"
+    std = standardise_markdown_fallback(raw_line)
+    assert "2030* 2040* 2050*" in std
+
+    corrupted = "1990 2000 2010 2020 2030_ 2040_ 2050*"
+    restored = restore_false_positive_trailing_asterisks(corrupted, raw_line)
+    assert restored == raw_line
+    fixed, _ = autofix_markdown(corrupted)
+    assert "2030* 2040*" in fixed
+
+    spread_txt = "Aufgaben\n1 Beschreibe die Karte. S. 161 2 Erkläre die Folgen."
+    formatted = format_spread_tasks_and_materials(spread_txt, is_fibs=True)
+    assert "## Aufgaben" in formatted
+    assert "### Aufgabe 1" in formatted
+    assert "### Aufgabe 2" in formatted
+
+    page_md = "((10))\n\nText A\n((999))\n\n((11))\n\nText B"
+    cleaned_pages = preserve_only_physical_page_markers(page_md, [10, 11])
+    assert "((999))" not in cleaned_pages and "999" in cleaned_pages
+    split_map = split_golden_by_physical_pages(cleaned_pages, [10, 11])
+    assert split_map == {10: "Text A\n999", 11: "Text B"}
+
+    slug_txt = "Hallo\u00adwelt\nDO01_123.indd 18 11.11.2025 15:08:08\nLeRnBoX"
+    assert "Hallowelt" in clean_pdf_text_preserving_structure(slug_txt)
+    assert "LERNBOX" in clean_pdf_text_preserving_structure(slug_txt)
+    assert ".indd" not in clean_pdf_text_for_eval(slug_txt)
+
+    prompt = build_golden_verification_prompt(
+        doc_id="demo_doc",
+        pdf_path="/path/demo.pdf",
+        preview_png_path="/path/demo_p1.png",
+        raw_path="/path/demo.raw.golden.md",
+        fibs_path="/path/demo.uebertragungsregeln_09_2025.golden.md",
+        physical_pages=[52, 53],
+    )
+    assert OCR_RAW_GOLDEN_RULES in prompt
+    assert "FIBS 09/2025" in prompt
+
+
+

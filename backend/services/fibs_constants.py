@@ -112,6 +112,45 @@ WORD_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-zÄÖÜäöüß]+")
 LINE_DECORATION_RE: Final[re.Pattern[str]] = re.compile(r"[\s_*>\-\t]")
 SENTENCE_END_PREFIX_RE: Final[re.Pattern[str]] = re.compile(r"[.!?:]\s*$")
 
+# German conjunctions and prepositions that follow a suspended hyphen (Ergänzungsstrich)
+SUSPENDED_HYPHEN_FOLLOWERS: Final[frozenset[str]] = frozenset({
+    "und",
+    "oder",
+    "bzw",
+    "sowie",
+    "bis",
+    "zu",
+    "zum",
+    "zur",
+    "wie",
+    "als",
+    "gegen",
+    "für",
+    "mit",
+    "ohne",
+    "von",
+    "vom",
+    "in",
+    "im",
+    "an",
+    "am",
+    "auf",
+    "aus",
+    "bei",
+    "nach",
+    "über",
+    "unter",
+    "vor",
+    "zwischen",
+    "statt",
+})
+SUSPENDED_HYPHEN_LOOKAHEAD: Final[str] = "|".join(
+    rf"{w}\b" for w in sorted(SUSPENDED_HYPHEN_FOLLOWERS, key=len, reverse=True)
+)
+INLINE_HYPHEN_SPACE_RE: Final[re.Pattern[str]] = re.compile(
+    rf"\b([a-zA-ZäöüÄÖÜß]{{2,}})-\s+(?!{SUSPENDED_HYPHEN_LOOKAHEAD})([a-zäöüß][a-zA-ZäöüÄÖÜß]{{2,}})\b"
+)
+
 # ---------------------------------------------------------------------------
 # Task Difficulty Symbol Mapping (FIBS Section 8.1)
 # ---------------------------------------------------------------------------

@@ -2267,7 +2267,13 @@ def save_benchmark_snapshot(
             json.dump(run_record, cf, indent=2)
 
     if update_md and (summary_digital or summary_scanned):
-        update_leaderboard(run_record, external_runs_dir=out_runs_dir if has_external_docs else None)
+        ext_runs_dir = out_runs_dir if has_external_docs else None
+        if not ext_runs_dir:
+            ext_data_root = resolve_external_data_dir()
+            if ext_data_root and os.path.isdir(ext_data_root):
+                ext_runs_dir = os.path.join(ext_data_root, "benchmarks", "runs")
+                os.makedirs(ext_runs_dir, exist_ok=True)
+        update_leaderboard(run_record, external_runs_dir=ext_runs_dir)
 
     return run_record
 
