@@ -218,7 +218,7 @@ def parse_grounding_blocks(
 def post_process_lightonocr_page(
     raw_text: str,
     page_images: list[str],
-    phys_num: int,
+    phys_num: int | str,
     page_tables: list[str] | None = None,
     opening_headers: list[str] | None = None,
     page_pil_img: Image.Image | None = None,
@@ -378,11 +378,11 @@ def main(cli_args: list[str] | None = None):
     for p_furn in layout_info.get("furniture_by_page", {}).values():
         blocks.extend(p_furn)
 
-    physical_page_numbers: list[int] = []
+    physical_page_numbers: list[int | str] = []
     if is_pdf:
         try:
-            from backend.services.extraction_service import get_physical_page_numbers_for_pdf
-            physical_page_numbers = get_physical_page_numbers_for_pdf(input_path)
+            from backend.services.extraction_service import get_page_labels_for_pdf
+            physical_page_numbers = get_page_labels_for_pdf(input_path)
         except Exception as ex:
             logger.warning(f"Could not extract physical page numbers for LightOnOCR-3: {ex}")
     if not physical_page_numbers or len(physical_page_numbers) < total_pages:
@@ -517,7 +517,7 @@ def main(cli_args: list[str] | None = None):
 
         for line in cleaned_text.splitlines():
             line_str = line.strip()
-            if not line_str or re.fullmatch(r"\(\(\d+\)\)", line_str):
+            if not line_str or re.fullmatch(r"\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)", line_str):
                 continue
             b_type = "text"
             if line_str.startswith("#"):

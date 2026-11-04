@@ -43,6 +43,7 @@ SCHOOLBOOK_DOCS = [
     ("sek2_chemie", [310, 311], 1),
     ("sek2_biologie", [412, 413], 1),
     ("sek2_physik_verzeichnisse", [44, 45, 46, 47], 1),
+    ("sek2_physik_gesamtwerk", ["I", "II", "III", "IV", "V", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], 2),
     ("sek2_mathematik_analysis", [50, 51], 1),
 ]
 
@@ -58,7 +59,11 @@ LEGACY_COMBINED_DOCS = [
 def test_schoolbook_pdfs_and_scanned_variants_exist_and_have_valid_pages(
     base_name, expected_pages, expected_img_count
 ):
-    from backend.services.extraction_service import get_physical_page_numbers_for_pdf
+    from backend.services.extraction_service import (
+        get_page_labels_for_pdf,
+        get_pdf_page_labels,
+        get_physical_page_numbers_for_pdf,
+    )
 
     digital_pdf = os.path.join(TEST_DATA_DIR, f"{base_name}.pdf")
     scanned_pdf = os.path.join(TEST_DATA_DIR, f"{base_name}_scanned.pdf")
@@ -75,9 +80,14 @@ def test_schoolbook_pdfs_and_scanned_variants_exist_and_have_valid_pages(
 
     if base_name == "grundschule_lesebuch_doppelseite":
         detected_pages = [detect_page_number_for_pdf_page(digital_pdf, i) for i in range(len(expected_pages))]
+        assert detected_pages == expected_pages
+    elif any(isinstance(p, str) for p in expected_pages):
+        expected_labels = [str(p) for p in expected_pages]
+        assert get_pdf_page_labels(digital_pdf) == expected_labels
+        assert get_page_labels_for_pdf(digital_pdf) == expected_labels
     else:
         detected_pages = get_physical_page_numbers_for_pdf(digital_pdf)
-    assert detected_pages == expected_pages
+        assert detected_pages == expected_pages
 
 
 def test_legacy_combined_multi_subject_files_are_removed():

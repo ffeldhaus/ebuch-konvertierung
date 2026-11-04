@@ -1106,5 +1106,69 @@
         ]
       }
     ]
+  },
+  "sek2_physik_gesamtwerk.pdf": {
+    "description": "Sekundarstufe II Klasse 11–13: Physik Gesamtband (20 Seiten: Römisch I–V + Kapitel 1 S. 1–9 + Kapitel 2 S. 10–15, DIN A4)",
+    "total_images": 2,
+    "images": [
+      {
+        "id": "fig_gesamt_1",
+        "page_idx": 5,
+        "physical_page": 1,
+        "filename": "figures/physik_kinematik_diagramm.png",
+        "caption": "Abb. 1.1: Weg-Zeit- und Geschwindigkeits-Zeit-Diagramm der gleichmäßig beschleunigten Bewegung",
+        "type": "Diagramm",
+        "pt_bounds": [
+          48.0,
+          488.4,
+          533.0,
+          660.4
+        ],
+        "pt_size": [
+          485.0,
+          172.0
+        ],
+        "pixel_resolution": [
+          900,
+          320
+        ],
+        "aspect_ratio": 2.82,
+        "normalized_box_1000": [
+          216,
+          81,
+          420,
+          895
+        ]
+      },
+      {
+        "id": "fig_gesamt_2",
+        "page_idx": 14,
+        "physical_page": 10,
+        "filename": "figures/physik_maxwell_boltzmann.png",
+        "caption": "Abb. 2.1: Maxwell-Boltzmann-Geschwindigkeitsverteilung idealer Gasmoleküle",
+        "type": "Diagramm",
+        "pt_bounds": [
+          48.0,
+          488.4,
+          533.0,
+          660.4
+        ],
+        "pt_size": [
+          485.0,
+          172.0
+        ],
+        "pixel_resolution": [
+          900,
+          320
+        ],
+        "aspect_ratio": 2.82,
+        "normalized_box_1000": [
+          216,
+          81,
+          420,
+          895
+        ]
+      }
+    ]
   }
 }

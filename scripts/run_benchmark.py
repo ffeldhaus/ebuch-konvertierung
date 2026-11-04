@@ -612,9 +612,9 @@ def strip_catalog_title_from_golden(gold_md: str, catalog_title: Optional[str] =
     if not gold_md or not catalog_title:
         return gold_md
     escaped_title = re.escape(catalog_title.strip())
-    # Match after initial ((num)) marker
+    # Match after initial ((num)) or ((num)) / ((num+1)) marker
     cleaned = re.sub(
-        rf"^(\s*\(\(\d+\)\)\s*\n+)#\s+{escaped_title}\s*\n+",
+        rf"^(\s*\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?\s*\n+)#\s+{escaped_title}\s*\n+",
         r"\1",
         gold_md,
         count=1,
@@ -632,12 +632,12 @@ def strip_catalog_title_from_golden(gold_md: str, catalog_title: Optional[str] =
 def slice_golden_markdown_to_pages(gold_md: str, physical_pages: List[int]) -> str:
     """
     Slices a multi-page golden ground-truth Markdown document to retain only the
-    sections corresponding to `physical_pages` (`((num))` markers).
+    sections corresponding to `physical_pages` (`((num))` or `((num)) / ((num+1))` markers).
     """
     if not gold_md or not physical_pages:
         return gold_md
     target_set = {int(p) for p in physical_pages}
-    parts = re.split(r"(?m)^(\s*\(\(\d+\)\)\s*)$", gold_md)
+    parts = re.split(r"(?m)^(\s*\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?\s*)$", gold_md)
     if len(parts) <= 1:
         return gold_md
 
@@ -646,8 +646,8 @@ def slice_golden_markdown_to_pages(gold_md: str, physical_pages: List[int]) -> s
     for idx in range(1, len(parts), 2):
         marker_line = parts[idx]
         body = parts[idx + 1] if (idx + 1) < len(parts) else ""
-        m = re.search(r"\(\((\d+)\)\)", marker_line)
-        if m and int(m.group(1)) in target_set:
+        found_nums = [int(n) for n in re.findall(r"\(\((\d+)\)\)", marker_line)]
+        if any(n in target_set for n in found_nums):
             if not kept_chunks and preamble.strip():
                 kept_chunks.append(preamble.rstrip() + "\n\n")
             kept_chunks.append(marker_line.strip() + "\n" + body.lstrip("\n"))

@@ -154,16 +154,17 @@ def standardise_markdown_fallback(
         ).strip()
 
         page_match = re.match(
-            r"^[\(\s\[\-\#]*(?:Seite|Se)?\s*(\d+)[\)\s\]\-\#]*$",
+            r"^\(\((\d+|[IVXLCDMivxlcdm]+)\)\)$|^[\(\s\[\-\#]*(?:Seite|Se)\s*(\d+|[IVXLCDMivxlcdm]+)[\)\s\]\-\#]*$|^[\(\s\[\-\#]*(\d+)[\)\s\]\-\#]*$",
             line_clean,
             re.IGNORECASE,
         )
         if page_match:
-            page_num = page_match.group(1)
-            processed_lines.append("")
-            processed_lines.append(f"(({page_num}))")
-            processed_lines.append("")
-            continue
+            page_num = page_match.group(1) or page_match.group(2) or page_match.group(3)
+            if page_num and (page_num.isdigit() or fc.ROMAN_NUMERAL_RE.match(page_num)):
+                processed_lines.append("")
+                processed_lines.append(f"(({page_num}))")
+                processed_lines.append("")
+                continue
 
         if "<table" in line.lower():
             if "</table>" in line.lower():
@@ -247,8 +248,8 @@ def standardise_markdown_fallback(
         line = re.sub(r"([a-zA-Z0-9äöüÄÖÜß_\*\%#])\.\.\.", r"\1 ...", line)
         line = re.sub(r"_{2,}", "_..._", line)
         line = re.sub(r"\.{4,}", "_..._", line)
-        line = re.sub(r"\*\*(.*?)\*\*", r"_\1_", line)
-        line = re.sub(r"(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)", r"_\1_", line)
+        line = re.sub(r"\*\*(?!\s)(.+?)(?<!\s)\*\*", r"_\1_", line)
+        line = re.sub(r"(?<![\w\*])\*(?![\*\s])([^\*\n]+?)(?<![\*\s])\*(?![\w\*])", r"_\1_", line)
 
         fn_match = re.match(r"^(\s*)\{(\d+)\}\s*(.*)$", line)
         if fn_match:
@@ -415,7 +416,7 @@ def infer_heading_hierarchy(
             for b in range(i1 + 1, i2)
             if processed_lines[b].strip()
             and not re.match(
-                r"^\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?$",
+                r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?$",
                 processed_lines[b].strip(),
             )
         ]
@@ -431,7 +432,7 @@ def infer_heading_hierarchy(
         has_active_h3 = False
         for idx, ln in enumerate(processed_lines):
             s = ln.strip()
-            if re.match(r"^\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?$", s):
+            if re.match(r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?$", s):
                 continue
             hm = re.match(r"^(#+)\s+(.*)$", s)
             if not hm:
@@ -1035,8 +1036,8 @@ def deduplicate_page_numbers(markdown_content: str) -> str:
         return match.group(0)
 
     pattern = (
-        r"(\n|^)[ \t]*(\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?)"
-        r"[ \t]*\n+[ \t]*(\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?)"
+        r"(\n|^)[ \t]*(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)"
+        r"[ \t]*\n+[ \t]*(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)"
     )
     prev = ""
     res = markdown_content
@@ -1050,7 +1051,10 @@ def deduplicate_page_numbers(markdown_content: str) -> str:
 
     for line in lines:
         stripped = line.strip()
-        m = re.match(r"^(\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?)$", stripped)
+        m = re.match(
+            r"^(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)$",
+            stripped,
+        )
         if m:
             page_marker = re.sub(r"\s+", " ", m.group(1))
             if page_marker == current_page:
@@ -1090,7 +1094,7 @@ def post_process_structure(
         return markdown_content
 
     hyphen_pattern = (
-        r"(\w+)-[ \t]*\n+(?:(\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?)[ \t]*\n+)?"
+        r"(\w+)-[ \t]*\n+(?:(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)[ \t]*\n+)?"
         r"[ \t]*([a-zA-ZäöüÄÖÜß]\w*)([.,;:!?])?[ \t]*"
     )
 
@@ -1099,15 +1103,29 @@ def post_process_structure(
         page_break = match.group(2)
         part2 = match.group(3)
         punct = match.group(4) or ""
-        if part2 and part2[0].isupper() and part1[-1].islower():
-            part2 = part2[0].lower() + part2[1:]
-        joined = part1 + part2 + punct
+        if part2.lower() in {"und", "oder", "bzw", "sowie", "bis"}:
+            joined = f"{part1}- {part2}{punct} "
+        elif part1[0].isupper() and part2 in {
+            "Hütte", "Tor", "Straße", "Weg", "Platz", "See", "Fluss", "Berg", "Gebirge",
+            "Insel", "Halbinsel", "Kanal", "Meer", "Ozean", "Wüste", "Becken", "Tal",
+            "Achse", "Formel", "Satz", "Regel", "Gesetz", "Effekt", "Modell", "System",
+            "Test", "Check", "Rumpf", "Länge", "Editor", "Institut", "Krieg", "Chef",
+        }:
+            joined = f"{part1}-{part2}{punct}"
+        else:
+            if part2 and part2[0].isupper() and part1[-1].islower():
+                part2 = part2[0].lower() + part2[1:]
+            joined = part1 + part2 + punct
         if page_break:
-            return f"{joined}\n\n{page_break}\n\n"
+            return f"{joined.rstrip()}\n\n{page_break}\n\n"
         return joined
 
     processed = re.sub(hyphen_pattern, replace_hyphen, markdown_content)
-    processed = re.sub(r"([a-zA-ZäöüÄÖÜß]{2,})-\s+([a-zA-ZäöüÄÖÜß]{2,})", r"\1\2", processed)
+    processed = re.sub(
+        r"([a-zA-ZäöüÄÖÜß]{2,})-\s+(?!und\b|oder\b|bzw\b|sowie\b|bis\b)([a-zA-ZäöüÄÖÜß]{2,})",
+        r"\1\2",
+        processed,
+    )
 
     wrap_pattern = r"([a-zA-Z0-9,;])(?<!\n)[ \t]*\n[ \t]*(?!\n)([a-zäöüß])"
     processed = re.sub(wrap_pattern, r"\1 \2", processed)
@@ -1191,7 +1209,7 @@ def post_process_structure(
         return m.group(0)
 
     processed = re.sub(
-        r"<Tabelle>\s*([\s\S]*?)\s*</Tabelle>\s*\n+(\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?)\s*\n+<Tabelle>\s*([\s\S]*?)\s*</Tabelle>",
+        r"<Tabelle>\s*([\s\S]*?)\s*</Tabelle>\s*\n+(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)\s*\n+<Tabelle>\s*([\s\S]*?)\s*</Tabelle>",
         _merge_cross_page_tabelle_blocks,
         processed,
         flags=re.IGNORECASE,
@@ -1233,7 +1251,7 @@ def post_process_structure(
 
     if re.search(r"!\[FIGURE\s+\d+", processed):
         processed = re.sub(
-            r"!\[\]\((?:images/|figures/)?[^)\n]+\)[ \t]*\n+(?=(?:\(\(\d+\)\)\s*\n+)?!\[FIGURE\s+\d+)",
+            r"!\[\]\((?:images/|figures/)?[^)\n]+\)[ \t]*\n+(?=(?:\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)\s*\n+)?!\[FIGURE\s+\d+)",
             "",
             processed,
         )
@@ -1250,7 +1268,7 @@ def post_process_structure(
             return m.group(0)
 
         processed = re.sub(
-            r"((?:!\[\]\((?:images/|figures/)?[^)\n]+\)\s*\n+)+)(\(\(\d+\)\))\s*\n+(FIGURE\s+\d+\.\d+\s+[^\n]+)",
+            r"((?:!\[\]\((?:images/|figures/)?[^)\n]+\)\s*\n+)+)(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))\s*\n+(FIGURE\s+\d+\.\d+\s+[^\n]+)",
             _pair_cross_page_openstax_fig,
             processed,
         )

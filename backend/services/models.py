@@ -211,6 +211,8 @@ class TaskLayoutResponse(DomainModel):
     """Unique identifier of the conversion task."""
     physical_start_page: int = 1
     """Detected printed start page number of the uploaded document."""
+    page_labels: list[str] = Field(default_factory=list)
+    """Ordered list of printed or embedded page labels (e.g. 'I', 'II', '1', '2') per PDF page."""
     blocks: list[LayoutBlock] = Field(default_factory=list)
     """Ordered list of layout blocks containing bounding-box metadata."""
 

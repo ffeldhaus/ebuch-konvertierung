@@ -918,7 +918,7 @@ def _trim_to_own_pages(text: str, chunk: StandardisationChunk) -> str:
     """Drops neighbor-page content if Gemma accidentally echoed context pages."""
     own = {p for p in chunk.pages if p}
     lines = text.split("\n")
-    marker_re = re.compile(r"^\s*\(\((\d+)\)\)\s*$")
+    marker_re = re.compile(r"^\s*\(\((\d+|[IVXLCDMivxlcdm]+)\)\)\s*$")
     if chunk.next_page and chunk.next_page not in own:
         for idx, line in enumerate(lines):
             m = marker_re.match(line)
@@ -1295,28 +1295,31 @@ def _strip_hallucinated_page_numbers(
         return standardised_content
 
     raw_page_numbers: set[str] = set()
-    for m in re.finditer(r"\(\((\d+)\)\)", raw_markdown):
+    for m in re.finditer(r"\(\((\d+|[IVXLCDMivxlcdm]+)\)\)", raw_markdown):
         raw_page_numbers.add(m.group(1))
     if directory_info and directory_info.get("page_numbers"):
         for p_num in directory_info["page_numbers"]:
             raw_page_numbers.add(str(p_num))
+    if directory_info and directory_info.get("page_labels"):
+        for p_lbl in directory_info["page_labels"]:
+            raw_page_numbers.add(str(p_lbl))
     for line in raw_markdown.splitlines():
         line_clean = re.sub(
             r"</?(?:table|tr|td|tbody|p|div|span|b|i|strong|em)\b[^>]*>", "", line
         ).strip()
         page_match = re.match(
-            r"^[\(\s\[\-\#]*(?:Seite|Se)?\s*(\d+)[\)\s\]\-\#]*$",
+            r"^[\(\s\[\-\#]*(?:(?:Seite|Se)\s*(\d+|[IVXLCDMivxlcdm]+)|(\d+))[\)\s\]\-\#]*$",
             line_clean,
             re.IGNORECASE,
         )
         if page_match:
-            raw_page_numbers.add(page_match.group(1))
+            raw_page_numbers.add(page_match.group(1) or page_match.group(2))
 
     if raw_page_numbers:
         cleaned_lines = []
         for line in standardised_content.splitlines():
             stripped = line.strip()
-            m = re.match(r"^\(\((\d+)\)\)$", stripped)
+            m = re.match(r"^\(\((\d+|[IVXLCDMivxlcdm]+)\)\)$", stripped)
             if m:
                 page_num = m.group(1)
                 if page_num not in raw_page_numbers:

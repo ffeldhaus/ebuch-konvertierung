@@ -52,6 +52,6 @@ Gegeben ist die Funktion $f(x) = x^3 - 3 x^2 - 9 x + 11$. Bestimmen Sie rechneri
 
 Der Graph einer ganzrationalen Funktion 3. Grades verläuft durch den Ursprung $O(0 \mid 0)$, besitzt im Punkt $W(2 \mid 4)$ einen Wendepunkt und hat dort die Steigung $m = -3$.
 a) Stellen Sie das lineare Gleichungssystem auf und weisen Sie nach, dass $p(x) = 0{,}5 x^3 - 3 x^2 + 3 x + 0$ bzw. mit angepasstem Koeffizienten die Bedingungen erfüllt.
-b) Berechnen Sie den Inhalt der Fläche, die der Graph von $f(x)$ aus Abb. 2.1 mit der Wendetangente und der $y$-Achse im ersten Quadranten einschließt.
+b) Ermitteln Sie das Flächenmaß des Gebiets, welches der Graph von $f(x)$ aus Abb. 2.1 mit der Wendetangente und der $y$-Achse im ersten Quadranten einschließt.
 
 Hinweis zur Selbstkontrolle: Nutzen Sie für Teilaufgabe b) die Differenzfunktion $d(x) = f(x) - t_W(x)$ und bestimmen Sie vor der Integration die Schnittstellen im Intervall $[0; 4]$.

@@ -12,6 +12,8 @@ from typing import Any
 
 import pypdfium2 as pdfium
 
+from backend.services import fibs_constants as fc
+
 logger = logging.getLogger(__name__)
 
 # Global lock to serialize layout extractions and prevent GPU memory contention
@@ -25,28 +27,135 @@ def get_extraction_lock():
     return _EXTRACTION_LOCK
 
 
-
-def validate_pages_string(
-    pages_str: str, total_pages: int, physical_start: int = 1
-) -> tuple[bool, str]:
-    """Validates page selection string (e.g., '1, 3, 5-10') against boundaries.
+def roman_to_int(val: str) -> int | None:
+    """Convert a standard Roman numeral string ('I'..'MMMCMXCIX') to an integer.
 
     Args:
-        pages_str: Comma-separated page numbers and ranges (1-based).
-        total_pages: Total number of pages in the document.
-        physical_start: Pre-detected physical start page of the PDF (1-based).
+        val: Candidate Roman numeral string (case-insensitive).
 
     Returns:
-        Tuple of (is_valid, error_message). If valid, error_message is empty.
+        Integer value >= 1 if ``val`` is a valid Roman numeral, otherwise ``None``.
+    """
+    if not val or not isinstance(val, str):
+        return None
+    s = val.strip()
+    if not s or not fc.ROMAN_NUMERAL_RE.match(s):
+        return None
+    total = 0
+    prev = 0
+    for ch in reversed(s.upper()):
+        cur = fc.ROMAN_VALUES.get(ch, 0)
+        if cur < prev:
+            total -= cur
+        else:
+            total += cur
+            prev = cur
+    return total if total > 0 else None
+
+
+def int_to_roman(num: int, uppercase: bool = True) -> str:
+    """Convert a positive integer (1..3999) into a Roman numeral string.
+
+    Args:
+        num: Positive integer to convert.
+        uppercase: Whether to return uppercase ('IV') or lowercase ('iv').
+
+    Returns:
+        Roman numeral string, or ``str(num)`` if outside ``1..3999``.
+    """
+    if num <= 0 or num >= 4000:
+        return str(num)
+    pairs = (
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    )
+    out: list[str] = []
+    rem = num
+    for val, sym in pairs:
+        while rem >= val:
+            out.append(sym)
+            rem -= val
+    res = "".join(out)
+    return res if uppercase else res.lower()
+
+
+def validate_pages_string(
+    pages_str: str,
+    total_pages: int,
+    physical_start: int = 1,
+    page_labels: list[str] | None = None,
+) -> tuple[bool, str]:
+    """Validates a page selection string (Arabic, Roman, or mixed ranges) against document bounds.
+
+    Args:
+        pages_str: Comma-separated page numbers/labels and ranges (e.g. '1, 3, 5-10' or 'I-IV, 1-10').
+        total_pages: Total number of pages in the document.
+        physical_start: Pre-detected physical start page of the PDF (1-based).
+        page_labels: Optional per-page label sequence (e.g. ['I', 'II', '1', '2']) for the PDF.
+
+    Returns:
+        Tuple of ``(is_valid, error_message)``. If valid, ``error_message`` is empty.
     """
     if not pages_str or not pages_str.strip():
         return True, ""
 
-    if not re.match(r"^[0-9,\-\s]+$", pages_str):
-        return False, "Seitenauswahl enthält ungültige Zeichen. Erlaubt sind nur Zahlen, Kommas, Bindestriche und Leerzeichen."
+    if not re.match(r"^[0-9IVXLCDMivxlcdm,\-\s]+$", pages_str):
+        return (
+            False,
+            "Seitenauswahl enthält ungültige Zeichen. Erlaubt sind nur Zahlen, römische Zahlen, Kommas, Bindestriche und Leerzeichen.",
+        )
+
+    label_to_rel: dict[str, int] = {}
+    has_roman_labels = False
+    roman_labels_list: list[str] = []
+    if page_labels:
+        for idx, lbl in enumerate(page_labels):
+            clean_lbl = str(lbl).strip()
+            if clean_lbl:
+                label_to_rel.setdefault(clean_lbl.upper(), idx + 1)
+                if roman_to_int(clean_lbl) is not None:
+                    has_roman_labels = True
+                    roman_labels_list.append(clean_lbl)
+
+    def _check_roman_token(tok: str) -> tuple[bool, str]:
+        r_val = roman_to_int(tok)
+        if r_val is None:
+            return False, f"Ungültige Seitenzahl: '{tok}'."
+        if page_labels is not None:
+            if not has_roman_labels:
+                return False, "Dieses Dokument verwendet keine römischen Seitenzahlen."
+            if tok.upper() not in label_to_rel:
+                valid_str = (
+                    f"{roman_labels_list[0]}–{roman_labels_list[-1]}"
+                    if len(roman_labels_list) >= 2
+                    else (roman_labels_list[0] if roman_labels_list else "")
+                )
+                return (
+                    False,
+                    f"Römische Seitenzahl '{tok}' liegt außerhalb des gültigen Bereichs ({valid_str}).",
+                )
+        elif r_val > total_pages:
+            return (
+                False,
+                f"Römische Seitenzahl '{tok}' liegt außerhalb des gültigen Bereichs (I-{int_to_roman(max(1, total_pages))}).",
+            )
+        return True, ""
 
     parts = pages_str.split(",")
-    all_pages = []
+    arabic_pages: list[int] = []
+    selected_count = 0
+
     for part in parts:
         part = part.strip()
         if not part:
@@ -55,63 +164,142 @@ def validate_pages_string(
             subparts = part.split("-")
             if len(subparts) != 2:
                 return False, f"Ungültiger Seitenbereich: '{part}'."
-            try:
-                start_val = subparts[0].strip()
-                end_val = subparts[1].strip()
-                if not start_val or not end_val:
-                    return False, f"Ungültiger Seitenbereich: '{part}'."
+            start_val = subparts[0].strip()
+            end_val = subparts[1].strip()
+            if not start_val or not end_val:
+                return False, f"Ungültiger Seitenbereich: '{part}'."
+
+            s_is_int = bool(re.fullmatch(r"\d+", start_val))
+            e_is_int = bool(re.fullmatch(r"\d+", end_val))
+            s_rom = None if s_is_int else roman_to_int(start_val)
+            e_rom = None if e_is_int else roman_to_int(end_val)
+
+            if s_is_int and e_is_int:
                 start = int(start_val)
                 end = int(end_val)
                 if start <= 0 or end <= 0:
                     return False, f"Seitenzahlen müssen größer als 0 sein: '{part}'."
                 if start > end:
-                    return False, f"Der Startwert muss kleiner oder gleich dem Endwert sein: '{part}'."
-                all_pages.extend(range(start, end + 1))
-            except ValueError:
+                    return (
+                        False,
+                        f"Der Startwert muss kleiner oder gleich dem Endwert sein: '{part}'.",
+                    )
+                arabic_pages.extend(range(start, end + 1))
+                selected_count += end - start + 1
+            elif s_rom is not None and e_rom is not None:
+                if s_rom > e_rom:
+                    return (
+                        False,
+                        f"Der Startwert muss kleiner oder gleich dem Endwert sein: '{part}'.",
+                    )
+                for r_tok in (start_val, end_val):
+                    ok, msg = _check_roman_token(r_tok)
+                    if not ok:
+                        return False, msg
+                selected_count += e_rom - s_rom + 1
+            elif (s_rom is not None or s_is_int) and (e_rom is not None or e_is_int):
+                # Mixed Roman/Arabic range (e.g. 'I-3')
+                if s_is_int and int(start_val) <= 0:
+                    return False, f"Seitenzahlen müssen größer als 0 sein: '{part}'."
+                if e_is_int and int(end_val) <= 0:
+                    return False, f"Seitenzahlen müssen größer als 0 sein: '{part}'."
+                if page_labels is not None:
+                    if not has_roman_labels:
+                        return False, "Dieses Dokument verwendet keine römischen Seitenzahlen."
+                    r_tok = start_val if s_rom is not None else end_val
+                    ok, msg = _check_roman_token(r_tok)
+                    if not ok:
+                        return False, msg
+                    rel_s = label_to_rel.get(start_val.upper())
+                    rel_e = label_to_rel.get(end_val.upper())
+                    if rel_s is None and s_is_int and 1 <= int(start_val) <= total_pages:
+                        rel_s = int(start_val)
+                    if rel_e is None and e_is_int and 1 <= int(end_val) <= total_pages:
+                        rel_e = int(end_val)
+                    if rel_s is None or rel_e is None:
+                        return False, f"Ungültiger Seitenbereich: '{part}'."
+                    if rel_s > rel_e:
+                        return (
+                            False,
+                            f"Der Startwert muss kleiner oder gleich dem Endwert sein: '{part}'.",
+                        )
+                    selected_count += rel_e - rel_s + 1
+                else:
+                    s_num = int(start_val) if s_is_int else int(s_rom or 0)
+                    e_num = int(end_val) if e_is_int else int(e_rom or 0)
+                    if s_num > e_num:
+                        return (
+                            False,
+                            f"Der Startwert muss kleiner oder gleich dem Endwert sein: '{part}'.",
+                        )
+                    if e_num > total_pages:
+                        return (
+                            False,
+                            f"Seitenauswahl liegt außerhalb des gültigen Bereichs (1-{total_pages}).",
+                        )
+                    selected_count += e_num - s_num + 1
+            else:
                 return False, f"Ungültiger Seitenbereich: '{part}'."
         else:
-            try:
+            if re.fullmatch(r"-?\d+", part):
                 p = int(part)
                 if p <= 0:
                     return False, f"Seitenzahlen müssen größer als 0 sein: '{part}'."
-                all_pages.append(p)
-            except ValueError:
-                return False, f"Ungültige Seitenzahl: '{part}'."
+                arabic_pages.append(p)
+                selected_count += 1
+            else:
+                ok, msg = _check_roman_token(part)
+                if not ok:
+                    return False, msg
+                selected_count += 1
 
-    if not all_pages:
+    if not arabic_pages:
         return True, ""
 
-    min_page = min(all_pages)
-    max_page = max(all_pages)
-    total_selected = len(all_pages)
+    # Filter out Arabic pages that directly match known page_labels
+    unmatched_arabic = [
+        p for p in arabic_pages if not (label_to_rel and str(p) in label_to_rel)
+    ]
+    if not unmatched_arabic:
+        return True, ""
+
+    min_page = min(unmatched_arabic)
+    max_page = max(unmatched_arabic)
 
     if physical_start > 1:
-        # Validate against the detected physical page range
-        for p in all_pages:
+        for p in unmatched_arabic:
             if not (physical_start <= p < physical_start + total_pages):
-                # Allow fallback validation to relative page bounds if they entered relative pages
                 if not (1 <= p <= total_pages):
-                    return False, f"Seitenzahl {p} liegt außerhalb des gültigen Bereichs ({physical_start}-{physical_start + total_pages - 1})."
+                    return (
+                        False,
+                        f"Seitenzahl {p} liegt außerhalb des gültigen Bereichs ({physical_start}-{physical_start + total_pages - 1}).",
+                    )
     else:
-        # Fallback validation
-        # Treat as physical offset if min_page is greater than total_pages + 5
         is_physical_offset = min_page > (total_pages + 5)
         if is_physical_offset:
-            if total_selected > total_pages:
-                return False, f"Seitenauswahl umfasst {total_selected} Seiten, aber das Dokument hat nur {total_pages} Seiten."
+            if selected_count > total_pages:
+                return (
+                    False,
+                    f"Seitenauswahl umfasst {selected_count} Seiten, aber das Dokument hat nur {total_pages} Seiten.",
+                )
         else:
             if max_page > total_pages:
-                return False, f"Seitenauswahl liegt außerhalb des gültigen Bereichs (1-{total_pages})."
+                return (
+                    False,
+                    f"Seitenauswahl liegt außerhalb des gültigen Bereichs (1-{total_pages}).",
+                )
 
     return True, ""
 
 
-
-def parse_page_selection(pages_str: str) -> list[int]:
+def parse_page_selection(
+    pages_str: str, page_labels: list[str] | None = None
+) -> list[int]:
     """Parse a page selection string into a sorted list of 1-based page numbers.
 
     Args:
-        pages_str: E.g. '1, 3, 5-10'
+        pages_str: Comma-separated page numbers/labels and ranges (e.g. '1, 3, 5-10' or 'I-III').
+        page_labels: Optional per-page label list for resolving Roman/mixed labels to 1-based indices.
 
     Returns:
         Sorted list of unique 1-based page numbers.
@@ -119,7 +307,30 @@ def parse_page_selection(pages_str: str) -> list[int]:
     if not pages_str or not pages_str.strip():
         return []
 
-    selected = set()
+    label_to_rel: dict[str, int] = {}
+    has_roman_labels = False
+    if page_labels:
+        for idx, lbl in enumerate(page_labels):
+            clean_lbl = str(lbl).strip()
+            if clean_lbl:
+                label_to_rel.setdefault(clean_lbl.upper(), idx + 1)
+                if roman_to_int(clean_lbl) is not None:
+                    has_roman_labels = True
+
+    def _token_to_int(tok: str) -> int | None:
+        t = tok.strip()
+        if not t:
+            return None
+        if label_to_rel:
+            if roman_to_int(t) is not None and t.upper() in label_to_rel:
+                return label_to_rel[t.upper()]
+            if has_roman_labels and t.upper() in label_to_rel:
+                return label_to_rel[t.upper()]
+        if re.fullmatch(r"\d+", t):
+            return int(t)
+        return roman_to_int(t)
+
+    selected: set[int] = set()
     for part in pages_str.split(","):
         part = part.strip()
         if not part:
@@ -127,20 +338,114 @@ def parse_page_selection(pages_str: str) -> list[int]:
         if "-" in part:
             subparts = part.split("-")
             if len(subparts) == 2:
-                try:
-                    start = int(subparts[0].strip())
-                    end = int(subparts[1].strip())
+                s_tok, e_tok = subparts[0].strip(), subparts[1].strip()
+                if (
+                    label_to_rel
+                    and s_tok.upper() in label_to_rel
+                    and e_tok.upper() in label_to_rel
+                    and (
+                        has_roman_labels
+                        or roman_to_int(s_tok) is not None
+                        or roman_to_int(e_tok) is not None
+                    )
+                ):
+                    r1 = label_to_rel[s_tok.upper()]
+                    r2 = label_to_rel[e_tok.upper()]
+                    for p in range(min(r1, r2), max(r1, r2) + 1):
+                        selected.add(p)
+                    continue
+                start = _token_to_int(s_tok)
+                end = _token_to_int(e_tok)
+                if start is not None and end is not None and start > 0 and end > 0:
                     for p in range(min(start, end), max(start, end) + 1):
                         selected.add(p)
-                except ValueError:
-                    pass
         else:
-            try:
-                selected.add(int(part))
-            except ValueError:
-                pass
+            val = _token_to_int(part)
+            if val is not None and val > 0:
+                selected.add(val)
 
     return sorted(selected)
+
+
+def resolve_page_selection_to_relative_indices(
+    pages_str: str,
+    total_pages: int,
+    physical_start: int = 1,
+    page_labels: list[str] | None = None,
+) -> list[int]:
+    """Resolve a page selection string (Arabic, Roman, mixed, or physical offset) to 1-based PDF indices.
+
+    Args:
+        pages_str: Comma-separated page selection string (e.g. 'I-III, 1-2' or '45-48').
+        total_pages: Total number of pages in the PDF.
+        physical_start: Detected 1-based physical start page for offset mapping.
+        page_labels: Optional per-page label sequence for exact label-to-index resolution.
+
+    Returns:
+        Sorted list of unique 1-based relative page indices within ``1..total_pages``.
+    """
+    if not pages_str or not pages_str.strip() or total_pages <= 0:
+        return []
+
+    label_to_rel: dict[str, int] = {}
+    if page_labels:
+        for idx, lbl in enumerate(page_labels):
+            clean_lbl = str(lbl).strip()
+            if clean_lbl:
+                label_to_rel.setdefault(clean_lbl.upper(), idx + 1)
+
+    resolved: set[int] = set()
+    fallback_numeric: list[int] = []
+
+    for part in pages_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            subparts = part.split("-")
+            if len(subparts) != 2:
+                continue
+            s_tok, e_tok = subparts[0].strip(), subparts[1].strip()
+            if s_tok.upper() in label_to_rel and e_tok.upper() in label_to_rel:
+                r1, r2 = label_to_rel[s_tok.upper()], label_to_rel[e_tok.upper()]
+                for idx in range(min(r1, r2), max(r1, r2) + 1):
+                    if 1 <= idx <= total_pages:
+                        resolved.add(idx)
+                continue
+            s_val = int(s_tok) if re.fullmatch(r"\d+", s_tok) else roman_to_int(s_tok)
+            e_val = int(e_tok) if re.fullmatch(r"\d+", e_tok) else roman_to_int(e_tok)
+            if s_val is not None and e_val is not None and s_val > 0 and e_val > 0:
+                fallback_numeric.extend(range(min(s_val, e_val), max(s_val, e_val) + 1))
+        else:
+            if part.upper() in label_to_rel:
+                idx = label_to_rel[part.upper()]
+                if 1 <= idx <= total_pages:
+                    resolved.add(idx)
+                continue
+            val = int(part) if re.fullmatch(r"\d+", part) else roman_to_int(part)
+            if val is not None and val > 0:
+                fallback_numeric.append(val)
+
+    if fallback_numeric:
+        sorted_fb = sorted(set(fallback_numeric))
+        is_offset = sorted_fb[-1] > total_pages or (
+            physical_start > 1
+            and all(physical_start <= p < physical_start + total_pages for p in sorted_fb)
+            and any(p > total_pages for p in sorted_fb)
+        )
+        if is_offset:
+            mapped = [p - physical_start + 1 for p in sorted_fb]
+            if any(p < 1 or p > total_pages for p in mapped):
+                mapped = [p - sorted_fb[0] + 1 for p in sorted_fb]
+            for idx in mapped:
+                if 1 <= idx <= total_pages:
+                    resolved.add(idx)
+        else:
+            for idx in sorted_fb:
+                if 1 <= idx <= total_pages:
+                    resolved.add(idx)
+
+    return sorted(resolved)
 
 
 def is_contiguous_range(pages: list[int]) -> bool:
@@ -148,6 +453,50 @@ def is_contiguous_range(pages: list[int]) -> bool:
     if not pages:
         return True
     return pages == list(range(pages[0], pages[-1] + 1))
+
+
+def _parse_labels_from_selection_string(pages_str: str) -> list[str]:
+    """Expand a page selection string ('I-III, 1-2') into an ordered list of page label strings."""
+    if not pages_str or not pages_str.strip():
+        return []
+    labels: list[str] = []
+    seen: set[str] = set()
+    for part in pages_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            subparts = part.split("-")
+            if len(subparts) == 2:
+                s_tok, e_tok = subparts[0].strip(), subparts[1].strip()
+                if re.fullmatch(r"\d+", s_tok) and re.fullmatch(r"\d+", e_tok):
+                    s_i, e_i = int(s_tok), int(e_tok)
+                    for v in range(min(s_i, e_i), max(s_i, e_i) + 1):
+                        lbl = str(v)
+                        if lbl not in seen:
+                            seen.add(lbl)
+                            labels.append(lbl)
+                else:
+                    s_r = roman_to_int(s_tok)
+                    e_r = roman_to_int(e_tok)
+                    if s_r is not None and e_r is not None:
+                        is_up = any(c.isupper() for c in s_tok)
+                        for v in range(min(s_r, e_r), max(s_r, e_r) + 1):
+                            lbl = int_to_roman(v, uppercase=is_up)
+                            if lbl.upper() not in seen:
+                                seen.add(lbl.upper())
+                                labels.append(lbl)
+        else:
+            if re.fullmatch(r"\d+", part):
+                lbl = str(int(part))
+                if lbl not in seen:
+                    seen.add(lbl)
+                    labels.append(lbl)
+            elif roman_to_int(part) is not None:
+                if part.upper() not in seen:
+                    seen.add(part.upper())
+                    labels.append(part)
+    return labels
 
 
 def insert_page_numbers_from_metadata(
@@ -158,7 +507,7 @@ def insert_page_numbers_from_metadata(
     directory_info: dict[str, Any] | None = None,
 ) -> str:
     """Parses content_list.json metadata to match blocks to markdown positions and inject
-    page number annotations (e.g. ((45))) at page boundaries as described in rules.
+    page number annotations (e.g. ((45)) or ((I))) at page boundaries as described in rules.
     Also leverages detected directory information (TOC, figures, tables, pictures)
     to ensure accurate printed page numbers.
     """
@@ -209,37 +558,72 @@ def insert_page_numbers_from_metadata(
         except Exception:
             pass
 
-    # Parse physical page list if pages_str is provided
-    pages_list = parse_page_selection(pages_str)
+    sidecar_labels: list[str] = []
+    if pdf_path and os.path.exists(f"{pdf_path}.labels.json"):
+        try:
+            with open(f"{pdf_path}.labels.json", encoding="utf-8") as sf:
+                raw_sc = json.load(sf)
+            if isinstance(raw_sc, list) and raw_sc:
+                sidecar_labels = [str(x) for x in raw_sc]
+        except Exception:
+            pass
 
-    # If pages_list has relative 1-based indices (e.g. 1, 2) and directory_info has physical page numbers,
-    # map relative page numbers to their physical printed numbers.
-    if (
-        pages_list
-        and directory_info
-        and directory_info.get("page_numbers")
-        and max(pages_list) <= len(directory_info["page_numbers"])
-        and directory_info.get("physical_start_page", 1) > 1
-    ):
-        dir_pages = directory_info["page_numbers"]
-        pages_list = [dir_pages[p - 1] for p in pages_list if 1 <= p <= len(dir_pages)]
+    full_doc_labels: list[str] = []
+    if directory_info and isinstance(directory_info.get("page_labels"), list) and directory_info["page_labels"]:
+        full_doc_labels = [str(x) for x in directory_info["page_labels"]]
+    elif directory_info and isinstance(directory_info.get("page_numbers"), list) and directory_info["page_numbers"]:
+        full_doc_labels = [str(x) for x in directory_info["page_numbers"]]
+    elif pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf") and not sidecar_labels:
+        try:
+            full_doc_labels = get_page_labels_for_pdf(pdf_path, directory_info=directory_info)
+        except Exception:
+            full_doc_labels = []
 
-    # Detect physical page numbers per-page if pages_str is empty/None
+    pages_list: list[str] = []
+    if sidecar_labels:
+        pages_list = list(sidecar_labels)
+    elif pages_str and pages_str.strip():
+        if full_doc_labels:
+            phys_start = int(directory_info.get("physical_start_page", 1)) if directory_info else 1
+            rel_indices = resolve_page_selection_to_relative_indices(
+                pages_str,
+                len(full_doc_labels),
+                physical_start=phys_start,
+                page_labels=full_doc_labels,
+            )
+            if rel_indices:
+                pages_list = [
+                    full_doc_labels[idx - 1]
+                    for idx in rel_indices
+                    if 1 <= idx <= len(full_doc_labels)
+                ]
+        if not pages_list:
+            pages_list = _parse_labels_from_selection_string(pages_str)
+
+    max_rel_page = max(
+        ((b.get("page_idx", 0) + 1 if is_zero_based else b.get("page_idx", 1)) for b in blocks if b.get("page_idx") is not None),
+        default=1,
+    )
+
+    # Detect physical page labels per-page if pages_str is empty/None
     if not pages_list:
-        if directory_info and directory_info.get("page_numbers"):
-            pages_list = [int(p) for p in directory_info["page_numbers"]]
+        if full_doc_labels and len(full_doc_labels) == max_rel_page:
+            pages_list = list(full_doc_labels)
         elif pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
             try:
-                pages_list = get_physical_page_numbers_for_pdf(pdf_path, directory_info=directory_info)
+                cand_dir_info = directory_info if (not full_doc_labels or len(full_doc_labels) == max_rel_page) else None
+                pdf_lbls = get_page_labels_for_pdf(pdf_path, directory_info=cand_dir_info)
+                if len(pdf_lbls) == max_rel_page:
+                    pages_list = pdf_lbls
             except Exception as e:
                 logger.warning(f"Error auto-detecting per-page printed numbers sequence: {e}")
+        if not pages_list and full_doc_labels and not (
+            directory_info and directory_info.get("roman_prefix_count", 0) > 0 and max_rel_page < len(full_doc_labels)
+        ):
+            pages_list = list(full_doc_labels)
 
         # If PDF had no text-layer page numbers (e.g., scanned PDF returning 1..N), inspect OCR blocks per page
-        max_rel_page = max(
-            ((b.get("page_idx", 0) + 1 if is_zero_based else b.get("page_idx", 1)) for b in blocks if b.get("page_idx") is not None),
-            default=1,
-        )
-        if not pages_list or pages_list == list(range(1, len(pages_list) + 1)):
+        if not pages_list or pages_list == [str(i) for i in range(1, len(pages_list) + 1)]:
             ocr_lines_by_page: dict[int, list[str]] = {}
             furn_lines_by_page: dict[int, list[str]] = {}
             for b in blocks:
@@ -256,41 +640,55 @@ def insert_page_numbers_from_metadata(
                     ocr_lines_by_page.setdefault(rel_p, []).append(txt)
 
             total_p = max(len(pages_list), max_rel_page)
-            detected_from_blocks: list[int | None] = []
+            detected_labels_from_blocks: list[str | None] = []
+            detected_ints_from_blocks: list[int | None] = []
             for rel_p in range(1, total_p + 1):
                 f_lines = furn_lines_by_page.get(rel_p, [])
                 b_lines = ocr_lines_by_page.get(rel_p, [])
-                cand_num = detect_page_number_from_text_lines(f_lines) if f_lines else None
-                if cand_num is None and b_lines:
-                    cand_num = detect_page_number_from_text_lines(b_lines[:3] + b_lines[-3:])
-                detected_from_blocks.append(cand_num)
+                cand_lbl = detect_page_label_from_text_lines(f_lines) if f_lines else None
+                if cand_lbl is None and b_lines:
+                    cand_lbl = detect_page_label_from_text_lines(b_lines[:3] + b_lines[-3:])
+                detected_labels_from_blocks.append(cand_lbl)
+                detected_ints_from_blocks.append(int(cand_lbl) if cand_lbl and cand_lbl.isdigit() else None)
 
-            if any(d is not None for d in detected_from_blocks):
-                pages_list = _resolve_page_sequence(detected_from_blocks, fallback_start_page=1)
+            if any(lbl is not None and roman_to_int(lbl) is not None for lbl in detected_labels_from_blocks):
+                pages_list = _resolve_mixed_page_labels(detected_labels_from_blocks, fallback_start_page=1)
+            elif any(d is not None for d in detected_ints_from_blocks):
+                pages_list = [str(p) for p in _resolve_page_sequence(detected_ints_from_blocks, fallback_start_page=1)]
 
-    # Pre-calculate physical page number for each block index
-    block_page_nums = []
+    # Pre-calculate physical page label for each block index
+    block_page_nums: list[str | None] = []
     for b in blocks:
         raw_idx = b.get("page_idx")
         if raw_idx is None:
             block_page_nums.append(None)
             continue
-        
+
         # Convert to 1-based relative index
         relative_idx = raw_idx + 1 if is_zero_based else raw_idx
 
         if pages_list:
             if 1 <= relative_idx <= len(pages_list):
-                phys_num = pages_list[relative_idx - 1]
+                phys_num = str(pages_list[relative_idx - 1])
             else:
-                phys_num = pages_list[-1] + (relative_idx - len(pages_list))
+                last_lbl = str(pages_list[-1])
+                diff = relative_idx - len(pages_list)
+                if last_lbl.isdigit():
+                    phys_num = str(int(last_lbl) + diff)
+                elif roman_to_int(last_lbl) is not None:
+                    phys_num = int_to_roman(
+                        (roman_to_int(last_lbl) or 1) + diff,
+                        uppercase=last_lbl.isupper(),
+                    )
+                else:
+                    phys_num = str(relative_idx)
         else:
-            phys_num = relative_idx
-        
+            phys_num = str(relative_idx)
+
         block_page_nums.append(phys_num)
 
     # Collect ordered candidate body text blocks for each page (excluding furniture, images, and footnotes)
-    page_to_candidates: dict[int, list[tuple[int, str]]] = {}
+    page_to_candidates: dict[str, list[tuple[int, str]]] = {}
     for i, b in enumerate(blocks):
         phys_num = block_page_nums[i]
         if phys_num is None:
@@ -307,11 +705,13 @@ def insert_page_numbers_from_metadata(
     if not page_to_candidates:
         return markdown_content
 
-    # Sort pages to process in order
-    sorted_pages = sorted(page_to_candidates.keys())
+    # Preserve document page order by sorting by the first block index of each page
+    sorted_pages = [
+        k for k, _ in sorted(page_to_candidates.items(), key=lambda kv: kv[1][0][0])
+    ]
 
     # Check if the PDF uses landscape double-page spreads with paired page numbers ((N)) / ((N+1))
-    spread_markers_by_phys: dict[int, str] = {}
+    spread_markers_by_phys: dict[str, str] = {}
     if pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
         try:
             doc_sp = pdfium.PdfDocument(pdf_path)
@@ -325,9 +725,11 @@ def insert_page_numbers_from_metadata(
 
     # If the extractor already emitted standalone ((num)) markers (e.g. one per page),
     # replace or strip any markers that do not match the resolved sorted_pages sequence
-    existing_marker_matches = list(re.finditer(r"(?m)^[ \t]*\(\((\d+)\)\)[ \t]*$", markdown_content))
+    existing_marker_matches = list(
+        re.finditer(r"(?m)^[ \t]*\(\((\d+|[IVXLCDMivxlcdm]+)\)\)[ \t]*$", markdown_content)
+    )
     if existing_marker_matches and sorted_pages:
-        existing_nums = [int(m.group(1)) for m in existing_marker_matches]
+        existing_nums = [m.group(1) for m in existing_marker_matches]
         if existing_nums != sorted_pages:
             if len(existing_marker_matches) == len(sorted_pages):
                 # 1-to-1 replacement of per-page markers with authoritative sorted_pages
@@ -342,15 +744,15 @@ def insert_page_numbers_from_metadata(
             else:
                 valid_set = set(sorted_pages)
                 markdown_content = re.sub(
-                    r"(?m)^[ \t]*\(\((\d+)\)\)[ \t]*\n*",
-                    lambda m: m.group(0) if int(m.group(1)) in valid_set else "",
+                    r"(?m)^[ \t]*\(\((\d+|[IVXLCDMivxlcdm]+)\)\)[ \t]*\n*",
+                    lambda m: m.group(0) if m.group(1) in valid_set else "",
                     markdown_content,
                 )
 
     current_pos = 0
     modified_markdown = markdown_content
     offset = 0
-    inserted_pages = set()
+    inserted_pages: set[str] = set()
 
 
     for phys_num in sorted_pages:
@@ -402,7 +804,7 @@ def insert_page_numbers_from_metadata(
                 already_has_marker = (
                     marker_token in modified_markdown
                     if phys_num in spread_markers_by_phys
-                    else bool(re.search(rf"(?m)^[ \t]*\(\({phys_num}\)\)[ \t]*$", modified_markdown))
+                    else bool(re.search(rf"(?m)^[ \t]*\(\({re.escape(str(phys_num))}\)\)[ \t]*$", modified_markdown))
                 )
                 if (
                     already_has_marker
@@ -464,46 +866,52 @@ def insert_page_numbers_from_metadata(
     return modified_markdown
 
 
-def extract_pdf_pages(input_path: str, pages_str: str, output_path: str) -> bool:
+def extract_pdf_pages(
+    input_path: str,
+    pages_str: str,
+    output_path: str,
+    page_labels: list[str] | None = None,
+    is_relative_indices: bool = False,
+) -> bool:
     """Parses comma-separated pages/ranges and extracts them from input_path PDF
-    to output_path PDF using pypdfium2.
+    to output_path PDF using pypdfium2, writing a ``.labels.json`` sidecar.
 
-    Returns True if pages were extracted, False if all pages should be used.
+    Args:
+        input_path: Source PDF file path.
+        pages_str: Page selection string (1-based relative indices, physical numbers, or Roman labels).
+        output_path: Destination cropped PDF file path.
+        page_labels: Optional per-page labels of the source PDF.
+        is_relative_indices: Whether ``pages_str`` is already resolved to 1-based relative PDF indices.
+
+    Returns:
+        True if pages were extracted, False if no valid pages were selected.
     """
     if not pages_str or not pages_str.strip():
-        return False
-
-    selected_pages = set()
-    parts = pages_str.split(",")
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            subparts = part.split("-")
-            if len(subparts) == 2:
-                try:
-                    start = int(subparts[0].strip())
-                    end = int(subparts[1].strip())
-                    for p in range(min(start, end), max(start, end) + 1):
-                        selected_pages.add(p - 1)  # Convert to 0-based
-                except ValueError:
-                    logger.warning(f"Invalid page range: {part}")
-        else:
-            try:
-                p = int(part)
-                selected_pages.add(p - 1)  # Convert to 0-based
-            except ValueError:
-                logger.warning(f"Invalid page number: {part}")
-
-    if not selected_pages:
         return False
 
     try:
         doc = pdfium.PdfDocument(input_path)
         total_pages = len(doc)
+        if total_pages == 0:
+            doc.close()
+            return False
 
-        valid_indices = sorted([p for p in selected_pages if 0 <= p < total_pages])
+        source_labels = (
+            list(page_labels)
+            if page_labels and len(page_labels) == total_pages
+            else get_page_labels_for_pdf(input_path)
+        )
+
+        if is_relative_indices:
+            rel_indices = parse_page_selection(pages_str)
+        else:
+            rel_indices = resolve_page_selection_to_relative_indices(
+                pages_str,
+                total_pages,
+                page_labels=source_labels,
+            )
+
+        valid_indices = sorted({p - 1 for p in rel_indices if 1 <= p <= total_pages})
 
         if not valid_indices:
             doc.close()
@@ -519,6 +927,14 @@ def extract_pdf_pages(input_path: str, pages_str: str, output_path: str) -> bool
         new_doc.save(output_path)
         new_doc.close()
         doc.close()
+
+        if source_labels and len(source_labels) >= total_pages:
+            subset_labels = [str(source_labels[i]) for i in valid_indices]
+            try:
+                with open(f"{output_path}.labels.json", "w", encoding="utf-8") as lf:
+                    json.dump(subset_labels, lf, ensure_ascii=False)
+            except Exception as ex:
+                logger.debug(f"Could not write page labels sidecar for {output_path}: {ex}")
 
         logger.info(f"Extracted pages {valid_indices} to {output_path}")
         return True
@@ -537,6 +953,45 @@ def get_pdf_page_count(pdf_path: str) -> int:
     except Exception as e:
         logger.warning(f"Error counting PDF pages: {e}")
         return 0
+
+
+def get_pdf_page_labels(pdf_path: str) -> list[str]:
+    """Read embedded PDF ``/PageLabels`` (or ``.labels.json`` sidecar) for each page.
+
+    Args:
+        pdf_path: Path to the PDF file.
+
+    Returns:
+        List of page label strings (one per page), or ``[]`` if no labels are defined.
+    """
+    if pdf_path and not os.path.isabs(pdf_path) and not os.path.exists(pdf_path):
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+        cand_path = os.path.join(project_root, pdf_path)
+        if os.path.exists(cand_path):
+            pdf_path = cand_path
+
+    if not pdf_path or not os.path.exists(pdf_path) or not pdf_path.lower().endswith(".pdf"):
+        return []
+
+    sidecar_path = f"{pdf_path}.labels.json"
+    if os.path.exists(sidecar_path):
+        try:
+            with open(sidecar_path, encoding="utf-8") as sf:
+                data = json.load(sf)
+            if isinstance(data, list) and data:
+                return [str(x).strip() for x in data]
+        except Exception:
+            pass
+
+    try:
+        doc = pdfium.PdfDocument(pdf_path)
+        labels = [(doc.get_page_label(i) or "").strip() for i in range(len(doc))]
+        doc.close()
+        if any(labels):
+            return labels
+    except Exception as e:
+        logger.debug(f"Could not read embedded PDF page labels from {pdf_path}: {e}")
+    return []
 
 
 def detect_page_number_from_text_lines(lines: list[str]) -> int | None:
@@ -619,6 +1074,68 @@ def detect_page_number_from_text_lines(lines: list[str]) -> int | None:
     return None
 
 
+def detect_page_label_from_text_lines(lines: list[str]) -> str | None:
+    """Extract a printed page label (Roman numeral or Arabic number) from page boundary lines.
+
+    Args:
+        lines: Non-empty text lines of a single PDF page.
+
+    Returns:
+        Detected page label string (e.g. 'IV', 'iv', or '45'), or ``None`` if undetected.
+    """
+    raw_clean_lines = [ln.strip() for ln in lines if ln and ln.strip()]
+    if not raw_clean_lines:
+        return None
+
+    slug_re = re.compile(r"\S+\.indd\s+(\d{1,4})\s+\d{2}\.\d{2}\.\d{4}", re.IGNORECASE)
+    clean_lines = [ln for ln in raw_clean_lines if not slug_re.search(ln)]
+    if not clean_lines:
+        clean_lines = raw_clean_lines
+
+    boundary_candidates = list(reversed(clean_lines[-2:])) + clean_lines[:2]
+    # 1. Explicit 'Seite IV' / 'Page iv' in header/footer boundary lines
+    for line in boundary_candidates:
+        if re.search(r"[\.\·…]{2,}", line):
+            continue
+        line_no_parens = re.sub(r"\([^\)]*\)", "", line)
+        m_rom_page = re.search(
+            r"\b(?:[sS]eite|[pP]age)\s+([IVXLCDMivxlcdm]{1,7})\b",
+            line_no_parens,
+        )
+        if m_rom_page:
+            tok = m_rom_page.group(1)
+            r_val = roman_to_int(tok)
+            if r_val is not None and 1 <= r_val <= 100:
+                return tok
+
+    # 2. Standalone Roman numerals in footer/header (last 2 / first 2 lines)
+    for line in boundary_candidates:
+        m_standalone = re.match(r"^([IVXLCDMivxlcdm]{1,7})$", line)
+        if m_standalone:
+            tok = m_standalone.group(1)
+            r_val = roman_to_int(tok)
+            if r_val is not None and 1 <= r_val <= 50:
+                return tok
+
+    # 3. Alternating layout with separator ('IV | Vorwort' or 'Vorwort | IV')
+    for line in boundary_candidates:
+        if re.search(r"[\.\·…]{2,}", line):
+            continue
+        m_alt = re.match(
+            r"^([IVXLCDMivxlcdm]{1,6})\s+[|•\-–]\s+[A-Za-zäöüÄÖÜß]", line
+        ) or re.search(
+            r"[A-Za-zäöüÄÖÜß\)\.]\s+[|•\-–]\s+([IVXLCDMivxlcdm]{1,6})$", line
+        )
+        if m_alt:
+            tok = m_alt.group(1)
+            r_val = roman_to_int(tok)
+            if r_val is not None and 1 <= r_val <= 50:
+                return tok
+
+    num = detect_page_number_from_text_lines(lines)
+    return str(num) if num is not None else None
+
+
 def _resolve_page_sequence(detected: list[int | None], fallback_start_page: int = 1) -> list[int]:
     """Resolves a list of per-page detected numbers into a complete, strictly monotonic (+1) sequence.
     Uses consensus offset (d_i - i) across pages (preferring adjacent +1 pairs) to reject OCR outliers
@@ -655,6 +1172,185 @@ def _resolve_page_sequence(detected: list[int | None], fallback_start_page: int 
     return [max(1, fallback_start_page) + i for i in range(total_pages)]
 
 
+def _resolve_mixed_page_labels(
+    detected_labels: list[str | None],
+    fallback_start_page: int = 1,
+) -> list[str]:
+    """Resolve per-page detected labels (supporting Roman front-matter followed by Arabic body pages)."""
+    total_pages = len(detected_labels)
+    if total_pages == 0:
+        return [str(fallback_start_page)]
+
+    roman_hits: list[tuple[int, int, bool]] = []
+    arabic_hits: list[tuple[int, int]] = []
+    for idx, lbl in enumerate(detected_labels):
+        if not lbl:
+            continue
+        if lbl.isdigit():
+            arabic_hits.append((idx, int(lbl)))
+        else:
+            r_val = roman_to_int(lbl)
+            if r_val is not None:
+                roman_hits.append((idx, r_val, any(c.isupper() for c in lbl)))
+
+    if not roman_hits:
+        detected_ints: list[int | None] = [
+            int(lbl) if lbl and lbl.isdigit() else None for lbl in detected_labels
+        ]
+        return [
+            str(p)
+            for p in _resolve_page_sequence(
+                detected_ints, fallback_start_page=fallback_start_page
+            )
+        ]
+
+    # Leading Roman front-matter before the first Arabic page
+    first_arabic_idx = arabic_hits[0][0] if arabic_hits else total_pages
+    leading_roman = [h for h in roman_hits if h[0] < first_arabic_idx and h[1] - h[0] >= 1]
+    if not leading_roman:
+        detected_ints = [
+            int(lbl) if lbl and lbl.isdigit() else None for lbl in detected_labels
+        ]
+        return [
+            str(p)
+            for p in _resolve_page_sequence(
+                detected_ints, fallback_start_page=fallback_start_page
+            )
+        ]
+
+    max_rom_idx = max(h[0] for h in leading_roman)
+    is_upper = sum(1 for h in leading_roman if h[2]) >= len(leading_roman) / 2
+    from collections import Counter
+
+    rom_offsets: Counter = Counter(h[1] - h[0] for h in leading_roman)
+    rom_start = max(rom_offsets.keys(), key=lambda off: (rom_offsets[off], -abs(off - 1)))
+
+    if arabic_hits:
+        idx_a, val_a = arabic_hits[0]
+        est_body_start = idx_a - (val_a - 1)
+        roman_prefix_len = max(max_rom_idx + 1, min(idx_a, est_body_start))
+    else:
+        roman_prefix_len = total_pages
+
+    roman_part = [
+        int_to_roman(rom_start + i, uppercase=is_upper)
+        for i in range(roman_prefix_len)
+    ]
+    if roman_prefix_len >= total_pages:
+        return roman_part
+
+    rem_detected: list[int | None] = [
+        int(lbl) if lbl and lbl.isdigit() else None
+        for lbl in detected_labels[roman_prefix_len:]
+    ]
+    arabic_part = [
+        str(p)
+        for p in _resolve_page_sequence(rem_detected, fallback_start_page=1)
+    ]
+    return roman_part + arabic_part
+
+
+MAX_PAGE_SCAN_PAGES = 30
+
+
+def _detect_spread_pair_from_page(page: Any) -> tuple[int, int] | None:
+    """Detect whether an open PDF page is a landscape double-page spread with two consecutive page numbers.
+
+    Args:
+        page: Open ``pypdfium2.PdfPage`` instance.
+
+    Returns:
+        Tuple ``(p_left, p_left + 1)`` if detected, otherwise ``None``.
+    """
+    try:
+        pw, ph = page.get_size()
+        if pw <= ph * 1.18:
+            return None
+        textpage = page.get_textpage()
+        text = textpage.get_text_range().strip()
+
+        # 1. Check top/bottom lines for '52 53' or 'Seite 52 ... Seite 53'
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        for line in lines[:4] + lines[-4:]:
+            m = re.match(
+                r"^(?:Seite\s*)?(\d{1,4})\b.*?\b(?:Seite\s*)?(\d{1,4})$",
+                line,
+                re.IGNORECASE,
+            )
+            if m:
+                p1, p2 = int(m.group(1)), int(m.group(2))
+                if p2 == p1 + 1:
+                    textpage.close()
+                    return (p1, p2)
+
+        # 2. Check .indd range slug (e.g. '.indd 26-27') or two .indd slugs on the same page
+        m_range = re.search(r"\.indd\s+(\d{1,4})[–-](\d{1,4})\b", text, re.IGNORECASE)
+        if m_range:
+            p1, p2 = int(m_range.group(1)), int(m_range.group(2))
+            if p2 == p1 + 1:
+                textpage.close()
+                return (p1, p2)
+        indd_pages = [
+            int(x) for x in re.findall(r"\.indd\s+(\d{1,4})\b", text, re.IGNORECASE)
+        ]
+        if len(indd_pages) >= 2 and indd_pages[1] == indd_pages[0] + 1:
+            textpage.close()
+            return (indd_pages[0], indd_pages[1])
+
+        # 3. Check left-half vs right-half top/bottom margin text rects for standalone page numbers (p1, p1 + 1)
+        left_nums: list[int] = []
+        right_nums: list[int] = []
+        n_rects = textpage.count_rects()
+        for r_idx in range(n_rects):
+            l_val, b_val, r_val, t_val = textpage.get_rect(r_idx)
+            y_mid = (b_val + t_val) / 2.0
+            if y_mid < ph * 0.14 or y_mid > ph * 0.86:
+                rt = textpage.get_text_bounded(l_val, b_val, r_val, t_val).strip()
+                m_num = re.match(r"^(?:Seite\s*)?(\d{1,4})$", rt, re.IGNORECASE)
+                if m_num:
+                    val = int(m_num.group(1))
+                    x_mid = (l_val + r_val) / 2.0
+                    if x_mid < pw * 0.5:
+                        left_nums.append(val)
+                    else:
+                        right_nums.append(val)
+        textpage.close()
+        for p1 in left_nums:
+            if (p1 + 1) in right_nums:
+                return (p1, p1 + 1)
+    except Exception:
+        pass
+    return None
+
+
+def _detect_page_number_from_page(
+    page: Any,
+) -> tuple[tuple[int, int] | None, int | None, str | None]:
+    """Extract spread pair, printed page number, and page label from an open PDF page.
+
+    Args:
+        page: Open ``pypdfium2.PdfPage`` instance.
+
+    Returns:
+        Tuple ``(spread_pair, page_number, page_label)``.
+    """
+    spread_pair = _detect_spread_pair_from_page(page)
+    if spread_pair is not None:
+        return spread_pair, spread_pair[0], str(spread_pair[0])
+    try:
+        textpage = page.get_textpage()
+        text = textpage.get_text_range().strip()
+        textpage.close()
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if lines:
+            return (
+                None,
+                detect_page_number_from_text_lines(lines),
+                detect_page_label_from_text_lines(lines),
+            )
+    except Exception as e:
+        logger.debug(f"Error reading page text for page number detection: {e}")
+    return None, None, None
 
 
 def detect_spread_page_pair_for_pdf_page(pdf_path: str, page_idx: int) -> tuple[int, int] | None:
@@ -665,29 +1361,14 @@ def detect_spread_page_pair_for_pdf_page(pdf_path: str, page_idx: int) -> tuple[
         return None
     try:
         doc = pdfium.PdfDocument(pdf_path)
-        if page_idx < 0 or page_idx >= len(doc):
+        try:
+            if page_idx < 0 or page_idx >= len(doc):
+                return None
+            return _detect_spread_pair_from_page(doc[page_idx])
+        finally:
             doc.close()
-            return None
-        page = doc[page_idx]
-        pw, ph = page.get_size()
-        if pw <= ph * 1.18:
-            doc.close()
-            return None
-        textpage = page.get_textpage()
-        text = textpage.get_text_range().strip()
-        textpage.close()
-        doc.close()
-
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        for line in lines[:4] + lines[-4:]:
-            m = re.match(r"^(?:Seite\s*)?(\d{1,4})\b.*?\b(?:Seite\s*)?(\d{1,4})$", line, re.IGNORECASE)
-            if m:
-                p1, p2 = int(m.group(1)), int(m.group(2))
-                if p2 == p1 + 1:
-                    return (p1, p2)
     except Exception:
-        pass
-    return None
+        return None
 
 
 def detect_page_number_for_pdf_page(pdf_path: str, page_idx: int) -> int | None:
@@ -696,23 +1377,14 @@ def detect_page_number_for_pdf_page(pdf_path: str, page_idx: int) -> int | None:
     """
     if not pdf_path or not os.path.exists(pdf_path) or not pdf_path.lower().endswith(".pdf"):
         return None
-    spread_pair = detect_spread_page_pair_for_pdf_page(pdf_path, page_idx)
-    if spread_pair is not None:
-        return spread_pair[0]
     try:
         doc = pdfium.PdfDocument(pdf_path)
-        if page_idx < 0 or page_idx >= len(doc):
+        try:
+            if page_idx < 0 or page_idx >= len(doc):
+                return None
+            return _detect_page_number_from_page(doc[page_idx])[1]
+        finally:
             doc.close()
-            return None
-        page = doc[page_idx]
-        textpage = page.get_textpage()
-        text = textpage.get_text_range().strip()
-        textpage.close()
-        doc.close()
-
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        if lines:
-            return detect_page_number_from_text_lines(lines)
     except Exception as e:
         logger.warning(f"Error detecting page number for page index {page_idx}: {e}")
     return None
@@ -726,8 +1398,9 @@ def get_physical_page_numbers_for_pdf(
     """Returns a list of physical page numbers, one for each page in the PDF.
     First checks if a Table of Contents, List of Figures, List of Tables, or
     List of Pictures is present in the first 20 pages and uses its entries to
-    infer and verify the physical page sequence. Otherwise scans each page
-    individually for printed page numbers and fills undetected pages continuously.
+    infer and verify the physical page sequence. Otherwise scans at most the first
+    ``MAX_PAGE_SCAN_PAGES`` pages on a single open PDF handle and extrapolates
+    across all pages.
     """
     if pdf_path and not os.path.isabs(pdf_path) and not os.path.exists(pdf_path):
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -755,21 +1428,139 @@ def get_physical_page_numbers_for_pdf(
     ):
         return [int(p) for p in directory_info["page_numbers"]]
 
-    spread_pairs = [detect_spread_page_pair_for_pdf_page(pdf_path, i) for i in range(total_pages)]
+    scan_count = min(total_pages, MAX_PAGE_SCAN_PAGES)
+    spread_pairs: list[tuple[int, int] | None] = []
+    detected: list[int | None] = []
+    if pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
+        try:
+            doc = pdfium.PdfDocument(pdf_path)
+            try:
+                for i in range(min(len(doc), scan_count)):
+                    sp, num, _lbl = _detect_page_number_from_page(doc[i])
+                    spread_pairs.append(sp)
+                    detected.append(num)
+            finally:
+                doc.close()
+        except Exception as e:
+            logger.debug(f"Single-handle page number scan failed for {pdf_path}: {e}")
+
     if any(sp is not None for sp in spread_pairs):
         resolved_spread: list[int] = []
-        for i, sp in enumerate(spread_pairs):
+        for i in range(total_pages):
+            sp = spread_pairs[i] if i < len(spread_pairs) else None
             if sp is not None:
                 resolved_spread.append(sp[0])
             elif resolved_spread:
                 resolved_spread.append(resolved_spread[-1] + 2)
             else:
-                d_val = detect_page_number_for_pdf_page(pdf_path, i)
-                resolved_spread.append(d_val if d_val is not None else max(1, fallback_start_page) + 2 * i)
+                d_val = detected[i] if i < len(detected) else None
+                resolved_spread.append(
+                    d_val if d_val is not None else max(1, fallback_start_page) + 2 * i
+                )
         return resolved_spread
 
-    detected = [detect_page_number_for_pdf_page(pdf_path, i) for i in range(total_pages)]
+    if len(detected) < total_pages:
+        detected.extend([None] * (total_pages - len(detected)))
     return _resolve_page_sequence(detected, fallback_start_page=fallback_start_page)
+
+
+def get_page_labels_for_pdf(
+    pdf_path: str,
+    fallback_start_page: int = 1,
+    directory_info: dict[str, Any] | None = None,
+) -> list[str]:
+    """Return one page label string per page in ``pdf_path`` (supporting Roman and Arabic numbering).
+
+    Checks sidecar ``.labels.json``, ``directory_info['page_labels']``, embedded PDF
+    ``/PageLabels``, printed Roman front-matter in header/footer text lines, and
+    finally falls back to ``get_physical_page_numbers_for_pdf``.
+
+    Args:
+        pdf_path: Path to the PDF file.
+        fallback_start_page: Default 1-based starting page number if none is detected.
+        directory_info: Optional pre-computed directory analysis dictionary.
+
+    Returns:
+        List of page label strings (e.g. ``['I', 'II', '1', '2']`` or ``['45', '46']``).
+    """
+    if pdf_path and not os.path.isabs(pdf_path) and not os.path.exists(pdf_path):
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+        cand_path = os.path.join(project_root, pdf_path)
+        if os.path.exists(cand_path):
+            pdf_path = cand_path
+
+    total_pages = get_pdf_page_count(pdf_path)
+    if total_pages == 0:
+        return [str(fallback_start_page)]
+
+    if (
+        directory_info
+        and (directory_info.get("has_any_directory") or directory_info.get("roman_prefix_count", 0) > 0)
+        and isinstance(directory_info.get("page_labels"), list)
+        and len(directory_info["page_labels"]) == total_pages
+    ):
+        return [str(x) for x in directory_info["page_labels"]]
+
+    embedded = get_pdf_page_labels(pdf_path)
+    if len(embedded) == total_pages and all(lbl for lbl in embedded):
+        if os.path.exists(f"{pdf_path}.labels.json"):
+            return embedded
+        default_seq = [str(i + 1) for i in range(total_pages)]
+        if any(roman_to_int(lbl) is not None for lbl in embedded) or embedded != default_seq:
+            return embedded
+
+    if directory_info is None and pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
+        try:
+            from backend.services.directory_service import check_document_directories
+            directory_info = check_document_directories(pdf_path, max_pages=20)
+        except Exception as e:
+            logger.debug(f"Fast directory check skipped in get_page_labels_for_pdf: {e}")
+
+    if (
+        directory_info
+        and directory_info.get("has_any_directory")
+        and isinstance(directory_info.get("page_labels"), list)
+        and len(directory_info["page_labels"]) == total_pages
+    ):
+        return [str(x) for x in directory_info["page_labels"]]
+
+    # Inspect at most MAX_PAGE_SCAN_PAGES page text lines for printed Roman front-matter labels
+    if pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
+        try:
+            doc = pdfium.PdfDocument(pdf_path)
+            try:
+                total_doc_pages = len(doc)
+                scan_count = min(total_doc_pages, MAX_PAGE_SCAN_PAGES)
+                detected_labels: list[str | None] = []
+                has_roman = False
+                for i in range(scan_count):
+                    tp = doc[i].get_textpage()
+                    txt = tp.get_text_range().strip()
+                    tp.close()
+                    lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+                    lbl = detect_page_label_from_text_lines(lines) if lines else None
+                    if lbl and roman_to_int(lbl) is not None:
+                        has_roman = True
+                    detected_labels.append(lbl)
+            finally:
+                doc.close()
+            if has_roman:
+                if len(detected_labels) < total_pages:
+                    detected_labels.extend([None] * (total_pages - len(detected_labels)))
+                return _resolve_mixed_page_labels(
+                    detected_labels, fallback_start_page=fallback_start_page
+                )
+        except Exception as e:
+            logger.debug(f"Printed Roman page label scan skipped for {pdf_path}: {e}")
+
+    return [
+        str(p)
+        for p in get_physical_page_numbers_for_pdf(
+            pdf_path,
+            fallback_start_page=fallback_start_page,
+            directory_info=directory_info,
+        )
+    ]
 
 
 def detect_physical_start_page(
@@ -878,26 +1669,37 @@ async def _run_background_extraction_locked(
         physical_start = detect_physical_start_page(input_path, directory_info=directory_info)
         task["physical_start_page"] = physical_start
 
-    if pages_str and task["extension"] == ".pdf":
-        pages = parse_page_selection(pages_str)
-        if pages:
-            # Check if this is a physical page offset selection
-            pdf_total = task.get("page_count", 0)
-            if pdf_total == 0:
-                pdf_total = get_pdf_page_count(input_path)
-            is_physical_offset = pages[-1] > pdf_total
-            if is_physical_offset:
-                # Map physical range offsets back to relative page numbers (1-based)
-                mapped_pages = [p - physical_start + 1 for p in pages]
-                if any(p < 1 or p > pdf_total for p in mapped_pages):
-                    mapped_pages = [p - pages[0] + 1 for p in pages]
-                mapped_pages_str = ",".join(str(p) for p in mapped_pages)
-            else:
-                mapped_pages = pages
-                mapped_pages_str = pages_str
+    page_labels = task.get("page_labels")
+    if not page_labels and task["extension"] == ".pdf" and os.path.exists(input_path):
+        page_labels = get_page_labels_for_pdf(
+            input_path,
+            fallback_start_page=physical_start,
+            directory_info=directory_info,
+        )
+        task["page_labels"] = page_labels
+        if isinstance(directory_info, dict):
+            directory_info["page_labels"] = page_labels
 
+    if pages_str and task["extension"] == ".pdf":
+        pdf_total = task.get("page_count", 0)
+        if pdf_total == 0:
+            pdf_total = get_pdf_page_count(input_path)
+        mapped_pages = resolve_page_selection_to_relative_indices(
+            pages_str,
+            pdf_total,
+            physical_start=physical_start,
+            page_labels=page_labels,
+        )
+        if mapped_pages:
+            mapped_pages_str = ",".join(str(p) for p in mapped_pages)
             selected_pdf_path = os.path.join(upload_dir, "selected", f"{task_id}.pdf")
-            if extract_pdf_pages(input_path, mapped_pages_str, selected_pdf_path):
+            if extract_pdf_pages(
+                input_path,
+                mapped_pages_str,
+                selected_pdf_path,
+                page_labels=page_labels,
+                is_relative_indices=True,
+            ):
                 process_path = selected_pdf_path
 
     # Count pages for progress reporting

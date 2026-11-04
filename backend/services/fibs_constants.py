@@ -21,12 +21,26 @@ SENTENCE_STARTERS: Final[frozenset[str]] = frozenset({
     "auf", "man", "sie", "er", "links", "rechts", "oben", "unten", "a", "an", "the",
 })
 
+ROMAN_NUMERAL_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?=[IVXLCDMivxlcdm]+$)M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$",
+    re.IGNORECASE,
+)
+ROMAN_VALUES: Final[dict[str, int]] = {
+    "I": 1,
+    "V": 5,
+    "X": 10,
+    "L": 50,
+    "C": 100,
+    "D": 500,
+    "M": 1000,
+}
+
 PAGE_MARKER_LINE_RE: Final[re.Pattern[str]] = re.compile(
-    r"^\(\(\d+(?:\s*[-–]\s*\d+)?\)\)[^\n]*$",
+    r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)(?:\s*[-–]\s*(?:\d+|[IVXLCDMivxlcdm]+))?\)\)[^\n]*$",
     re.MULTILINE,
 )
 PAGE_MARKER_ONLY_RE: Final[re.Pattern[str]] = re.compile(
-    r"\(\(\d+(?:\s*[-–]\s*\d+)?\)\)(?:\s*/\s*\(\(\d+\)\))?"
+    r"\(\((?:\d+|[IVXLCDMivxlcdm]+)(?:\s*[-–]\s*(?:\d+|[IVXLCDMivxlcdm]+))?\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?"
 )
 HEADING_LINE_RE: Final[re.Pattern[str]] = re.compile(r"^[ \t]*#{1,6}\s+\S", re.MULTILINE)
 IMAGE_BLOCK_RE: Final[re.Pattern[str]] = re.compile(r"<Bild>(.*?)</Bild>", re.DOTALL)
@@ -128,7 +142,9 @@ MAX_PAGES_PER_CHUNK: Final[int] = 2
 FRAME_TOKENS: Final[int] = 200
 IDLE_TIMEOUT_SECONDS: Final[float] = 60.0
 
-PAGE_MARKER_START_RE: Final[re.Pattern[str]] = re.compile(r"^\(\((\d+)\)\)", re.MULTILINE)
+PAGE_MARKER_START_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\(\(((?:\d+|[IVXLCDMivxlcdm]+))\)\)", re.MULTILINE
+)
 BLOCK_TAGS: Final[tuple[tuple[str, str], ...]] = (
     ("<Tabelle", "</Tabelle>"),
     ("<Bild>", "</Bild>"),

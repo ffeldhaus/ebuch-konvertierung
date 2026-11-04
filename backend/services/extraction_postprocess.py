@@ -49,7 +49,12 @@ def clean_html_layout_tags(text: str) -> str:
         flags=re.IGNORECASE,
     )
     # Strip trailing 'Seite N' that was inside a right-aligned footer div
-    text = re.sub(r"\n+\s*(?:Seite|Page)\s+\d+\s*(?=\n+\(\(\d+\)\)|\Z)", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\n+\s*(?:Seite|Page)\s+(?:\d+|[IVXLCDMivxlcdm]+)\s*(?=\n+\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)|\Z)",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -465,7 +470,7 @@ def _enrich_flattened_tables_with_docling(cleaned_text: str, page_tables: list[s
 def fuse_vlm_page_with_docling(
     raw_text: str,
     page_images: list[str],
-    phys_num: int,
+    phys_num: int | str,
     page_tables: list[str] | None = None,
     opening_headers: list[str] | None = None,
 ) -> str:
@@ -482,14 +487,23 @@ def fuse_vlm_page_with_docling(
     cleaned_text = convert_html_tables_to_markdown(cleaned_text)
 
     # 1. Strip running footers / page numbers at start or end of page
+    phys_str = str(phys_num).strip()
     generic_footer_patterns = [
         r"^\s*\d{1,4}\s*\n+",
-        r"\n+\s*\[?\s*(?:Seite|Page)\s+\d+\s*\]?\s*$",
+        r"\n+\s*\[?\s*(?:Seite|Page)\s+(?:\d+|[IVXLCDMivxlcdm]+)\s*\]?\s*$",
         r"\n+\s*\d{1,4}\s*$",
         r"\n+\s*(?:\d+\s+[-–—\s/|]\s+[A-ZÄÖÜa-zäöü0-9\s]{2,50}|[A-ZÄÖÜa-zäöü0-9\s]{2,50}\s+[-–—\s/|]\s+\d+)\s*$",
         r"\n+\s*\d+\s+[A-ZÄÖÜa-zäöü0-9\s]{2,50}\s*$",
         r"\n+\s*[A-ZÄÖÜa-zäöü0-9\s]{2,50}\s+\d+\s*$",
     ]
+    if phys_str and not phys_str.isdigit():
+        esc_phys = re.escape(phys_str)
+        generic_footer_patterns.extend(
+            [
+                rf"^\s*{esc_phys}\s*\n+",
+                rf"\n+\s*{esc_phys}\s*$",
+            ]
+        )
     for fp in generic_footer_patterns:
         cleaned_text = re.sub(fp, "", cleaned_text, flags=re.IGNORECASE)
 
@@ -623,7 +637,7 @@ def fuse_vlm_page_with_docling(
     # 5. Place any remaining unmatched images after top page marker or at top
     if remaining_images:
         appended_imgs = "\n\n".join([f"![](images/{fn})" for fn in remaining_images])
-        page_marker_match = re.search(r"^(\(\(\d+\)\)\s*\n+)", cleaned_text)
+        page_marker_match = re.search(r"^(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)\s*\n+)", cleaned_text)
         if page_marker_match:
             idx = page_marker_match.end()
             cleaned_text = cleaned_text[:idx] + appended_imgs + "\n\n" + cleaned_text[idx:]
@@ -631,7 +645,11 @@ def fuse_vlm_page_with_docling(
             cleaned_text = appended_imgs + "\n\n" + cleaned_text
 
     # 6. Clean stray space after hyphens in broken words (e.g. Zellkompartimen- ten -> Zellkompartimenten)
-    cleaned_text = re.sub(r"([a-zA-ZäöüÄÖÜß]{2,})-\s+([a-zäöüß][a-zA-ZäöüÄÖÜß]{2,})", r"\1\2", cleaned_text)
+    cleaned_text = re.sub(
+        r"([a-zA-ZäöüÄÖÜß]{2,})-\s+(?!und\b|oder\b|bzw\b|sowie\b|bis\b)([a-zäöüß][a-zA-ZäöüÄÖÜß]{2,})",
+        r"\1\2",
+        cleaned_text,
+    )
 
     # 7. Prepend physical page boundary marker if not already present
     if f"(({phys_num}))" not in cleaned_text:
@@ -700,6 +718,143 @@ def sanitize_runaway_repetitions(text: str) -> str:
     return "\n".join(cleaned_lines)
 
 
+def _is_preserved_lowercase_compound(part1: str, part2: str, full_text: str = "", match_start: int = 0, match_end: int = 0) -> bool:
+    """Returns True if `part1-part2` is a legitimate hyphenated compound (German, English, French, URL, CSS, acronym) rather than a line-break artifact."""
+    p1_low = part1.lower()
+    p2_low = part2.lower()
+    pair_low = f"{p1_low}-{p2_low}"
+
+    # 1. Check surrounding context for multi-hyphen chains (e.g. Ende-zu-Ende, state-of-the-art) or URLs/paths/CSS
+    if full_text and (match_start > 0 or match_end > 0):
+        before = full_text[max(0, match_start - 3) : match_start]
+        after = full_text[match_end : min(len(full_text), match_end + 15)]
+        if before.endswith("-") or before.endswith("/") or before.endswith(".") or before.endswith("@") or before.endswith("_"):
+            return True
+        if after.startswith("-") or after.startswith("/") or after.startswith(".de") or after.startswith(".com") or after.startswith(".org") or after.startswith(".net") or after.startswith(".at") or after.startswith(".ch"):
+            return True
+        line_start = full_text.rfind("\n", 0, match_start) + 1
+        line_end = full_text.find("\n", match_end)
+        if line_end == -1:
+            line_end = len(full_text)
+        line_str = full_text[line_start:line_end]
+        if "http://" in line_str or "https://" in line_str or "www." in line_str:
+            return True
+
+    # 2. Acronym / all-caps prefix (e.g. KI-generiert, IT-specialist, DNA-freie, US-amerikanisch, EU-kritisch, ARD-aktuell)
+    if (len(part1) <= 4 and part1.isupper()) or p1_low in {
+        "ki", "it", "dna", "rna", "us", "eu", "un", "co", "uv", "tv", "pc", "qr", "cd", "dvd", "ard", "zdf", "dpa", "akg", "lpb", "kn", "vw", "nr", "st", "ex", "non", "pre", "post", "co", "re", "pro", "anti", "sub", "super", "mini", "multi", "inter", "trans", "ultra", "neo", "pseudo", "semi", "self", "well", "low", "high", "top", "bottom", "full", "part", "long", "short", "real", "next", "check", "warm", "close", "pop", "stand", "test", "pat", "cut", "fact", "user", "world", "two", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    }:
+        return True
+
+    # 3. Single-letter variable or math prefix (x-Achse, y-Achse, p-q-Formel)
+    if len(part1) == 1 or len(part2) == 1:
+        return True
+
+    # 4. Exact whitelist of German, English, French, and technical lowercase compounds
+    exact_whitelist = {
+        "rot-weiß", "schwarz-weiß", "blau-weiß", "gelb-schwarz", "grün-weiß", "rot-grün", "schwarz-gelb", "schwarz-rot",
+        "links-rechts", "oben-unten", "ost-west", "nord-süd", "mehr-weniger", "je-desto", "mathe-fit", "fix-weg",
+        "dum-dum", "bestell-nr", "ende-zu", "punkt-zu", "punkt-vor", "schritt-für", "eins-zu", "power-to", "face-to",
+        "fragen-und", "manfred-von", "leopold-von", "check-in", "check-up", "warm-up", "close-up", "pop-up", "pop-ups",
+        "stand-by", "to-do", "test-run", "e-mail", "on-line", "up-to-date", "well-known", "self-confident",
+        "simple-minded", "long-time", "full-time", "part-time", "real-time", "long-term", "short-term", "high-tech",
+        "low-cost", "low-res", "next-gen", "mini-drones", "super-smart", "pat-down", "top-down", "bottom-up",
+        "ground-breaking", "cutting-edge", "fact-checking", "user-generated", "validation-seeking", "world-wide",
+        "two-thirds", "co-worker", "re-read", "pre-war", "post-war", "non-fiction", "extinction-level",
+        "peut-être", "rendez-vous", "week-end", "grand-mère", "grand-père", "demi-heure", "aujourd'hui",
+        "celui-ci", "celle-ci", "ceux-ci", "là-bas", "vis-à-vis", "tête-à-tête", "est-ce", "vas-tu", "as-tu",
+        "background-color", "border-style", "border-color", "border-collapse", "border-width", "font-family",
+        "font-size", "text-align", "line-height", "mildenberger-verlag", "das-uebungsheft", "blinde-kuh",
+        "regenwald-schuetzen", "supra-lernplattform", "steckbrief-katta", "meine-startseite",
+    }
+    if pair_low in exact_whitelist:
+        return True
+
+    # 5. Co-equal adjective compounds (e.g. deutsch-französische, römisch-katholischen, wissenschaftlich-kritische, nicht-konstante)
+    adj_prefixes = (
+        "deutsch-", "englisch-", "französisch-", "polnisch-", "russisch-", "österreichisch-", "britisch-",
+        "römisch-katholisch", "evangelisch-lutherisch", "sozial-ökologisch", "wissenschaftlich-technisch",
+        "wissenschaftlich-kritisch", "geistig-seelisch", "körperlich-geistig", "politisch-gesellschaftlich",
+        "wirtschaftlich-sozial", "historisch-politisch", "mathematisch-naturwissenschaftlich",
+        "imperial-militärisch", "bürgerlich-konservativ", "marxistisch-sozialistisch",
+        "demokratisch-parlamentarisch", "parlamentarisch-demokratisch", "kleinbürgerlich-engstirnig",
+        "gebrochen-rational", "nicht-konstant", "nicht-codierend", "nicht-religiös", "nicht-wirklich",
+        "wild-gefangen", "verantwortlich-sein",
+    )
+    if any(pair_low.startswith(pref) for pref in adj_prefixes):
+        # Ensure part2 isn't truncated right in the middle of a stem like 'römisch-katho'
+        if pair_low == "römisch-katho":
+            return False
+        return True
+
+    return False
+
+
+def dehyphenate_inline_broken_words(text: str, pdf_path: str | None = None) -> str:
+    """Joins broken mid-word German line-break hyphens (`part1-part2` where `part2` starts with lowercase).
+
+    If `pdf_path` is provided, inspects the PDF text layer to find words split by `\\u00ad`, `\\ufffe`,
+    or line-end `-\\r?\\n` and unconditionally joins those exact pairs, then joins remaining syllabic
+    line-break artifacts while preserving legitimate lowercase hyphenated compounds.
+    """
+    if not text:
+        return text
+
+    pdf_split_pairs: set[tuple[str, str]] = set()
+    pdf_unbroken_lower: set[str] = set()
+    if pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
+        try:
+            import pypdfium2 as pdfium
+            pdoc = pdfium.PdfDocument(pdf_path)
+            for page in pdoc:
+                raw_pt = page.get_textpage().get_text_range() or ""
+                # Normalize control-char ligatures (\x13/\x16 -> ff, \x14 -> fi, \x15 -> fl)
+                raw_pt = raw_pt.replace("\x13", "ff").replace("\x16", "ff").replace("\x14", "fi").replace("\x15", "fl")
+                # Collect tokens containing \u00ad or \ufffe (including multi-soft-hyphen words)
+                for tok in re.findall(r"[a-zA-ZäöüÄÖÜß]+(?:[\u00ad\ufffe-][a-zA-ZäöüÄÖÜß]+)+", raw_pt):
+                    if "\u00ad" in tok or "\ufffe" in tok:
+                        subparts = re.split(r"[\u00ad\ufffe]+", tok)
+                        for idx in range(len(subparts) - 1):
+                            left = "".join(subparts[: idx + 1]).lstrip("-")
+                            right = "".join(subparts[idx + 1 :]).rstrip("-")
+                            if len(left) >= 2 and len(right) >= 2:
+                                pdf_split_pairs.add((left, right))
+                            if len(subparts[idx]) >= 2 and len(subparts[idx + 1]) >= 2:
+                                pdf_split_pairs.add((subparts[idx], subparts[idx + 1]))
+                # Also collect line-break splits across \r?\n
+                for m in re.finditer(
+                    r"([a-zA-ZäöüÄÖÜß]{2,})(?:[\u00ad\ufffe]\s*|\-\s*\r?\n\s*)([a-zäöüß][a-zA-ZäöüÄÖÜß]{1,})",
+                    raw_pt,
+                ):
+                    pdf_split_pairs.add((m.group(1), m.group(2)))
+                cleaned_pt = re.sub(r"[\u00ad\ufffe]", "", raw_pt)
+                for w in re.findall(r"\b[a-zA-ZäöüÄÖÜß]{4,}\b", cleaned_pt):
+                    pdf_unbroken_lower.add(w.lower())
+            pdoc.close()
+        except Exception:
+            pass
+
+    def _replace_match(m: re.Match) -> str:
+        part1 = m.group(1)
+        part2 = m.group(2)
+        if (part1, part2) in pdf_split_pairs:
+            return part1 + part2
+        if _is_preserved_lowercase_compound(part1, part2, text, m.start(), m.end()):
+            return m.group(0)
+        if (part1 + part2).lower() in pdf_unbroken_lower:
+            return part1 + part2
+        return part1 + part2
+
+    # Run two passes so words with two broken hyphens (e.g. 'Ko-ordina-tensystem') are fully joined
+    out = text
+    for _ in range(2):
+        next_out = re.sub(r"\b([a-zA-ZäöüÄÖÜß]{2,})-([a-zäöüß][a-zA-ZäöüÄÖÜß]{1,})\b", _replace_match, out)
+        if next_out == out:
+            break
+        out = next_out
+    return out
+
+
 def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) -> str:
     """Subtask 1: Text-Truncation & De-Hyphenation Recovery
     - Strips PDF print-production slugs (.indd timestamps), soft hyphens (\u00ad, \ufffe), and PUA glyphs.
@@ -715,7 +870,7 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
     # 0a. If a digital PDF page was largely swallowed into a picture bbox (< 25 words extracted and PDF has > 2x tokens),
     #     recover the embedded PDF text layer lines via pypdfium2.
     if pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
-        clean_no_imgs = re.sub(r"!\[.*?\]\(.*?\)|\(\(\d+\)\)", "", processed)
+        clean_no_imgs = re.sub(r"!\[.*?\]\(.*?\)|\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)", "", processed)
         extracted_tokens = re.findall(r"\S{2,}", clean_no_imgs)
         if len(extracted_tokens) < 25:
             try:
@@ -738,9 +893,22 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
             except Exception:
                 pass
 
-    # 0b. Strip InDesign print-production slug lines (e.g. 'DO01_...indd 18 11.11.2025 15:08:08')
+    # 0b. Strip InDesign print-production slug lines and inline fragments
+    # (e.g. 'DO01_...indd 18 11.11.2025 15:08:08', '110796_...indd 26-27 12.07.2021 15:46:49 Uhr © ...', '01_..._Inhalt_S001 1 20.06.2023 11:02:30')
     processed = re.sub(
-        r"(?m)^[ \t]*\S+\.indd[ \t]+\d{1,4}[ \t]+\d{2}\.\d{2}\.\d{4}(?:[ \t]+\d{2}:\d{2}(?::\d{2})?)?[ \t]*\n?",
+        r"(?m)^[ \t]*\S+\.indd[ \t]+\d{1,4}(?:[–-]\d{1,4})?[ \t]+\d{2}\.\d{2}\.\d{4}(?:[ \t]+\d{2}:\d{2}(?::\d{2})?(?:[ \t]*Uhr)?)?(?:[ \t]*©[^\n]*)?[ \t]*\n?",
+        "",
+        processed,
+        flags=re.IGNORECASE,
+    )
+    processed = re.sub(
+        r"\S+\.indd\s+\d{1,4}(?:[–-]\d{1,4})?\s+\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?(?:\s*Uhr)?)?(?:\s*©[^\n]*)?",
+        "",
+        processed,
+        flags=re.IGNORECASE,
+    )
+    processed = re.sub(
+        r"\S*_Inhalt_S\d+\s+\d+\s+\d{2}\.\d{2}\.\d{4}[^\n]*",
         "",
         processed,
         flags=re.IGNORECASE,
@@ -749,42 +917,55 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
     processed = re.sub(r"[\ue000-\uf8ff]", "", processed)
     # 0c. Normalize PDF soft hyphens (\u00ad) and \ufffe hyphenation markers
     processed = re.sub(r"([a-zA-ZäöüÄÖÜß])[\u00ad\ufffe][ \t]*(?=\n)", r"\1-", processed)
-    processed = re.sub(r"([a-zA-ZäöüÄÖÜß])[\u00ad\ufffe]([a-zäöüß])", r"\1\2", processed)
+    while re.search(r"([a-zA-ZäöüÄÖÜß])[\u00ad\ufffe]([a-zäöüß])", processed):
+        processed = re.sub(r"([a-zA-ZäöüÄÖÜß])[\u00ad\ufffe]([a-zäöüß])", r"\1\2", processed)
     processed = processed.replace("\u00ad", "").replace("\ufffe", "-")
 
     # 1. Join hyphenated words split across lines and page boundaries (including spread markers ((N)) / ((N+1)))
-    hyphen_pattern = r"([a-zA-ZäöüÄÖÜß]{2,})-[ \t]*\n+(?:(\(\(\d+\)\)(?:\s*/\s*\(\(\d+\)\))?)[ \t]*\n+)?[ \t]*([a-zA-ZäöüÄÖÜß]{2,})([.,;:!?])?[ \t]*"
+    hyphen_pattern = r"([a-zA-ZäöüÄÖÜß]{2,})-[ \t]*\n+(?:(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)[ \t]*\n+)?[ \t]*([a-zA-ZäöüÄÖÜß]{2,})([.,;:!?])?[ \t]*"
 
     def replace_hyphen(match: re.Match) -> str:
         part1 = match.group(1)
         page_break = match.group(2)
         part2 = match.group(3)
         punct = match.group(4) or ""
-        if part2 and part2[0].isupper() and part1[-1].islower():
-            part2 = part2[0].lower() + part2[1:]
-        joined = part1 + part2 + punct
+        if part2.lower() in {"und", "oder", "bzw", "sowie", "bis"}:
+            joined = f"{part1}- {part2}{punct} "
+        elif part1[0].isupper() and part2 in {
+            "Hütte", "Tor", "Straße", "Weg", "Platz", "See", "Fluss", "Berg", "Gebirge",
+            "Insel", "Halbinsel", "Kanal", "Meer", "Ozean", "Wüste", "Becken", "Tal",
+            "Achse", "Formel", "Satz", "Regel", "Gesetz", "Effekt", "Modell", "System",
+            "Test", "Check", "Rumpf", "Länge", "Editor", "Institut", "Krieg", "Chef",
+        }:
+            joined = f"{part1}-{part2}{punct}"
+        else:
+            if part2 and part2[0].isupper() and part1[-1].islower():
+                part2 = part2[0].lower() + part2[1:]
+            joined = part1 + part2 + punct
         if page_break:
-            return f"{joined}\n\n{page_break}\n\n"
+            return f"{joined.rstrip()}\n\n{page_break}\n\n"
         return joined
 
     processed = re.sub(hyphen_pattern, replace_hyphen, processed)
     # Also repair pre-joined cross-page camelCase hyphenations (e.g. 'SelbstaufGabe ((86))\n. Dieser' -> 'Selbstaufgabe.\n\n((86))\n\nDieser')
     processed = re.sub(
-        r"\b([A-ZÄÖÜa-zäöüß]{2,}[a-zäöüß])([A-ZÄÖÜ][a-zäöüß]{2,})[ \t]+(\(\(\d+\)\))[ \t]*\n+[ \t]*([.,;:!?])[ \t]*",
+        r"\b([A-ZÄÖÜa-zäöüß]{2,}[a-zäöüß])([A-ZÄÖÜ][a-zäöüß]{2,})[ \t]+(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))[ \t]*\n+[ \t]*([.,;:!?])[ \t]*",
         lambda m: f"{m.group(1)}{m.group(2).lower()}{m.group(4)}\n\n{m.group(3)}\n\n",
         processed,
     )
     # Join in-line hyphenated words with spaces where second part starts with lowercase (e.g. 'Brechungs- winkel' -> 'Brechungswinkel')
     processed = re.sub(
-        r"\b([a-zA-ZäöüÄÖÜß]{3,})-\s+([a-zäöüß][a-zA-ZäöüÄÖÜß]{2,})\b",
+        r"\b([a-zA-ZäöüÄÖÜß]{3,})-\s+(?!und\b|oder\b|bzw\b|sowie\b|bis\b)([a-zäöüß][a-zA-ZäöüÄÖÜß]{2,})\b",
         r"\1\2",
         processed,
     )
+    # Join broken mid-word inline hyphens (e.g. 'Aufga-ben' -> 'Aufgaben')
+    processed = dehyphenate_inline_broken_words(processed, pdf_path=pdf_path)
 
     # 1b. Rejoin 2-column split paragraphs when a mid-page table/figure block displaced the column-2 continuation:
     # e.g. Paragraph 1 ends with 'Reaktionsgeschwindig-' followed by a table/figure block and then a paragraph starting with 'keit v von der...'
     displaced_col2_re = re.compile(
-        r"([a-zA-ZäöüÄÖÜß]{3,})-[ \t]*\n\n((?:(?!(?:\(\(\d+\)\))).)+?)\n\n([a-zäöüß]{2,}\b[^\n]+(?:\n(?![ \t]*(?:\n|#{1,6}\s|\(\(|\||!\[|<))[^\n]+)*)",
+        r"([a-zA-ZäöüÄÖÜß]{3,})-[ \t]*\n\n((?:(?!(?:\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))).)+?)\n\n([a-zäöüß]{2,}\b[^\n]+(?:\n(?![ \t]*(?:\n|#{1,6}\s|\(\(|\||!\[|<))[^\n]+)*)",
         re.DOTALL,
     )
     processed = displaced_col2_re.sub(r"\1\3\n\n\2", processed)
@@ -798,8 +979,14 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
             merged_lines
             and s
             and merged_lines[-1].strip()
-            and not re.match(r"^(?:#{1,6}\s|\(\(\d+\)\)|[-*•]\s|\d+\.\s|[a-z]\)\s|\||<|!\[|\[?\d+\]\s)", s)
-            and not re.match(r"^(?:#{1,6}\s|\(\(\d+\)\)|\||<|!\[|\*\*.*\*\*$)", merged_lines[-1].strip())
+            and not re.match(
+                r"^(?:#{1,6}\s|\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)|[-*•]\s|\d+\.\s|[a-z]\)\s|\||<|!\[|\[?\d+\]\s)",
+                s,
+            )
+            and not re.match(
+                r"^(?:#{1,6}\s|\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)|\||<|!\[|\*\*.*\*\*$)",
+                merged_lines[-1].strip(),
+            )
             and re.search(r"[a-zA-Z0-9äöüÄÖÜß,;:\)\]\"']$", merged_lines[-1].strip())
             and re.match(r"^[a-zäöüß\(\[\"'\$\<]", s)
         ):
@@ -1818,7 +2005,7 @@ def recover_table_truncation(markdown_content: str) -> str:
     )
 
     # 5. Merge HTML tables split across page breaks: </table>\n\n((46))\n\n<table>
-    html_split_pattern = r"</table>\s*\n+(?:(\(\(\d+\)\))\s*\n+)?\s*<table\b[^>]*>"
+    html_split_pattern = r"</table>\s*\n+(?:(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))\s*\n+)?\s*<table\b[^>]*>"
 
     def merge_html_tables(match):
         page_marker = match.group(1)
@@ -1960,8 +2147,10 @@ def clean_running_headers_and_footers(markdown_content: str, content_list_path: 
         core = re.sub(r"\s+", " ", core).strip().lower()
         return core, had_number, is_heading
 
-    pages = re.split(r"(\(\(\d+\)\))", markdown_content)
-    segments = [i for i in range(len(pages)) if not re.match(r"^\(\(\d+\)\)$", pages[i])]
+    pages = re.split(r"(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))", markdown_content)
+    segments = [
+        i for i in range(len(pages)) if not re.match(r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)$", pages[i])
+    ]
 
     def _boundary_positions(seg: str) -> list[tuple[int, str]]:
         r"""Indices (within seg.split('\n')) of the first/last non-image lines plus their position tag."""
@@ -2009,7 +2198,7 @@ def clean_running_headers_and_footers(markdown_content: str, content_list_path: 
     cleaned_pages = []
     current_page_num = None
     for part in pages:
-        m_pg = re.match(r"^\(\((\d+)\)\)$", part)
+        m_pg = re.match(r"^\(\((\d+|[IVXLCDMivxlcdm]+)\)\)$", part)
         if m_pg:
             current_page_num = m_pg.group(1)
             cleaned_pages.append(part)
@@ -2022,7 +2211,7 @@ def clean_running_headers_and_footers(markdown_content: str, content_list_path: 
         new_lines = []
         for i, line in enumerate(lines):
             stripped = line.strip()
-            if current_page_num and stripped == current_page_num:
+            if current_page_num and stripped.lower() == current_page_num.lower():
                 continue
             if i in boundary_idx:
                 if i in outermost and number_only.match(stripped):
@@ -2111,7 +2300,7 @@ def apply_extraction_postprocess(
 
     # Step 0: Inject page numbers from metadata JSON if not already present so page-boundary
     # running header cleanup and cross-page de-hyphenation operate on accurate ((num)) boundaries.
-    if not re.search(r"\(\(\d+\)\)", result):
+    if not re.search(r"\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)", result):
         if content_list_path and os.path.exists(content_list_path):
             try:
                 from backend.services.extraction_service import insert_page_numbers_from_metadata

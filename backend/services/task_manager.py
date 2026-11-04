@@ -58,6 +58,7 @@ class Task:
     lang: str | None = None
     engine: str | None = "infinity"
     physical_start_page: int = 1
+    page_labels: list[str] = field(default_factory=list)
     directory_info: dict | None = None
     is_abort_requested: bool = False
     created_at: float = field(default_factory=time.time)
@@ -134,6 +135,7 @@ class Task:
             "method": self.method,
             "lang": self.lang,
             "physical_start_page": self.physical_start_page,
+            "page_labels": self.page_labels,
             "directories": self.directory_info,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -165,6 +167,7 @@ class Task:
                 "lang": self.lang,
                 "page_count": self.page_count,
                 "physical_start_page": self.physical_start_page,
+                "page_labels": self.page_labels,
                 "directory_info": self.directory_info,
                 "created_at": self.created_at,
                 "started_at": self.started_at,
@@ -235,6 +238,7 @@ class Task:
             "method": self.method,
             "lang": self.lang,
             "physical_start_page": self.physical_start_page,
+            "page_labels": self.page_labels,
             "directories": self.directory_info,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -372,6 +376,11 @@ class TaskManager:
             engine=meta.get("engine", "infinity"),
             page_count=meta.get("page_count", 0),
             physical_start_page=meta.get("physical_start_page", 1),
+            page_labels=list(
+                meta.get("page_labels")
+                or (dir_info.get("page_labels") if isinstance(dir_info, dict) else None)
+                or []
+            ),
             directory_info=dir_info,
             created_at=created_at,
             started_at=started_at,

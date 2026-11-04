@@ -65,6 +65,14 @@ def _find_font_file(candidates: List[str]) -> Optional[str]:
         "/System/Library/Fonts",
         "C:/Windows/Fonts",
     ]
+    try:
+        import matplotlib
+
+        mpl_ttf = os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf")
+        if os.path.isdir(mpl_ttf):
+            search_dirs.insert(0, mpl_ttf)
+    except Exception:
+        pass
     for candidate in candidates:
         if os.path.isabs(candidate) and os.path.exists(candidate):
             return candidate
@@ -3726,6 +3734,55 @@ def generate_multi_format_figures() -> Dict[str, str]:
     im_map.save(cc0_map_path, "PNG")
     figs["fig_openstax_cc0_map"] = cc0_map_path
 
+    # 5. Physik Gesamtwerk Abb. 1.1 (Kinematik s(t) & v(t) Diagramm): 900 x 320 px
+    kin_path = os.path.join(FIGURES_DIR, "physik_kinematik_diagramm.png")
+    im_kin = make_vertical_gradient(900, 320, (240, 249, 255), (219, 234, 254), grain=2.5)
+    draw_k = ImageDraw.Draw(im_kin)
+    draw_k.rounded_rectangle([10, 10, 890, 310], radius=12, outline=(30, 58, 138), width=3)
+    draw_k.text((28, 20), "Gleichmäßig beschleunigte Bewegung (a = 0,80 m/s²): Weg-Zeit- und Geschwindigkeits-Zeit-Gesetz", fill=(30, 58, 138), font=f_b)
+    # Left plot: s(t) = 0.5 * a * t^2
+    draw_k.rectangle([36, 54, 430, 286], fill=(255, 255, 255), outline=(148, 163, 184), width=2)
+    draw_k.line([(70, 260), (410, 260)], fill=(15, 23, 42), width=2)
+    draw_k.line([(70, 260), (70, 70)], fill=(15, 23, 42), width=2)
+    draw_k.text((82, 66), "Weg s(t) = ½ a t² (Parabel)", fill=(29, 78, 216), font=f_b)
+    s_pts = [(70 + int(i * 3.1), 260 - int(0.017 * (i ** 2))) for i in range(0, 105)]
+    draw_k.line(s_pts, fill=(29, 78, 216), width=4)
+    # Right plot: v(t) = a * t
+    draw_k.rectangle([466, 54, 864, 286], fill=(255, 255, 255), outline=(148, 163, 184), width=2)
+    draw_k.line([(500, 260), (840, 260)], fill=(15, 23, 42), width=2)
+    draw_k.line([(500, 260), (500, 70)], fill=(15, 23, 42), width=2)
+    draw_k.text((512, 66), "Geschwindigkeit v(t) = a · t (Ursprungsgerade)", fill=(220, 38, 38), font=f_b)
+    draw_k.polygon([(500, 260), (810, 260), (810, 96)], fill=(254, 226, 226))
+    draw_k.line([(500, 260), (810, 96)], fill=(220, 38, 38), width=4)
+    draw_k.text((620, 215), "Fläche = Weg Δs", fill=(185, 28, 28), font=f_b)
+    im_kin.save(kin_path, "PNG")
+    figs["fig_gesamt_1"] = kin_path
+
+    # 6. Physik Gesamtwerk Abb. 2.1 (Maxwell-Boltzmann-Verteilung): 900 x 320 px
+    mb_path = os.path.join(FIGURES_DIR, "physik_maxwell_boltzmann.png")
+    im_mb = make_vertical_gradient(900, 320, (254, 249, 195), (254, 215, 170), grain=2.5)
+    draw_mb = ImageDraw.Draw(im_mb)
+    draw_mb.rounded_rectangle([10, 10, 890, 310], radius=12, outline=(154, 52, 18), width=3)
+    draw_mb.text((28, 20), "Maxwell-Boltzmann-Geschwindigkeitsverteilung f(v) für T₁ = 300 K und T₂ = 900 K", fill=(124, 45, 18), font=f_b)
+    draw_mb.rectangle([42, 54, 858, 286], fill=(255, 255, 255), outline=(180, 83, 9), width=2)
+    ox_m, oy_m = 80, 260
+    draw_mb.line([(ox_m, oy_m), (835, oy_m)], fill=(15, 23, 42), width=2)
+    draw_mb.line([(ox_m, oy_m), (ox_m, 68)], fill=(15, 23, 42), width=2)
+    pts_300 = []
+    pts_900 = []
+    for step in range(0, 720, 4):
+        u = step / 140.0
+        y300 = 240.0 * (u ** 2) * math.exp(-0.95 * (u ** 2))
+        y900 = 115.0 * (u ** 2) * math.exp(-0.38 * (u ** 2))
+        pts_300.append((ox_m + step, int(oy_m - y300)))
+        pts_900.append((ox_m + step, int(oy_m - y900)))
+    draw_mb.line(pts_300, fill=(37, 99, 235), width=4)
+    draw_mb.line(pts_900, fill=(220, 38, 38), width=4)
+    draw_mb.text((220, 78), "T₁ = 300 K (Blau: scharfes Maximum bei v_w ≈ 420 m/s)", fill=(29, 78, 216), font=f_b)
+    draw_mb.text((430, 136), "T₂ = 900 K (Rot: flachere Kurve, v_w verschoben)", fill=(185, 28, 28), font=f_b)
+    im_mb.save(mb_path, "PNG")
+    figs["fig_gesamt_2"] = mb_path
+
     return figs
 
 
@@ -4106,7 +4163,7 @@ def build_sek2_mathematik_analysis_pdf(
     c.drawString(42, ph - 543, "besitzt im Punkt W(2 | 4) einen Wendepunkt und hat dort die Steigung m = -3.")
     c.drawString(52, ph - 558, "a) Stellen Sie das lineare Gleichungssystem auf und weisen Sie nach, dass p(x) = 0,5 x³ - 3 x² + 3 x + 0")
     c.drawString(64, ph - 571, "bzw. mit angepasstem Koeffizienten die Bedingungen erfüllt.")
-    c.drawString(52, ph - 586, "b) Berechnen Sie den Inhalt der Fläche, die der Graph von f(x) aus Abb. 2.1 mit der")
+    c.drawString(52, ph - 586, "b) Ermitteln Sie das Flächenmaß des Gebiets, welches der Graph von f(x) aus Abb. 2.1 mit der")
     c.drawString(64, ph - 599, "Wendetangente und der y-Achse im ersten Quadranten einschließt.")
     c.drawString(42, ph - 620, "Hinweis zur Selbstkontrolle: Nutzen Sie für Teilaufgabe b) die Differenzfunktion d(x) = f(x) - t_W(x)")
     c.drawString(42, ph - 633, "und bestimmen Sie vor der Integration die Schnittstellen im Intervall [0; 4].")
@@ -4431,6 +4488,917 @@ def sanitize_openstax_history_cc0_map(fonts: Dict[str, str], cc0_map_path: str) 
         os.remove(fig327_tmp_path)
 
     generate_scanned_pdf(hist_pdf_path, hist_scan_path, seed=503)
+
+
+def _get_sek2_physik_gesamtwerk_pages() -> List[Dict[str, Any]]:
+    """Returns the structured 20-page specification (Roman I–V front matter + Arabic 1–15 chapters 1 & 2)
+    for `sek2_physik_gesamtwerk.pdf` so PDF text and Golden Markdown are 100% synchronized.
+    """
+    return [
+        # ==================== PAGE I (idx=0): Titelseite & Impressum ====================
+        {
+            "label": "I",
+            "header": "I   |   Physik Oberstufe · Gesamtband: Titelseite und Konzeption",
+            "blocks": [
+                ("h1", "Physik Oberstufe – Gesamtband: Mechanik, Thermodynamik und Elektrodynamik"),
+                ("h2", "Konzeption und Aufbau des Lehrwerks für die Qualifikationsphase"),
+                ("p", [
+                    "Dieses zweisemestrige Lehr- und Arbeitsbuch begleitet Schülerinnen und Schüler durch die",
+                    "zentralen Themenfelder der klassischen und modernen Physik in der gymnasialen Oberstufe.",
+                    "Der erste Hauptteil widmet sich der Kinematik, den Newtonschen Bewegungsgesetzen, den",
+                    "Erhaltungssätzen für mechanische Energie und linearen Impuls sowie der Kreisbewegung im",
+                    "homogenen und radialsymmetrischen Gravitationsfeld.",
+                ]),
+                ("p", [
+                    "Der zweite Hauptteil führt systematisch in die statistische Deutung der Temperatur, die",
+                    "Zustandsgleichung idealer Gase, den ersten und zweiten Hauptsatz der Wärmelehre, kalorime-",
+                    "trische Präzisionsmessungen sowie technische Kreisprozesse und den Begriff der Entropie ein.",
+                    "Alle vorangestellten Verzeichnisse auf den römisch paginierten Vorsatzseiten I bis V verweisen",
+                    "unmittelbar auf die arabischen Buchseiten 1 bis 15 der beiden Fachkapitel.",
+                ]),
+                ("box", "Impressum und Lizenzhinweis (Open Educational Resources CC0 1.0)", [
+                    "Lizenzstatus: Gemeinfreies Lehrwerk (Creative Commons CC0 1.0 Universal Public Domain).",
+                    "Gliederung der Vorsatzseiten: Römische Seitenzahlen I bis V für Titel, Vorwort und Verzeichnisse.",
+                    "Gliederung des Hauptteils: Arabische Seitenzahlen 1 bis 9 (Kapitel 1) und 10 bis 15 (Kapitel 2).",
+                    "Didaktische Struktur: Jedes Teilkapitel verbindet Realexperimente, Diagramme, Tabellen und Aufgaben.",
+                    "Mathematische Konvention: Physikalische Größen, Vektorpfeile und Einheiten folgen DIN 1304 und SI.",
+                    "Barrierefreie Übertragung: Vollständige Verzeichnis-, Überschriften- und Seitenreferenzierung.",
+                ]),
+            ],
+        },
+        # ==================== PAGE II (idx=1): Vorwort ====================
+        {
+            "label": "II",
+            "header": "II   |   Physik Oberstufe · Gesamtband: Vorwort und Arbeitshinweise",
+            "blocks": [
+                ("h1", "Vorwort und Hinweise zur Arbeit mit diesem Buch"),
+                ("h2", "Didaktische Leitlinien und Kompetenzbereiche im Physikunterricht"),
+                ("p", [
+                    "Physikalische Erkenntnis entsteht im Wechselspiel zwischen präziser Naturbeobachtung,",
+                    "quantitativer Messung im Schüler- oder Demonstrationsexperiment und mathematischer",
+                    "Modellbildung. Zu Beginn jedes Abschnitts stellt eine leitende Fragestellung den Bezug",
+                    "zu Alltagsphänomenen, historischen Schlüsselversuchen oder technischen Anwendungen her.",
+                    "Darauf aufbauend werden Messreihen in übersichtlichen Datentabellen dokumentiert und",
+                    "mithilfe von Ursprungsgeraden, Parabeln oder Exponentialkurven grafisch ausgewertet.",
+                ]),
+                ("p", [
+                    "Besonderes Gewicht liegt auf dem sicheren Umgang mit Größen, Messunsicherheiten und",
+                    "Kontrollrechnungen. Wenn im Unterricht einzelne Kapitel oder Seitenbereiche separat",
+                    "bearbeitet oder barrierefrei übertragen werden, ermöglichen das Inhaltsverzeichnis,",
+                    "das Abbildungsverzeichnis, das Bildverzeichnis und das Tabellenverzeichnis auf den",
+                    "Seiten III bis V jederzeit eine eindeutige Zuordnung aller Überschriften und Buchseiten.",
+                ]),
+                ("box", "Strukturelemente und Orientierungshilfen im Lehrbuch", [
+                    "Leitexperimente und Versuchsprotokolle: Beschreiben Versuchsaufbau, Durchführung und Messwerte.",
+                    "Merksätze: Fassen zentrale Naturgesetze, Definitionsgleichungen und Gültigkeitsgrenzen zusammen.",
+                    "Methoden-Kästen: Erläutern Auswerteverfahren wie lineare Regression, Fehlerfortpflanzung und Kalorimetrie.",
+                    "Übungsaufgaben: Bieten gestufte Berechnungs-, Begründungs- und Transferaufträge zu jedem Teilkapitel.",
+                    "Querverweise: Verknüpfen Diagramme (Abb.), Realaufbauten (Bild) und Messwerttabellen (Tab.) kapitelübergreifend.",
+                ]),
+            ],
+        },
+        # ==================== PAGE III (idx=2): Inhaltsverzeichnis ====================
+        {
+            "label": "III",
+            "header": "III   |   Physik Oberstufe · Gesamtband: Inhaltsverzeichnis",
+            "blocks": [
+                ("dir_toc", "Inhaltsverzeichnis", [
+                    (48, "SansBold", 10.0, "Kapitel 1: Mechanik und Dynamik der Bewegungen", 1),
+                    (64, "SansBold", 9.3, "1.1 Kinematik geradliniger Bewegungen", 1),
+                    (64, "SansBold", 9.3, "1.2 Newtonsche Axiome und Kraftgesetze", 3),
+                    (84, "Sans", 9.0, "Experimentelle Bestimmung der Federkonstante", 4),
+                    (104, "SansOblique", 8.8, "Fehlerbetrachtung bei der Dehnungsmessung", 5),
+                    (64, "SansBold", 9.3, "1.3 Energieerhaltung und Impulssatz", 6),
+                    (64, "SansBold", 9.3, "1.4 Kreisbewegung und Gravitationsfeld", 8),
+                    (48, "SansBold", 10.0, "Kapitel 2: Thermodynamik und Wärmekraftmaschinen", 10),
+                    (64, "SansBold", 9.3, "2.1 Temperatur, Teilchenmodell und ideale Gase", 10),
+                    (64, "SansBold", 9.3, "2.2 Erster Hauptsatz der Thermodynamik", 12),
+                    (84, "Sans", 9.0, "Kalorimetrische Messung der spezifischen Wärmekapazität", 13),
+                    (104, "SansOblique", 8.8, "Wärmeaustausch mit dem Kalorimetergefäß", 14),
+                    (64, "SansBold", 9.3, "2.3 Entropie und Kreisprozesse", 15),
+                ]),
+                ("box", "Lernwegweiser durch die Kurshalbjahre Mechanik und Thermodynamik", [
+                    "Kapitel 1 (Buchseiten 1 bis 9, PDF-Seiten 6 bis 14): Behandelt Kinematik, Kräfte, Energie, Impuls und Gravitation.",
+                    "Kapitel 2 (Buchseiten 10 bis 15, PDF-Seiten 15 bis 20): Behandelt ideale Gase, Hauptsätze, Kalorimetrie und Kreisprozesse.",
+                    "Hierarchische Gliederung: Hauptkapitel stehen auf Ebene 1, Dezimalabschnitte auf Ebene 2, Vertiefungen auf Ebene 3 und 4.",
+                    "Experimentelle Schwerpunkte: Luftkissenfahrbahn (S. 2), Hooke’sche Federkennlinie (S. 4–5) und Mischungskalorimeter (S. 13–14).",
+                    "Hinweis zur Seitennavigation: Die ersten fünf Seiten tragen römische Zahlen (I–V), danach beginnt Kapitel 1 mit Seite 1.",
+                ]),
+            ],
+        },
+        # ==================== PAGE IV (idx=3): Abbildungs- & Bildverzeichnis ====================
+        {
+            "label": "IV",
+            "header": "IV   |   Physik Oberstufe · Gesamtband: Abbildungs- und Bildverzeichnis",
+            "blocks": [
+                ("dir_sub", "Abbildungsverzeichnis", [
+                    "Abb. 1.1: Weg-Zeit- und Geschwindigkeits-Zeit-Diagramm der gleichmäßig beschleunigten Bewegung .... 1",
+                    "Abb. 1.2: Kräfteparallelogramm und Dehnungskennlinie einer Schraubenfeder ......................... 4",
+                    "Abb. 1.3: Radialkraft und Bahngeschwindigkeit bei der gleichförmigen Kreisbewegung ................ 8",
+                    "Abb. 2.1: Maxwell-Boltzmann-Geschwindigkeitsverteilung idealer Gasmoleküle ........................ 10",
+                    "Abb. 2.2: Druck-Volumen-Diagramm des Carnot-Kreisprozesses mit Isothermen und Adiabaten ........... 15",
+                ]),
+                ("dir_sub", "Bildverzeichnis", [
+                    "Bild 1.1: Luftkissenfahrbahn mit Lichtschranken zur reibungsfreien Kinematikmessung ............... 2",
+                    "Bild 1.2: Elastischer Zentralstoß zweier Stahlkugeln auf der Horizontalschiene .................... 6",
+                    "Bild 2.1: Aufbau eines elektrischen Schülerkalorimeters mit Rührer und Temperaturfühler ........... 13",
+                ]),
+                ("p", [
+                    "Alle im Abbildungs- und Bildverzeichnis aufgeführten Grafiken, Funktionsdiagramme und",
+                    "Versuchsaufbauten sind kapitelweise nummeriert. Die vor dem Punkt stehende Ziffer",
+                    "bezeichnet das jeweilige Hauptkapitel (1 für Mechanik, 2 für Thermodynamik), während",
+                    "die laufende Nummer hinter dem Punkt die Reihenfolge innerhalb des Kapitels angibt.",
+                ]),
+                ("box", "Methodenhinweis: Diagramme und Realexperimente systematisch auswerten", [
+                    "Achsenbeschriftung prüfen: Vor jeder Diagrammanalyse Größenzeichen, Zehnerpotenz und Einheit ablesen.",
+                    "Steigung bestimmen: Im Weg-Zeit-Diagramm entspricht die Tangentensteigung der Momentangeschwindigkeit.",
+                    "Flächeninhalt deuten: Unter der Geschwindigkeits-Zeit-Kurve gibt das Integral den zurückgelegten Weg an.",
+                    "Im Druck-Volumen-Diagramm (Abb. 2.2) entspricht die umschlossene Fläche der abgegebenen Nutzarbeit.",
+                    "Versuchsaufbauten (Bild 1.1 bis Bild 2.1) zeigen stets die Messfühler und relevanten Systemgrenzen.",
+                ]),
+            ],
+        },
+        # ==================== PAGE V (idx=4): Tabellenverzeichnis ====================
+        {
+            "label": "V",
+            "header": "V   |   Physik Oberstufe · Gesamtband: Tabellenverzeichnis und Naturkonstanten",
+            "blocks": [
+                ("dir_sub", "Tabellenverzeichnis", [
+                    "Tab. 1.1: Messreihe zur gleichmäßig beschleunigten Bewegung auf der Luftkissenfahrbahn ............ 2",
+                    "Tab. 1.2: Federkonstanten und Auslenkungswerte im Hooke’schen Proportionalitätsbereich ............ 5",
+                    "Tab. 1.3: Bahnradien und Umlaufzeiten ausgewählter Planeten im Sonnensystem ....................... 9",
+                    "Tab. 2.1: Zustandsgrößen und Freiheitsgrade ein- und mehratomiger idealer Gase .................... 11",
+                    "Tab. 2.2: Spezifische Wärmekapazitäten ausgewählter Festkörper und Flüssigkeiten .................. 14",
+                ]),
+                ("p", [
+                    "Die in den fünf Referenztabellen zusammengestellten Messreihen und Stoffwerte dienen als",
+                    "Grundlage für die Übungsaufgaben in Kapitel 1 und Kapitel 2. Bei allen experimentellen",
+                    "Datensätzen wurden systematische Reibungs- und Wärmeverluste durch geeignete Versuchsführung",
+                    "minimiert; verbleibende zufällige Messabweichungen werden durch Mittelwertbildung und",
+                    "Ausgleichsgeraden ausgeglichen.",
+                ]),
+                ("box", "Fundamentale Naturkonstanten und Basiseinheiten im SI-System", [
+                    "Mittlere Fallbeschleunigung auf der Erdoberfläche: g = 9,81 m/s^2 (ortsabhängig zwischen 9,78 und 9,83 m/s^2).",
+                    "Universelle Gravitationskonstante: G = 6,674 * 10^{-11} N * m^2 / kg^2.",
+                    "Boltzmann-Konstante: k_B = 1,381 * 10^{-23} J / K.",
+                    "Avogadro-Konstante: N_A = 6,022 * 10^{23} 1 / mol.",
+                    "Universelle Gaskonstante: R = N_A * k_B = 8,314 J / (mol * K).",
+                    "Nullpunkt der absoluten Kelvin-Temperaturskala: T_0 = 0 K entspricht exakt -273,15 Grad Celsius.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 1 (idx=5): Kapitel 1, Abschnitt 1.1 ====================
+        {
+            "label": "1",
+            "header": "1   |   Physik Oberstufe · Kapitel 1: Mechanik und Dynamik der Bewegungen",
+            "blocks": [
+                ("h1", "Kapitel 1: Mechanik und Dynamik der Bewegungen"),
+                ("h2", "1.1 Kinematik geradliniger Bewegungen"),
+                ("p", [
+                    "Die Kinematik beschreibt die Bewegung von Körpern rein geometrisch mithilfe der Größen Ort,",
+                    "Zeit, Geschwindigkeit und Beschleunigung, ohne zunächst nach den verursachenden Kräften zu",
+                    "fragen. Bewegt sich ein Gleiter aus der Ruhe mit konstanter Beschleunigung entlang einer",
+                    "geradlinigen Schiene, so nimmt seine Momentangeschwindigkeit proportional zur verstrichenen",
+                    "Zeit zu, während der zurückgelegte Weg quadratisch mit der Zeit anwächst.",
+                ]),
+                ("img", "fig_gesamt_1", 1, "figures/physik_kinematik_diagramm.png",
+                 "Abb. 1.1: Weg-Zeit- und Geschwindigkeits-Zeit-Diagramm der gleichmäßig beschleunigten Bewegung",
+                 "Diagramm",
+                 "Zweigeteiltes Koordinatensystem zur gleichmäßig beschleunigten Bewegung mit a = 0,80 m/s^2: Links zeigt das Weg-Zeit-Diagramm s(t) eine nach oben geöffnete Parabel, rechts zeigt das Geschwindigkeits-Zeit-Diagramm v(t) eine rot eingezeichnete Ursprungsgerade mit schraffierter Dreiecksfläche als zurückgelegtem Weg Delta s."),
+                ("p", [
+                    "Im Geschwindigkeits-Zeit-Diagramm repräsentiert die konstante Steigung der Geraden genau",
+                    "die Beschleunigung des Körpers. Zugleich stimmt der Flächeninhalt des rechtwinkligen",
+                    "Dreiecks unterhalb der Geschwindigkeitsgeraden im Zeitintervall von null bis t exakt mit",
+                    "dem zurückgelegten Gesamtweg überein.",
+                ]),
+                ("box", "Merksatz: Bewegungsgesetze der gleichmäßig beschleunigten Bewegung", [
+                    "Definition der Momentanbeschleunigung: a = dv / dt = konstant (für gleichmäßige Beschleunigung).",
+                    "Geschwindigkeits-Zeit-Gesetz (mit Anfangsgeschwindigkeit v_0): v(t) = a * t + v_0.",
+                    "Weg-Zeit-Gesetz (mit Anfangsweg s_0 und Anfangsgeschwindigkeit v_0): s(t) = 0,5 * a * t^2 + v_0 * t + s_0.",
+                    "Zeitfreie Beziehung (Elimination der Zeit t): v^2 - v_0^2 = 2 * a * Delta s.",
+                    "Spezialfall freier Fall im Vakuum (ohne Luftwiderstand): a = g = 9,81 m/s^2 vertikal nach unten.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 2 (idx=6): Luftkissenfahrbahn & Tab. 1.1 ====================
+        {
+            "label": "2",
+            "header": "2   |   Physik Oberstufe · Kapitel 1: Mechanik und Dynamik der Bewegungen",
+            "blocks": [
+                ("fig_text", "Bild 1.1: Luftkissenfahrbahn mit Lichtschranken zur reibungsfreien Kinematikmessung",
+                 "Aluminium-Hohlprofilschiene mit feinen Luftdüsen, auf der ein Messgleiter mit Dunkelblende nahezu reibungsfrei schwebt und vier digitale Gabellichtschranken passiert."),
+                ("p", [
+                    "Um die Gesetze der gleichmäßig beschleunigten Bewegung im Schulexperiment ohne störende",
+                    "Gleitreibung zu überprüfen, wird ein Leichtmetallgleiter auf einer horizontalen Luftkissen-",
+                    "fahrbahn über einen dünnen Perlonfaden und eine leichtgängige Umlenkrolle mit einem",
+                    "kleinen Zuggewicht konstant beschleunigt. Elektronische Stoppuhren erfassen die Durchgangs-",
+                    "zeiten und Dunkelzeiten an vier äquidistant positionierten Lichtschranken.",
+                ]),
+                ("table", "Tab. 1.1: Messreihe zur gleichmäßig beschleunigten Bewegung auf der Luftkissenfahrbahn", [
+                    ("Messpunkt Nr.", "Zeit t (s)", "Weg s (m)", "Geschwindigkeit v (m/s)"),
+                    ("Lichtschranke 1", "0,50 s", "0,10 m", "0,40 m/s"),
+                    ("Lichtschranke 2", "1,00 s", "0,40 m", "0,80 m/s"),
+                    ("Lichtschranke 3", "1,50 s", "0,90 m", "1,20 m/s"),
+                    ("Lichtschranke 4", "2,00 s", "1,60 m", "1,60 m/s"),
+                ]),
+                ("task", "Aufgabe 1: Auswertung der Fahrbahnmessung", [
+                    "Berechnen Sie aus den Messwerten in Tab. 1.1 für jeden der vier Messpunkte den Quotienten",
+                    "s / t^2 sowie den Quotienten v / t und bestimmen Sie daraus die konstante Bahnbe-",
+                    "schleunigung a des Gleiters.",
+                ]),
+                ("box", "Methoden-Kasten: Bestimmung der Momentangeschwindigkeit mit Dunkelblenden", [
+                    "Prinzip der Dunkelzeitmessung: Eine Blende der Länge Delta x unterbricht den Lichtstrahl für die Zeitspanne Delta t.",
+                    "Näherungswert der Momentangeschwindigkeit: v = Delta x / Delta t (je schmaler die Blende, desto genauer der Wert).",
+                    "Prüfung auf konstante Beschleunigung: Im s-t^2-Diagramm liegen alle Messpunkte auf einer Ursprungsgeraden.",
+                    "Steigung im s-t^2-Diagramm: Der Proportionalitätsfaktor k = s / t^2 entspricht exakt dem halben Beschleunigungswert 0,5 * a.",
+                    "Luftkissendruck konstant halten, damit der Gleiter an keiner Stelle die Metallschiene berührt.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 3 (idx=7): 1.2 Newtonsche Axiome ====================
+        {
+            "label": "3",
+            "header": "3   |   Physik Oberstufe · Kapitel 1: Mechanik und Dynamik der Bewegungen",
+            "blocks": [
+                ("h2", "1.2 Newtonsche Axiome und Kraftgesetze"),
+                ("p", [
+                    "Im Jahr 1687 formulierte Isaac Newton in seinen Philosophiae Naturalis Principia Mathematica",
+                    "die drei Grundgesetze der klassischen Dynamik. Das erste Axiom (Trägheitsprinzip) besagt,",
+                    "dass jeder Körper im Zustand der Ruhe oder der gleichförmig geradlinigen Bewegung verharrt,",
+                    "solange die Vektorsumme aller auf ihn einwirkenden äußeren Kräfte gleich null ist.",
+                ]),
+                ("p", [
+                    "Das zweite Axiom (Aktionsprinzip) verknüpft die resultierende Gesamtkraft F mit der",
+                    "zeitlichen Änderung des Impulses beziehungsweise bei konstanter träger Masse m unmittelbar",
+                    "mit der Beschleunigung a über die Grundgleichung F = m * a. Das dritte Axiom (Wechsel-",
+                    "wirkungsprinzip, Actio gleich Reactio) stellt fest, dass Kräfte zwischen zwei Körpern A",
+                    "und B stets paarweise, gleichzeitig, gleich groß und entgegengesetzt gerichtet auftreten.",
+                ]),
+                ("task", "Aufgabe 2: Beschleunigung und Bremsweg eines Schienenfahrzeugs", [
+                    "Eine Regionalbahn der Gesamtmasse m = 120 t wird aus dem Stand durch eine konstante",
+                    "Antriebskraft von F = 96 kN auf horizontaler Strecke beschleunigt. Berechnen Sie die",
+                    "Beschleunigung a sowie die Zeitdauer und Wegstrecke bis zum Erreichen von v = 72 km/h.",
+                ]),
+                ("box", "Merksatz: Die drei Newtonschen Axiome der Mechanik im Überblick", [
+                    "Erstes Axiom (Trägheitsgesetz): Aus Summe F_i = 0 folgt v = konstant (Inertialsysteme als Bezugssysteme).",
+                    "Zweites Axiom (Grundgleichung der Mechanik): F_res = dp / dt = m * a (mit 1 Newton = 1 kg * m / s^2).",
+                    "Drittes Axiom (Wechselwirkungsgesetz): F_{A auf B} = -F_{B auf A} (Angriffspunkte liegen an verschiedenen Körpern).",
+                    "Unterschied zwischen Kräftegleichgewicht und Wechselwirkungskräften: Gleichgewichtskräfte wirken am selben Körper.",
+                    "Superpositionsprinzip der Kräfte: Mehrere Einzelkräfte addieren sich vektoriell zur resultierenden Gesamtkraft.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 4 (idx=8): Experimentelle Bestimmung der Federkonstante (H3) ====================
+        {
+            "label": "4",
+            "header": "4   |   Physik Oberstufe · Kapitel 1: Mechanik und Dynamik der Bewegungen",
+            "blocks": [
+                ("h3_unnum", "Experimentelle Bestimmung der Federkonstante"),
+                ("p", [
+                    "Wird eine zylindrische Schraubenfeder aus Federstahl am oberen Ende fest eingespannt und",
+                    "am unteren Haken schrittweise mit Wägestücken bekannter Masse belastet, so verformt sie",
+                    "sich elastisch. Nach Robert Hooke ist die rücktreibende Federkraft F im elastischen",
+                    "Proportionalitätsbereich direkt proportional zur Auslenkung s aus der unbelasteten",
+                    "Ruhelage. Der Quotient D = F / s heißt Federkonstante oder Richtgröße der Schraubenfeder.",
+                ]),
+                ("fig_text", "Abb. 1.2: Kräfteparallelogramm und Dehnungskennlinie einer Schraubenfeder",
+                 "Links die vektorielle Zerlegung einer Gewichtskraft an der geneigten Ebene in Hangabtriebskraft und Normalkraft, rechts die lineare Hooke’sche Kennlinie F(s) = D * s mit markierter Elastizitätsgrenze."),
+                ("p", [
+                    "Überschreitet die angehängte Zugkraft hingegen die materialspezifische Elastizitätsgrenze,",
+                    "so weicht die Kennlinie vom linearen Verlauf ab und die Schraubenfeder behält nach dem",
+                    "Entlasten eine dauerhafte plastische Längenänderung zurück.",
+                ]),
+                ("box", "Versuchsprotokoll: Aufnahme einer Hooke’schen Federkennlinie", [
+                    "Versuchsmaterial: Stativstange, zwei Schraubenfedern unterschiedlicher Drahtstärke, Massestücke (50 g bis 250 g), Maßstab.",
+                    "Nullpunktkontrolle: Unbelastete Position des unteren Federzeigers an der vertikalen Millimeterskala exakt ablesen.",
+                    "Messdurchführung: Masse schrittweise um je 50 g erhöhen und jeweils die Ruhelage nach vollständigem Ausschwingen notieren.",
+                    "Kontrollmessung beim Entlasten: Prüfen, ob der Zeiger ohne Hysterese wieder exakt zum ursprünglichen Nullpunkt zurückkehrt.",
+                    "Auswertung: Gewichtskraft F_G = m * g über der Auslenkung s auftragen und die Steigung D der Ausgleichsgeraden ermitteln.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 5 (idx=9): Fehlerbetrachtung bei der Dehnungsmessung (H4) & Tab. 1.2 ====================
+        {
+            "label": "5",
+            "header": "5   |   Physik Oberstufe · Kapitel 1: Mechanik und Dynamik der Bewegungen",
+            "blocks": [
+                ("h4_unnum", "Fehlerbetrachtung bei der Dehnungsmessung"),
+                ("p", [
+                    "Bei jeder Längenmessung an der vertikalen Millimeterskala treten zufällige Ableseunsicher-",
+                    "heiten sowie Parallaxenfehler auf, wenn das Auge nicht senkrecht auf die Zeigerspitze",
+                    "blickt. Um die relative Unsicherheit der Federkonstante D klein zu halten, wertet man",
+                    "nicht ein einzelnes Wertepaar aus, sondern legt eine lineare Ausgleichsgerade durch alle",
+                    "Messpunkte zweier unterschiedlicher Schraubenfedern.",
+                ]),
+                ("table", "Tab. 1.2: Federkonstanten und Auslenkungswerte im Hooke’schen Proportionalitätsbereich", [
+                    ("Angehängte Masse m", "Zugkraft F_G (N)", "Auslenkung Feder A", "Auslenkung Feder B"),
+                    ("50 Gramm", "0,49 Newton", "2,0 cm Dehnung", "1,0 cm Dehnung"),
+                    ("100 Gramm", "0,98 Newton", "4,0 cm Dehnung", "2,0 cm Dehnung"),
+                    ("150 Gramm", "1,47 Newton", "6,0 cm Dehnung", "3,0 cm Dehnung"),
+                    ("200 Gramm", "1,96 Newton", "8,0 cm Dehnung", "4,0 cm Dehnung"),
+                ]),
+                ("task", "Aufgabe 3: Lineare Regression der Federkennlinie", [
+                    "Bestimmen Sie mithilfe von Tab. 1.2 die Federkonstanten D_A und D_B beider Schraubenfedern",
+                    "in der Einheit N/m und berechnen Sie die gespeicherte Spannenergie E_spann = 0,5 * D * s^2",
+                    "für eine Auslenkung von s = 8,0 cm.",
+                ]),
+                ("box", "Methoden-Kasten: Systematische und zufällige Messabweichungen", [
+                    "Systematische Abweichungen: Entstehen durch falsch kalibrierte Skalen oder Eigengewicht der unbelasteten Federwindungen.",
+                    "Zufällige Abweichungen: Streuen beidseitig um den wahren Wert (z. B. durch leichte Pendelschwingungen beim Ablesen).",
+                    "Größtfehlerabschätzung bei Quotienten D = F / s: Die relativen Unsicherheiten Delta F / F und Delta s / s addieren sich.",
+                    "Vorteil eines Spiegelmaßstabs: Verhindert Parallaxenfehler, sobald Zeiger und Spiegelbild exakt zur Deckung kommen.",
+                    "Parallelschaltung zweier Federn: Die Ersatzfederkonstante beträgt D_ges = D_A + D_B.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 6 (idx=10): 1.3 Energieerhaltung und Impulssatz ====================
+        {
+            "label": "6",
+            "header": "6   |   Physik Oberstufe · Kapitel 1: Mechanik und Dynamik der Bewegungen",
+            "blocks": [
+                ("h2", "1.3 Energieerhaltung und Impulssatz"),
+                ("p", [
+                    "In einem abgeschlossenen mechanischen System, in dem ausschließlich konservative Kräfte",
+                    "wie die Gewichtskraft oder die elastische Federkraft wirken, bleibt die Summe aus",
+                    "kinetischer Energie (Bewegungsenergie), potenzieller Energie (Höhenenergie) und",
+                    "elastischer Spannenergie zu jedem Zeitpunkt konstant. Mechanische Arbeit W ist dabei",
+                    "als das Produkt aus Kraftkomponente in Wegrichtung und zurückgelegter Wegstrecke definiert.",
+                ]),
+                ("fig_text", "Bild 1.2: Elastischer Zentralstoß zweier Stahlkugeln auf der Horizontalschiene",
+                 "Zwei gleich große gehärtete Stahlkugeln vor, während und nach dem zentralen elastischen Stoß mit eingezeichneten Geschwindigkeits- und Impulsvektoren p_1 und p_2."),
+                ("p", [
+                    "Noch allgemeiner als der mechanische Energieerhaltungssatz gilt der Impulserhaltungssatz:",
+                    "In jedem abgeschlossenen System ohne äußere Krafteinwirkung bleibt der Gesamtimpuls",
+                    "aller beteiligten Stoßpartner sowohl bei vollkommen elastischen als auch bei unelastischen",
+                    "Stößen nach Betrag und Richtung unverändert erhalten.",
+                ]),
+                ("box", "Merksatz: Mechanische Energieformen und Erhaltungssätze", [
+                    "Kinetische Energie eines Körpers der Masse m: E_kin = 0,5 * m * v^2 = p^2 / (2 * m).",
+                    "Potenzielle Energie im homogenen Schwerefeld: E_pot = m * g * h (bezogen auf ein frei wählbares Nullniveau).",
+                    "Elastische Spannenergie einer Hooke’schen Feder: E_spann = 0,5 * D * s^2.",
+                    "Mechanischer Energieerhaltungssatz (ohne Reibung): E_ges = E_kin + E_pot + E_spann = konstant.",
+                    "Impulserhaltungssatz im abgeschlossenen System: p_ges = m_1 * v_1 + m_2 * v_2 = konstant.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 7 (idx=11): Stoßprozesse & Aufgaben 4 & 5 ====================
+        {
+            "label": "7",
+            "header": "7   |   Physik Oberstufe · Kapitel 1: Mechanik und Dynamik der Bewegungen",
+            "blocks": [
+                ("p", [
+                    "Beim zentralen elastischen Stoß zweier Körper gelten Impulserhaltung und kinetische",
+                    "Energieerhaltung gleichzeitig. Trifft eine bewegte Stahlkugel der Masse m_1 zentral auf",
+                    "eine ruhende zweite Stahlkugel gleicher Masse m_2 = m_1, so tauscht die stoßende Kugel",
+                    "ihren gesamten Impuls und ihre gesamte Bewegungsenergie vollständig mit der zuvor",
+                    "ruhenden Kugel aus: Kugel 1 kommt augenblicklich zum Stillstand, während Kugel 2 mit",
+                    "der ursprünglichen Geschwindigkeit v_1 weiterrollt.",
+                ]),
+                ("p", [
+                    "Beim vollkommen unelastischen Stoß hingegen verformen sich beide Stoßpartner bleibend",
+                    "und bewegen sich nach dem Zusammenstoß mit einer gemeinsamen Endgeschwindigkeit u",
+                    "weiter. Dabei bleibt zwar der Gesamtimpuls streng erhalten, ein Teil der mechanischen",
+                    "Bewegungsenergie wird jedoch in innere Verformungs- und Wärmeenergie umgewandelt.",
+                ]),
+                ("task", "Aufgabe 4: Elastischer und unelastischer Stoß auf der Schiene", [
+                    "Ein Gleiter der Masse m_1 = 0,40 kg bewegt sich mit v_1 = 1,50 m/s auf einen ruhenden",
+                    "zweiten Gleiter der Masse m_2 = 0,60 kg zu. Berechnen Sie die Endgeschwindigkeiten",
+                    "für a) einen vollkommen unelastischen Stoß mit Klettband und b) einen elastischen Stoß.",
+                ]),
+                ("task", "Aufgabe 5: Energiebilanz beim Fadenpendel", [
+                    "Eine Pendelkugel wird um die Höhe h = 20 cm über ihre tiefste Bahnlage ausgelenkt und",
+                    "losgelassen. Berechnen Sie die maximale Bahngeschwindigkeit im tiefsten Durchgangspunkt.",
+                ]),
+                ("box", "Beispielrechnung: Geschwindigkeitsformeln beim zentralen Stoß", [
+                    "Gemeinsame Endgeschwindigkeit beim unelastischen Stoß: u = (m_1 * v_1 + m_2 * v_2) / (m_1 + m_2).",
+                    "Umgewandelte Verformungsenergie beim unelastischen Stoß: Delta E = 0,5 * (m_1 * m_2) / (m_1 + m_2) * (v_1 - v_2)^2.",
+                    "Endgeschwindigkeit v_1' beim elastischen Stoß (für v_2 = 0): v_1' = ((m_1 - m_2) / (m_1 + m_2)) * v_1.",
+                    "Endgeschwindigkeit v_2' beim elastischen Stoß (für v_2 = 0): v_2' = ((2 * m_1) / (m_1 + m_2)) * v_1.",
+                    "Sonderfall gleicher Massen m_1 = m_2 beim elastischen Stoß: v_1' = 0 und v_2' = v_1 (vollständiger Impulstausch).",
+                ]),
+            ],
+        },
+        # ==================== PAGE 8 (idx=12): 1.4 Kreisbewegung und Gravitationsfeld ====================
+        {
+            "label": "8",
+            "header": "8   |   Physik Oberstufe · Kapitel 1: Mechanik und Dynamik der Bewegungen",
+            "blocks": [
+                ("h2", "1.4 Kreisbewegung und Gravitationsfeld"),
+                ("p", [
+                    "Bewegt sich ein Körper mit konstantem Geschwindigkeitsbetrag v auf einer Kreisbahn vom",
+                    "Radius r, so ändert sich in jedem Augenblick die Richtung seines Geschwindigkeitsvektors.",
+                    "Diese stetige Richtungsänderung erfordert eine permanent zum Kreismittelpunkt gerichtete",
+                    "Zentripetalbeschleunigung a_Z = v^2 / r = omega^2 * r sowie eine entsprechende",
+                    "Zentripetalkraft F_Z = m * v^2 / r, die stets senkrecht auf der Bahngeschwindigkeit steht.",
+                ]),
+                ("fig_text", "Abb. 1.3: Radialkraft und Bahngeschwindigkeit bei der gleichförmigen Kreisbewegung",
+                 "Kreisbahn mit Radius r, tangential gerichtetem Geschwindigkeitsvektor v, zum Zentrum M zeigender Zentripetalkraft F_Z und überstrichenem Mittelpunktswinkel Delta phi = omega * Delta t."),
+                ("p", [
+                    "Bei der Bewegung von Planeten um die Sonne oder von Satelliten um die Erde wird die",
+                    "erforderliche Zentripetalkraft ausschließlich durch die Newtonsche Gravitationskraft",
+                    "F_G = G * (M * m) / r^2 aufgebracht. Durch Gleichsetzen von Gravitationskraft und",
+                    "Zentripetalkraft folgen unmittelbar die erste kosmische Kreisbahngeschwindigkeit",
+                    "sowie das dritte Keplersche Gesetz der Planetenbewegung.",
+                ]),
+                ("box", "Merksatz: Kenngrößen der Kreisbewegung und Gravitationsgesetz", [
+                    "Umlaufzeit T und Drehfrequenz f: Es gilt f = 1 / T und die Winkelgeschwindigkeit omega = 2 * pi / T = 2 * pi * f.",
+                    "Bahngeschwindigkeit und Zentripetalkraft: v = omega * r = (2 * pi * r) / T sowie F_Z = m * v^2 / r = m * omega^2 * r.",
+                    "Newtonsches Gravitationsgesetz: F_G = G * (m_1 * m_2) / r^2 (wirkt längs der Verbindungslinie der Schwerpunkte).",
+                    "Erste kosmische Geschwindigkeit für eine kreisförmige Umlaufbahn: v_K = sqrt(G * M / r).",
+                    "Drittes Keplersches Gesetz: T^2 / r^3 = (4 * pi^2) / (G * M) = konstant für alle Trabanten desselben Zentralkörpers.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 9 (idx=13): Tab. 1.3 & Abschluss Kapitel 1 ====================
+        {
+            "label": "9",
+            "header": "9   |   Physik Oberstufe · Kapitel 1: Mechanik und Dynamik der Bewegungen",
+            "blocks": [
+                ("p", [
+                    "Johannes Kepler entdeckte 1619 anhand der präzisen Himmelsbeobachtungen von Tycho Brahe,",
+                    "dass die Quadrate der siderischen Umlaufzeiten T zweier Planeten sich genau wie die",
+                    "dritten Potenzen ihrer großen Bahnhalbachsen a verhalten. Tabelle 1.3 zeigt die",
+                    "astronomischen Bahndaten der vier inneren Gesteinsplaneten unseres Sonnensystems.",
+                ]),
+                ("table", "Tab. 1.3: Bahnradien und Umlaufzeiten ausgewählter Planeten im Sonnensystem", [
+                    ("Planet", "Mittlerer Bahnradius r (10^6 km)", "Umlaufzeit T (Erdjahre)", "Bahngeschwindigkeit v (km/s)"),
+                    ("Merkur", "57,9 * 10^6 km", "0,241 a", "47,9 km/s"),
+                    ("Venus", "108,2 * 10^6 km", "0,615 a", "35,0 km/s"),
+                    ("Erde", "149,6 * 10^6 km", "1,000 a", "29,8 km/s"),
+                    ("Mars", "227,9 * 10^6 km", "1,881 a", "24,1 km/s"),
+                ]),
+                ("task", "Aufgabe 6: Überprüfung des dritten Kepler’schen Gesetzes", [
+                    "Prüfen Sie anhand der Werte in Tab. 1.3 für Merkur, Venus, Erde und Mars die Konstanz",
+                    "des Keplerschen Quotienten C = T^2 / r^3 und berechnen Sie aus den Erdbahndaten die",
+                    "Masse M_Sonne unseres Zentralgestirns.",
+                ]),
+                ("box", "Zusammenfassung Kapitel 1: Kernkompetenzen Mechanik und Gravitation", [
+                    "Kinematik: Unterscheidung zwischen gleichförmiger Bewegung (v = konstant) und gleichmäßig beschleunigter Bewegung (a = konstant).",
+                    "Dynamik: Kräfte als Ursache von Geschwindigkeitsänderungen und Verformungen gemäß F = m * a und F = D * s.",
+                    "Erhaltungssätze: Sichere Anwendung von Energie- und Impulserhaltung auf Stöße, Pendel und Feder-Masse-Systeme.",
+                    "Kreisbewegung: Berechnung von Winkelgeschwindigkeit, Zentripetalbeschleunigung und Radialkraft in Kurven.",
+                    "Gravitation: Herleitung von Satellitenbahnen, geostationärem Orbit und Keplerschen Gesetzen aus dem Gravitationsgesetz.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 10 (idx=14): Kapitel 2, Abschnitt 2.1 ====================
+        {
+            "label": "10",
+            "header": "10   |   Physik Oberstufe · Kapitel 2: Thermodynamik und Wärmekraftmaschinen",
+            "blocks": [
+                ("h1", "Kapitel 2: Thermodynamik und Wärmekraftmaschinen"),
+                ("h2", "2.1 Temperatur, Teilchenmodell und ideale Gase"),
+                ("p", [
+                    "Die Thermodynamik verbindet die makroskopisch messbaren Zustandsgrößen Druck p, Volumen V",
+                    "und absolute Temperatur T eines Gases mit der ungeordneten mikroskopischen Wärmebewegung",
+                    "seiner Atome und Moleküle. Im Modell des idealen Gases werden die Gasteilchen als",
+                    "punktförmige Massen betrachtet, die untereinander und mit den Gefäßwänden vollkommen",
+                    "elastische Stöße ausführen.",
+                ]),
+                ("img", "fig_gesamt_2", 10, "figures/physik_maxwell_boltzmann.png",
+                 "Abb. 2.1: Maxwell-Boltzmann-Geschwindigkeitsverteilung idealer Gasmoleküle",
+                 "Diagramm",
+                 "Koordinatensystem der Maxwell-Boltzmann-Geschwindigkeitsverteilung f(v) für zwei absolute Temperaturen: Die blaue Kurve für T_1 = 300 K besitzt ein hohes, schmales Maximum bei etwa 420 m/s, während die rote Kurve für T_2 = 900 K flacher verläuft und zu höheren Teilchengeschwindigkeiten verschoben ist."),
+                ("p", [
+                    "Je höher die absolute Temperatur T auf der Kelvin-Skala steigt, desto größer wird die",
+                    "mittlere kinetische Translationsenergie der Gasmoleküle. Zugleich verbreitert sich die",
+                    "Maxwell-Boltzmann-Verteilungskurve und ihr Maximum verschiebt sich zu höheren Geschwindigkeiten.",
+                ]),
+                ("box", "Merksatz: Allgemeine Zustandsgleichung und kinetische Gastheorie", [
+                    "Thermische Zustandsgleichung idealer Gase: p * V = n * R * T = N * k_B * T.",
+                    "Gesetz von Boyle-Mariotte (isotherme Zustandsänderung, T = konstant): p * V = konstant.",
+                    "Gesetz von Gay-Lussac (isobare Zustandsänderung, p = konstant): V / T = konstant.",
+                    "Gesetz von Amontons (isochore Zustandsänderung, V = konstant): p / T = konstant.",
+                    "Mittlere kinetische Translationsenergie eines Gasteilchens: E_trans = 1,5 * k_B * T.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 11 (idx=15): Tab. 2.1 & Gleichverteilungssatz ====================
+        {
+            "label": "11",
+            "header": "11   |   Physik Oberstufe · Kapitel 2: Thermodynamik und Wärmekraftmaschinen",
+            "blocks": [
+                ("p", [
+                    "Nach dem statistischen Gleichverteilungssatz (Äquipartitionstheorem) entfällt im",
+                    "thermischen Gleichgewicht auf jeden unabhängigen quadratischen Freiheitsgrad f eines",
+                    "Gasmoleküls im Mittel die Energie 0,5 * k_B * T. Einatomige Edelgase wie Helium oder",
+                    "Argon besitzen lediglich drei Translationsfreiheitsgrade im Raum, während zweiatomige",
+                    "Gasmoleküle wie Stickstoff und Sauerstoff bei Raumtemperatur zusätzlich um zwei",
+                    "senkrecht zur Kernverbindungslinie orientierte Achsen rotieren können.",
+                ]),
+                ("table", "Tab. 2.1: Zustandsgrößen und Freiheitsgrade ein- und mehratomiger idealer Gase", [
+                    ("Gasart / Molekülbau", "Freiheitsgrade f", "Innere Energie U (mol)", "Molare Wärmekapazität C_V"),
+                    ("Helium (He, einatomig)", "f = 3 (Translation)", "U = 1,5 * n * R * T", "12,5 J / (mol * K)"),
+                    ("Argon (Ar, einatomig)", "f = 3 (Translation)", "U = 1,5 * n * R * T", "12,5 J / (mol * K)"),
+                    ("Stickstoff (N_2, zweiatomig)", "f = 5 (3 Trans. + 2 Rot.)", "U = 2,5 * n * R * T", "20,8 J / (mol * K)"),
+                    ("Kohlendioxid (CO_2, mehratomig)", "f = 6 (mit Schwingung)", "U = 3,0 * n * R * T", "28,5 J / (mol * K)"),
+                ]),
+                ("task", "Aufgabe 1: Zustandsänderungen im Kolbenzylinder", [
+                    "In einem beweglichen Kolbenzylinder befinden sich n = 2,0 mol Stickstoffgas bei einem",
+                    "Anfangsdruck von p_1 = 1,0 bar und einer Temperatur von T_1 = 300 K. Berechnen Sie das",
+                    "Anfangsvolumen V_1 sowie die innere Energie U des Gases.",
+                ]),
+                ("box", "Methoden-Kasten: Umrechnung thermodynamischer Zustandsgrößen", [
+                    "Umrechnung zwischen Celsius- und Kelvin-Skala: T (in K) = theta (in Grad Celsius) + 273,15.",
+                    "Druckeinheiten im Vergleich: 1 bar = 10^5 Pa = 100 kPa = 10^5 N / m^2.",
+                    "Volumeneinheiten im Vergleich: 1 m^3 = 1000 Liter (L) = 10^6 cm^3.",
+                    "Normbedingungen (STP): p_0 = 1013,25 hPa und T_0 = 273,15 K (molares Normvolumen V_m = 22,41 L/mol).",
+                    "Zusammenhang der molaren Wärmekapazitäten: C_p - C_V = R sowie Adiabatenexponent kappa = C_p / C_V = (f + 2) / f.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 12 (idx=16): 2.2 Erster Hauptsatz der Thermodynamik ====================
+        {
+            "label": "12",
+            "header": "12   |   Physik Oberstufe · Kapitel 2: Thermodynamik und Wärmekraftmaschinen",
+            "blocks": [
+                ("h2", "2.2 Erster Hauptsatz der Thermodynamik"),
+                ("p", [
+                    "Der erste Hauptsatz der Thermodynamik überträgt das universelle Prinzip der Energie-",
+                    "erhaltung auf thermische Prozesse. Jedes thermodynamische System besitzt eine eindeutig",
+                    "durch seinen aktuellen Gleichgewichtszustand festgelegte innere Energie U. Diese",
+                    "Zustandsgröße kann sich nur dadurch ändern, dass über die Systemgrenze hinweg Wärme Q",
+                    "übertragen oder mechanische Volumenarbeit W am System verrichtet wird.",
+                ]),
+                ("p", [
+                    "Nach der in der Physik heute verbindlichen Vorzeichenkonvention der IUPAC zählen sowohl",
+                    "dem System zugeführte Wärme (Q > 0) als auch am System verrichtete Kompressionsarbeit",
+                    "(W > 0) positiv, weil beide Prozesse die innere Energie U erhöhen. Dehnt sich das Gas",
+                    "hingegen gegen den äußeren Kolbendruck aus, verrichtet es Expansionsarbeit (W < 0).",
+                ]),
+                ("task", "Aufgabe 2: Energiebilanz bei Kompression eines Gases", [
+                    "Einem abgeschlossenen Gasvolumen wird während einer Kompression die mechanische Arbeit",
+                    "W = +450 J zugeführt, während gleichzeitig die Wärmemenge Q = -180 J an das Kühlwasser",
+                    "abfließt. Bestimmen Sie die Änderung Delta U der inneren Energie des Gases.",
+                ]),
+                ("box", "Merksatz: Der Erste Hauptsatz und spezielle Zustandsänderungen", [
+                    "Bilanzgleichung des ersten Hauptsatzes: Delta U = Q + W (Energie kann weder aus dem Nichts entstehen noch verloren gehen).",
+                    "Volumenarbeit bei konstantem Außendruck p: W = -p * Delta V = -p * (V_2 - V_1).",
+                    "Isochore Zustandsänderung (V = konstant): W = 0, daher gilt Delta U = Q_V = n * C_V * Delta T.",
+                    "Isotherme Zustandsänderung idealer Gase (T = konstant): Delta U = 0, daher gilt Q = -W = n * R * T * ln(V_2 / V_1).",
+                    "Adiabatische Zustandsänderung (wärmeisoliert, Q = 0): Delta U = W (mit Poisson-Gleichung p * V^kappa = konstant).",
+                ]),
+            ],
+        },
+        # ==================== PAGE 13 (idx=17): Kalorimetrische Messung (H3) & Bild 2.1 ====================
+        {
+            "label": "13",
+            "header": "13   |   Physik Oberstufe · Kapitel 2: Thermodynamik und Wärmekraftmaschinen",
+            "blocks": [
+                ("h3_unnum", "Kalorimetrische Messung der spezifischen Wärmekapazität"),
+                ("p", [
+                    "Führt man einem festen oder flüssigen Körper der Masse m ohne Phasenübergang die",
+                    "Wärmemenge Q zu, so steigt seine Temperatur um die Differenz Delta T = T_2 - T_1 an.",
+                    "Der stoffspezifische Proportionalitätsfaktor c in der Grundgleichung der Wärmelehre",
+                    "Q = c * m * Delta T heißt spezifische Wärmekapazität. Er gibt an, welche Wärmemenge",
+                    "erforderlich ist, um ein Kilogramm des jeweiligen Stoffes um ein Kelvin zu erwärmen.",
+                ]),
+                ("fig_text", "Bild 2.1: Aufbau eines elektrischen Schülerkalorimeters mit Rührer und Temperaturfühler",
+                 "Doppelwandiges Isoliergefäß (Dewar-Becher) mit wärmegedämmtem Deckel, elektrischer Heizwendel (U, I), Ringrührer zur Temperaturhomogenisierung und digitalem Präzisionsthermometer."),
+                ("p", [
+                    "Zur experimentellen Bestimmung der spezifischen Wärmekapazität eines Metalls wird ein",
+                    "im siedenden Wasserbad auf T_K = 100 Grad Celsius temperierter Metallzylinder rasch in",
+                    "das kühlere Kalorimeterwasser der Anfangstemperatur T_W eingetaucht, bis sich nach",
+                    "gutem Umrühren eine gemeinsame Mischungstemperatur T_M einstellt.",
+                ]),
+                ("box", "Versuchsaufbau: Bestimmung von Wärmekapazitäten nach der Mischungsmethode", [
+                    "Grundgleichung der Kalorimetrie: Q = c * m * Delta T (Einheit von c ist J / (kg * K) bzw. kJ / (kg * K)).",
+                    "Elektrische Kalorimetrie: Zugeführte elektrische Heizenergie E_el = U * I * t wird mit c_W * m_W * Delta T gleichgesetzt.",
+                    "Mischungskalorimetrie (ohne Verluste): Abgegebene Wärme des heißen Körpers ist gleich aufgenommener Wärme des Wassers.",
+                    "Richmann’sche Mischungsformel: c_K * m_K * (T_K - T_M) = c_W * m_W * (T_M - T_W).",
+                    "Wichtig bei der Durchführung: Metallkörper zügig übertragen und Kalorimeterwasser kontinuierlich rühren.",
+                ]),
+            ],
+        },
+        # ==================== PAGE 14 (idx=18): Wärmeaustausch mit dem Kalorimetergefäß (H4) & Tab. 2.2 ====================
+        {
+            "label": "14",
+            "header": "14   |   Physik Oberstufe · Kapitel 2: Thermodynamik und Wärmekraftmaschinen",
+            "blocks": [
+                ("h4_unnum", "Wärmeaustausch mit dem Kalorimetergefäß"),
+                ("p", [
+                    "Bei präzisen kalorimetrischen Messungen darf nicht vernachlässigt werden, dass auch",
+                    "die Innenwand des Kalorimeterbechers, der Rührer und der Temperaturfühler gemeinsam",
+                    "mit der Wasserfüllung von der Anfangstemperatur T_W auf die Mischungstemperatur T_M",
+                    "erwärmt werden. Man fasst diese Bauteile durch ihre Wärmekapazität C_Kal = c_W * m_E",
+                    "beziehungsweise ihren sogenannten Wasserwert m_E rechnerisch zusammen.",
+                ]),
+                ("table", "Tab. 2.2: Spezifische Wärmekapazitäten ausgewählter Festkörper und Flüssigkeiten", [
+                    ("Stoff / Material", "Aggregatzustand (20 °C)", "Spezifische Wärmekapazität c", "Dichte rho (g/cm^3)"),
+                    ("Wasser (flüssig)", "Flüssigkeit", "4,18 kJ / (kg * K)", "1,00 g/cm^3"),
+                    ("Aluminium (Al)", "Festkörper (Metall)", "0,896 kJ / (kg * K)", "2,70 g/cm^3"),
+                    ("Eisen / Stahl (Fe)", "Festkörper (Metall)", "0,452 kJ / (kg * K)", "7,87 g/cm^3"),
+                    ("Kupfer (Cu)", "Festkörper (Metall)", "0,385 kJ / (kg * K)", "8,96 g/cm^3"),
+                ]),
+                ("task", "Aufgabe 3: Bestimmung der Mischungstemperatur im Kalorimeter", [
+                    "Ein Kupferblock der Masse m_Cu = 300 g und der Temperatur T_Cu = 95,0 Grad Celsius wird",
+                    "in m_W = 250 g Wasser von T_W = 18,0 Grad Celsius getaucht (Wärmekapazität des Gefäßes",
+                    "C_Kal = 65 J/K). Berechnen Sie mithilfe von Tab. 2.2 die Mischungstemperatur T_M.",
+                ]),
+                ("box", "Fehleranalyse in der Kalorimetrie: Berücksichtigung des Wasserwerts", [
+                    "Erweiterte Bilanzgleichung mit Kalorimetergefäß: c_K * m_K * (T_K - T_M) = (c_W * m_W + C_Kal) * (T_M - T_W).",
+                    "Bestimmung von C_Kal durch Vorversuch: Mischen zweier bekannter Wassermengen unterschiedlicher Temperatur.",
+                    "Vermeidung von Verdampfungsverlusten: Kalorimeterdeckel während des gesamten Temperaturausgleichs geschlossen halten.",
+                    "Besonderheit des Wassers: Die extrem hohe spezifische Wärmekapazität c_W = 4,18 kJ / (kg * K) stabilisiert das Erdklima.",
+                    "Dulong-Petit-Regel für feste Metalle: Die molare Wärmekapazität beträgt bei Raumtemperatur näherungsweise 3 * R = 25 J / (mol * K).",
+                ]),
+            ],
+        },
+        # ==================== PAGE 15 (idx=19): 2.3 Entropie und Kreisprozesse ====================
+        {
+            "label": "15",
+            "header": "15   |   Physik Oberstufe · Kapitel 2: Thermodynamik und Wärmekraftmaschinen",
+            "blocks": [
+                ("h2", "2.3 Entropie und Kreisprozesse"),
+                ("p", [
+                    "Während der erste Hauptsatz lediglich die Energiebilanz überwacht, legt der zweite",
+                    "Hauptsatz der Thermodynamik die natürliche Richtung makroskopischer Prozesse fest:",
+                    "Wärme fließt von selbst stets nur vom wärmeren zum kälteren Körper, niemals umgekehrt.",
+                    "Als Maß für die Irreversibilität und die statistische Mikrozustandszahl W_mikro eines",
+                    "Systems führten Rudolf Clausius und Ludwig Boltzmann die Zustandsgröße Entropie S ein.",
+                ]),
+                ("fig_text", "Abb. 2.2: Druck-Volumen-Diagramm des Carnot-Kreisprozesses mit Isothermen und Adiabaten",
+                 "Geschlossener rechtsläufiger Kreisprozess im p-V-Diagramm aus vier Zustandsänderungen: Isotherme Expansion bei T_W (1 nach 2), adiabatische Expansion auf T_K (2 nach 3), isotherme Kompression bei T_K (3 nach 4) und adiabatische Kompression zurück auf T_W (4 nach 1)."),
+                ("task", "Aufgabe 4: Wirkungsgrad einer Wärmekraftmaschine", [
+                    "Ein Dampfkraftwerk arbeitet zwischen der Kesseltemperatur T_W = 800 K und der",
+                    "Kühlwassertemperatur T_K = 300 K. Berechnen Sie den maximal möglichen thermischen",
+                    "Carnot-Wirkungsgrad eta_Carnot sowie die bei Q_zu = 1,20 GJ theoretisch gewinnbare Nutzarbeit.",
+                ]),
+                ("box", "Merksatz: Zweiter Hauptsatz, Entropie und Carnot-Wirkungsgrad", [
+                    "Clausius’sche Formulierung des zweiten Hauptsatzes: Es gibt keine periodisch arbeitende Maschine, die Wärme zu 100 % in Arbeit umwandelt.",
+                    "Thermodynamische Definition der Entropieänderung bei reversibler Wärmezufuhr: dS = dQ_rev / T (Einheit: J / K).",
+                    "Statistische Boltzmann-Formel der Entropie: S = k_B * ln(Omega) (im abgeschlossenen System gilt stets Delta S >= 0).",
+                    "Allgemeiner Wirkungsgrad einer Wärmekraftmaschine: eta = |W_Nutz| / Q_zu = (Q_zu - |Q_ab|) / Q_zu.",
+                    "Maximaler Carnot-Wirkungsgrad: eta_Carnot = 1 - (T_K / T_W) (nur abhängig von den absoluten Temperaturen T_W und T_K).",
+                ]),
+            ],
+        },
+    ]
+
+
+def build_sek2_physik_gesamtwerk_pdf(
+    pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """
+    Document 13: Sekundarstufe II (Klasse 11–13) — Physik Oberstufe Gesamtband (20 pages: I–V, 1–15).
+    Complete multi-chapter schoolbook with Roman front-matter (Pages I–V: Title, Preface,
+    Inhaltsverzeichnis, Abbildungsverzeichnis, Bildverzeichnis, Tabellenverzeichnis) and two
+    full chapters (Kapitel 1 on pp. 1–9, Kapitel 2 on pp. 10–15) plus embedded PDF /PageLabels.
+    """
+    c = canvas.Canvas(pdf_path, pagesize=A4)
+    # Embed authoritative PDF /PageLabels: pages 0..4 -> I..V, pages 5..19 -> 1..15
+    c.addPageLabel(0, style="ROMAN_UPPER", start=1)
+    c.addPageLabel(5, style="ARABIC", start=1)
+
+    meta_entries: List[Dict[str, Any]] = []
+    pages_spec = _get_sek2_physik_gesamtwerk_pages()
+
+    for page_idx, p_spec in enumerate(pages_spec):
+        # Running header
+        c.setStrokeColor(colors.HexColor("#1E3A8A"))
+        c.setLineWidth(1.0)
+        c.line(48, PAGE_H - 42, PAGE_W - 48, PAGE_H - 42)
+        c.setFont(fonts["SansBold"], 8.5)
+        c.setFillColor(colors.HexColor("#1E3A8A"))
+        c.drawString(48, PAGE_H - 34, p_spec["header"])
+
+        y_cur = PAGE_H - 68.0
+        for blk in p_spec["blocks"]:
+            b_kind = blk[0]
+            if b_kind == "h1":
+                c.setFont(fonts["SansBold"], 13.8)
+                c.setFillColor(colors.HexColor("#1E3A8A"))
+                c.drawString(48, y_cur, blk[1])
+                y_cur -= 24.0
+            elif b_kind == "h2":
+                c.setFont(fonts["SansBold"], 11.4)
+                c.setFillColor(colors.HexColor("#1D4ED8"))
+                c.drawString(48, y_cur, blk[1])
+                y_cur -= 20.0
+            elif b_kind in ("h3_unnum", "h4_unnum"):
+                c.setFont(fonts["SansBold"], 10.4 if b_kind == "h3_unnum" else 10.0)
+                c.setFillColor(colors.HexColor("#1E3A8A"))
+                c.drawString(48, y_cur, blk[1])
+                y_cur -= 18.0
+            elif b_kind == "p":
+                c.setFont(fonts["Serif"], 9.2)
+                c.setFillColor(colors.black)
+                for ln in blk[1]:
+                    c.drawString(48, y_cur, ln)
+                    y_cur -= 13.5
+                y_cur -= 6.0
+            elif b_kind == "dir_toc":
+                c.setFont(fonts["SansBold"], 14.2)
+                c.setFillColor(colors.HexColor("#1E3A8A"))
+                c.drawString(48, y_cur, blk[1])
+                y_cur -= 22.0
+                c.setFillColor(colors.black)
+                for x_ind, f_key, f_sz, title_str, pg_num in blk[2]:
+                    c.setFont(fonts[f_key], f_sz)
+                    dots = "." * max(6, 72 - len(title_str) - int((x_ind - 48) / 5))
+                    c.drawString(x_ind, y_cur, f"{title_str} {dots} {pg_num}")
+                    y_cur -= 18.5
+                y_cur -= 6.0
+            elif b_kind == "dir_sub":
+                c.setFont(fonts["SansBold"], 12.2)
+                c.setFillColor(colors.HexColor("#1E3A8A"))
+                c.drawString(48, y_cur, blk[1])
+                y_cur -= 19.0
+                c.setFont(fonts["Sans"], 8.9)
+                c.setFillColor(colors.black)
+                for row_txt in blk[2]:
+                    c.drawString(48, y_cur, row_txt)
+                    y_cur -= 16.5
+                y_cur -= 10.0
+            elif b_kind == "img":
+                fig_key, phys_pg, rel_fn, cap_txt, img_type, _desc = blk[1], blk[2], blk[3], blk[4], blk[5], blk[6]
+                fw, fh = 485.0, 172.0
+                fx, fy = 48.0, y_cur - fh + 4.0
+                c.drawImage(figs[fig_key], fx, fy, width=fw, height=fh)
+                c.setFont(fonts["SansBold"], 9.0)
+                c.setFillColor(colors.black)
+                c.drawString(48, fy - 13.0, cap_txt)
+                meta_entries.append(
+                    compute_image_meta_entry(
+                        fig_key,
+                        page_idx,
+                        phys_pg,
+                        rel_fn,
+                        cap_txt,
+                        img_type,
+                        fx,
+                        fy,
+                        fw,
+                        fh,
+                        900,
+                        320,
+                    )
+                )
+                y_cur = fy - 28.0
+            elif b_kind == "fig_text":
+                c.setFont(fonts["SansBold"], 9.5)
+                c.setFillColor(colors.HexColor("#1E3A8A"))
+                c.drawString(48, y_cur, blk[1])
+                y_cur -= 15.0
+                c.setFont(fonts["Sans"], 8.8)
+                c.setFillColor(colors.black)
+                # Wrap description into ~92 char lines
+                words = blk[2].split()
+                cur_ln = ""
+                for w in words:
+                    if len(cur_ln) + len(w) + 1 > 92:
+                        c.drawString(48, y_cur, cur_ln)
+                        y_cur -= 13.0
+                        cur_ln = w
+                    else:
+                        cur_ln = f"{cur_ln} {w}".strip()
+                if cur_ln:
+                    c.drawString(48, y_cur, cur_ln)
+                    y_cur -= 13.0
+                y_cur -= 8.0
+            elif b_kind == "table":
+                c.setFont(fonts["SansBold"], 9.8)
+                c.setFillColor(colors.HexColor("#1E3A8A"))
+                c.drawString(48, y_cur, blk[1])
+                y_cur -= 8.0
+                c.setStrokeColor(colors.HexColor("#1E3A8A"))
+                c.line(48, y_cur, PAGE_W - 48, y_cur)
+                y_cur -= 15.0
+                t_cols = [48, 186, 324, 448]
+                for r_i, r_vals in enumerate(blk[2]):
+                    c.setFont(fonts["SansBold"] if r_i == 0 else fonts["Sans"], 8.5 if r_i == 0 else 8.8)
+                    c.setFillColor(colors.black)
+                    for c_i, val in enumerate(r_vals):
+                        c.drawString(t_cols[c_i], y_cur, val)
+                    y_cur -= 18.0
+                c.line(48, y_cur + 10.0, PAGE_W - 48, y_cur + 10.0)
+                y_cur -= 6.0
+            elif b_kind == "task":
+                c.setFont(fonts["SansBold"], 10.0)
+                c.setFillColor(colors.HexColor("#1E3A8A"))
+                c.drawString(48, y_cur, blk[1])
+                y_cur -= 15.0
+                c.setFont(fonts["Sans"], 8.9)
+                c.setFillColor(colors.black)
+                for ln in blk[2]:
+                    c.drawString(48, y_cur, ln)
+                    y_cur -= 13.5
+                y_cur -= 6.0
+            elif b_kind == "box":
+                box_title, bullets = blk[1], blk[2]
+                box_bot = 66.0
+                box_h = 158.0
+                c.setFillColor(colors.HexColor("#EFF6FF"))
+                c.setStrokeColor(colors.HexColor("#1D4ED8"))
+                c.roundRect(48, box_bot, PAGE_W - 96, box_h, 8, fill=1, stroke=1)
+                c.setFont(fonts["SansBold"], 9.3)
+                c.setFillColor(colors.HexColor("#1E3A8A"))
+                c.drawString(58, box_bot + box_h - 18.0, box_title)
+                c.setFont(fonts["Sans"], 8.4)
+                c.setFillColor(colors.black)
+                by = box_bot + box_h - 36.0
+                for b_txt in bullets:
+                    c.drawString(58, by, f"• {b_txt}")
+                    by -= 19.5
+
+        c.showPage()
+
+    c.save()
+    return meta_entries
+
+
+def _render_sek2_physik_gesamtwerk_markdown() -> Tuple[str, str]:
+    """Generates `(raw_golden_md, uebertragungsregeln_09_2025_golden_md)` from `_get_sek2_physik_gesamtwerk_pages()`."""
+    pages_spec = _get_sek2_physik_gesamtwerk_pages()
+    raw_chunks: List[str] = []
+    ueb_chunks: List[str] = []
+
+    for p_spec in pages_spec:
+        lbl = p_spec["label"]
+        raw_lines: List[str] = [f"(({lbl}))"]
+        ueb_lines: List[str] = [f"(({lbl}))"]
+
+        for blk in p_spec["blocks"]:
+            b_kind = blk[0]
+            if b_kind == "h1":
+                raw_lines.append(f"# {blk[1]}")
+                ueb_lines.append(f"# {blk[1]}")
+            elif b_kind == "h2":
+                raw_lines.append(f"## {blk[1]}")
+                ueb_lines.append(f"## {blk[1]}")
+            elif b_kind == "h3_unnum":
+                raw_lines.append(f"### {blk[1]}")
+                ueb_lines.append(f"### {blk[1]}")
+            elif b_kind == "h4_unnum":
+                raw_lines.append(f"#### {blk[1]}")
+                ueb_lines.append(f"#### {blk[1]}")
+            elif b_kind == "p":
+                para = " ".join(blk[1]).replace("- ", "")
+                raw_lines.append(para)
+                ueb_lines.append(para)
+            elif b_kind == "dir_toc":
+                raw_lines.append(f"# {blk[1]}")
+                ueb_lines.append(f"# {blk[1]}")
+                r_list = []
+                u_list = []
+                for _x_ind, _f_key, _f_sz, title_str, pg_num in blk[2]:
+                    r_list.append(f"- {title_str} .... {pg_num}")
+                    u_list.append(f"-\t{title_str} {pg_num}")
+                raw_lines.append("\n".join(r_list))
+                ueb_lines.append("\n".join(u_list))
+            elif b_kind == "dir_sub":
+                raw_lines.append(f"## {blk[1]}")
+                ueb_lines.append(f"## {blk[1]}")
+                r_list = []
+                u_list = []
+                for row_txt in blk[2]:
+                    clean_row = " ".join(row_txt.replace("..", " ").split())
+                    r_list.append(f"- {row_txt}")
+                    u_list.append(f"-\t{clean_row}")
+                raw_lines.append("\n".join(r_list))
+                ueb_lines.append("\n".join(u_list))
+            elif b_kind == "img":
+                _fig_key, _phys_pg, rel_fn, cap_txt, img_type, desc = blk[1], blk[2], blk[3], blk[4], blk[5], blk[6]
+                raw_lines.append(f"![{cap_txt}]({rel_fn})\n\n{cap_txt}")
+                ueb_lines.append(
+                    f"#### {cap_txt}\n\n<Bild> {img_type}:\nBeschreibung mit Bildtext: {desc}\n</Bild>"
+                )
+            elif b_kind == "fig_text":
+                raw_lines.append(f"#### {blk[1]}\n\n{blk[2]}")
+                ueb_lines.append(f"#### {blk[1]}\n\n{blk[2]}")
+            elif b_kind == "table":
+                hdr = blk[2][0]
+                rows = blk[2][1:]
+                raw_tab = [
+                    f"### {blk[1]}",
+                    "",
+                    "| " + " | ".join(hdr) + " |",
+                    "| " + " | ".join(":---" for _ in hdr) + " |",
+                ]
+                for r in rows:
+                    raw_tab.append("| " + " | ".join(r) + " |")
+                raw_lines.append("\n".join(raw_tab))
+
+                ueb_tab = [f"### {blk[1]}", "", "<Tabelle>", "\t".join(hdr)]
+                for r in rows:
+                    ueb_tab.append("\t".join(r))
+                ueb_tab.append("</Tabelle>")
+                ueb_lines.append("\n".join(ueb_tab))
+            elif b_kind == "task":
+                para = " ".join(blk[2]).replace("- ", "")
+                raw_lines.append(f"### {blk[1]}\n\n{para}")
+                ueb_lines.append(f"### {blk[1]}\n\n{para}")
+            elif b_kind == "box":
+                box_title, bullets = blk[1], blk[2]
+                r_box = [f"**{box_title}**"] + [f"- {b}" for b in bullets]
+                u_box = ["<Rahmen>", f"_{box_title}_"] + [f"-\t{b}" for b in bullets] + ["</Rahmen>"]
+                raw_lines.append("\n".join(r_box))
+                ueb_lines.append("\n".join(u_box))
+
+        raw_chunks.append("\n\n".join(raw_lines))
+        ueb_chunks.append("\n\n".join(ueb_lines))
+
+    return "\n\n".join(raw_chunks) + "\n", "\n\n".join(ueb_chunks) + "\n"
 
 
 
@@ -6267,7 +7235,7 @@ Gegeben ist die Funktion $f(x) = x^3 - 3 x^2 - 9 x + 11$. Bestimmen Sie rechneri
 
 Der Graph einer ganzrationalen Funktion 3. Grades verläuft durch den Ursprung $O(0 \\mid 0)$, besitzt im Punkt $W(2 \\mid 4)$ einen Wendepunkt und hat dort die Steigung $m = -3$.
 a) Stellen Sie das lineare Gleichungssystem auf und weisen Sie nach, dass $p(x) = 0{,}5 x^3 - 3 x^2 + 3 x + 0$ bzw. mit angepasstem Koeffizienten die Bedingungen erfüllt.
-b) Berechnen Sie den Inhalt der Fläche, die der Graph von $f(x)$ aus Abb. 2.1 mit der Wendetangente und der $y$-Achse im ersten Quadranten einschließt.
+b) Ermitteln Sie das Flächenmaß des Gebiets, welches der Graph von $f(x)$ aus Abb. 2.1 mit der Wendetangente und der $y$-Achse im ersten Quadranten einschließt.
 
 Hinweis zur Selbstkontrolle: Nutzen Sie für Teilaufgabe b) die Differenzfunktion $d(x) = f(x) - t_W(x)$ und bestimmen Sie vor der Integration die Schnittstellen im Intervall $[0; 4]$.
 """
@@ -6336,7 +7304,7 @@ Gegeben ist die Funktion $f(x) = x^3 - 3 x^2 - 9 x + 11$. Bestimmen Sie rechneri
 
 Der Graph einer ganzrationalen Funktion 3. Grades verläuft durch den Ursprung $O(0 \\mid 0)$, besitzt im Punkt $W(2 \\mid 4)$ einen Wendepunkt und hat dort die Steigung $m = -3$.
 a) Stellen Sie das lineare Gleichungssystem auf und weisen Sie nach, dass $p(x) = 0{,}5 x^3 - 3 x^2 + 3 x + 0$ bzw. mit angepasstem Koeffizienten die Bedingungen erfüllt.
-b) Berechnen Sie den Inhalt der Fläche, die der Graph von $f(x)$ aus Abb. 2.1 mit der Wendetangente und der $y$-Achse im ersten Quadranten einschließt.
+b) Ermitteln Sie das Flächenmaß des Gebiets, welches der Graph von $f(x)$ aus Abb. 2.1 mit der Wendetangente und der $y$-Achse im ersten Quadranten einschließt.
 
 Hinweis zur Selbstkontrolle: Nutzen Sie für Teilaufgabe b) die Differenzfunktion $d(x) = f(x) - t_W(x)$ und bestimmen Sie vor der Integration die Schnittstellen im Intervall $[0; 4]$.
 """
@@ -6461,6 +7429,8 @@ _Tipp: So findest du Antworten schnell mit den Zeilenzahlen am Rand_
 </Rahmen>
 """
 
+    s2_gesamt_raw, s2_gesamt_ueb = _render_sek2_physik_gesamtwerk_markdown()
+
     return {
         "grundschule_mathematik": (gs_mathe_raw, gs_mathe_ueb),
         "grundschule_sachkunde": (gs_sachkunde_raw, gs_sachkunde_ueb),
@@ -6473,6 +7443,7 @@ _Tipp: So findest du Antworten schnell mit den Zeilenzahlen am Rand_
         "sek2_chemie": (s2_chem_raw, s2_chem_ueb),
         "sek2_biologie": (s2_bio_raw, s2_bio_ueb),
         "sek2_physik_verzeichnisse": (s2_phys_raw, s2_phys_ueb),
+        "sek2_physik_gesamtwerk": (s2_gesamt_raw, s2_gesamt_ueb),
         "sek2_mathematik_analysis": (s2_ana_raw, s2_ana_ueb),
     }
 
@@ -6699,6 +7670,13 @@ def generate_schoolbook_suite() -> Dict[str, Any]:
             build_sek2_physik_verzeichnisse_pdf,
             s2_chem_figs,
             403,
+        ),
+        (
+            "sek2_physik_gesamtwerk",
+            "Sekundarstufe II Klasse 11–13: Physik Gesamtband (20 Seiten: Römisch I–V + Kapitel 1 S. 1–9 + Kapitel 2 S. 10–15, DIN A4)",
+            build_sek2_physik_gesamtwerk_pdf,
+            mf_figs,
+            405,
         ),
         (
             "sek2_mathematik_analysis",

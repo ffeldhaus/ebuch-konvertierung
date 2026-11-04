@@ -229,10 +229,13 @@ def lint_markdown(
             "((...))",
         )
 
-    page_markers_with_lines: list[tuple[int, int]] = []
+    from backend.services.extraction_service import roman_to_int
+
+    page_markers_with_lines: list[tuple[str, int]] = []
     for idx, line in enumerate(lines):
         line_clean = line.strip()
-        if re.match(r"^(?:Seite|Page)\s+\d+$", line_clean, re.IGNORECASE):
+        m_unstd = re.match(r"^(?:Seite|Page)\s+(\d+|[IVXLCDMivxlcdm]+)$", line_clean, re.IGNORECASE)
+        if m_unstd and (m_unstd.group(1).isdigit() or roman_to_int(m_unstd.group(1)) is not None):
             _add_issue(
                 "page_number_format",
                 "warning",
@@ -240,16 +243,19 @@ def lint_markdown(
                 f"Nicht standardisierte Seitenzahl gefunden ('{line_clean}'). Sollte als '((X))' formatiert sein.",
                 line_clean,
             )
-        m_pg = re.match(r"^\(\((\d+)\)\)(?:\s*/\s*\(\((\d+)\)\))?$", line_clean)
+        m_pg = re.match(
+            r"^\(\((\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((\d+|[IVXLCDMivxlcdm]+)\)\))?$",
+            line_clean,
+        )
         if m_pg:
-            page_markers_with_lines.append((int(m_pg.group(1)), idx + 1))
+            page_markers_with_lines.append((m_pg.group(1), idx + 1))
             if m_pg.group(2):
-                page_markers_with_lines.append((int(m_pg.group(2)), idx + 1))
+                page_markers_with_lines.append((m_pg.group(2), idx + 1))
 
     for i in range(1, len(page_markers_with_lines)):
         prev_pg, _ = page_markers_with_lines[i - 1]
         curr_pg, curr_line = page_markers_with_lines[i]
-        if curr_pg == prev_pg:
+        if curr_pg.lower() == prev_pg.lower():
             _add_issue(
                 "page_number_duplicate",
                 "warning",
@@ -257,22 +263,34 @@ def lint_markdown(
                 f"Doppelte aufeinanderfolgende Seitenzahl '(({curr_pg}))' gefunden (jede Buchseite darf nur einmal markiert werden).",
                 f"(({curr_pg}))",
             )
-        elif curr_pg < prev_pg:
-            _add_issue(
-                "page_number_non_monotonic",
-                "warning",
-                curr_line,
-                f"Nicht-monotone Seitenzahlreihenfolge: '(({curr_pg}))' folgt auf '(({prev_pg}))'.",
-                f"(({prev_pg})) -> (({curr_pg}))",
-            )
+        elif prev_pg.isdigit() and curr_pg.isdigit():
+            if int(curr_pg) < int(prev_pg):
+                _add_issue(
+                    "page_number_non_monotonic",
+                    "warning",
+                    curr_line,
+                    f"Nicht-monotone Seitenzahlreihenfolge: '(({curr_pg}))' folgt auf '(({prev_pg}))'.",
+                    f"(({prev_pg})) -> (({curr_pg}))",
+                )
+        elif not prev_pg.isdigit() and not curr_pg.isdigit():
+            prev_r = roman_to_int(prev_pg)
+            curr_r = roman_to_int(curr_pg)
+            if prev_r is not None and curr_r is not None and curr_r < prev_r:
+                _add_issue(
+                    "page_number_non_monotonic",
+                    "warning",
+                    curr_line,
+                    f"Nicht-monotone Seitenzahlreihenfolge: '(({curr_pg}))' folgt auf '(({prev_pg}))'.",
+                    f"(({prev_pg})) -> (({curr_pg}))",
+                )
 
     target_expected_pages = expected_pages
     if target_expected_pages is None and raw_markdown:
-        raw_pgs = list(dict.fromkeys(re.findall(r"\(\((\d+)\)\)", raw_markdown)))
+        raw_pgs = list(dict.fromkeys(re.findall(r"\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)", raw_markdown)))
         if len(raw_pgs) >= 2:
             target_expected_pages = len(raw_pgs)
     if target_expected_pages and target_expected_pages >= 2:
-        unique_pred_pgs = list(dict.fromkeys(p for p, _ in page_markers_with_lines))
+        unique_pred_pgs = list(dict.fromkeys(p.lower() for p, _ in page_markers_with_lines))
         if len(unique_pred_pgs) < target_expected_pages:
             _add_issue(
                 "page_number_missing",

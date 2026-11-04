@@ -282,7 +282,7 @@ def _cluster_docling_items_into_lines(items_on_page: list[dict[str, Any]]) -> li
 
 
 def _extract_lines_with_pypdfium(pdf_path: str, max_pages: int) -> tuple[int, list[list[dict[str, Any]]], list[str]]:
-    """Extracts structured lines (with bounding-box x-indentation) and full page text
+    """Extracts structured lines (with bounding-box x-indentation) and bounded page text
     from the PDF using pypdfium2.
     """
     try:
@@ -292,30 +292,50 @@ def _extract_lines_with_pypdfium(pdf_path: str, max_pages: int) -> tuple[int, li
         return 0, [], []
     total_pages = len(doc)
     check_count = min(total_pages, max_pages)
+    scan_limit = min(total_pages, max(max_pages + 15, 35))
     pages_lines: list[list[dict[str, Any]]] = []
     all_page_texts: list[str] = []
 
     try:
-        for idx in range(total_pages):
+        for idx in range(scan_limit):
             page = doc[idx]
             textpage = page.get_textpage()
             raw_text = textpage.get_text_range() or ""
             all_page_texts.append(raw_text)
 
             if idx < check_count:
-                lines_list: list[dict[str, Any]] = []
-                for raw_line in raw_text.splitlines():
-                    stripped = raw_line.strip()
-                    if not stripped:
+                rect_items: list[dict[str, Any]] = []
+                n_rects = textpage.count_rects()
+                for r_idx in range(n_rects):
+                    l_val, b_val, r_val, t_val = textpage.get_rect(r_idx)
+                    txt = " ".join(textpage.get_text_bounded(l_val, b_val, r_val, t_val).split())
+                    if not txt:
                         continue
-                    lines_list.append({
-                        "text": stripped,
-                        "indent": 48.0,
-                        "right": 500.0,
-                        "height": 10.0,
-                        "y_mid": 0.0,
+                    rect_items.append({
+                        "text": txt,
+                        "l": float(l_val),
+                        "r": float(r_val),
+                        "height": abs(float(t_val - b_val)) or 10.0,
+                        "y_mid": float(t_val + b_val) / 2.0,
+                        "origin": "BOTTOMLEFT",
                     })
-                pages_lines.append(lines_list)
+                clustered = _cluster_docling_items_into_lines(rect_items)
+                if clustered:
+                    pages_lines.append(clustered)
+                else:
+                    lines_list: list[dict[str, Any]] = []
+                    for raw_line in raw_text.splitlines():
+                        stripped = raw_line.strip()
+                        if not stripped:
+                            continue
+                        lines_list.append({
+                            "text": stripped,
+                            "indent": 48.0,
+                            "right": 500.0,
+                            "height": 10.0,
+                            "y_mid": 0.0,
+                        })
+                    pages_lines.append(lines_list)
             textpage.close()
     finally:
         doc.close()
@@ -326,8 +346,8 @@ def _extract_lines_with_pypdfium(pdf_path: str, max_pages: int) -> tuple[int, li
 def _extract_pages_with_docling_fast(
     file_path: str, max_pages: int = MAX_DIRECTORY_CHECK_PAGES
 ) -> tuple[int, list[list[dict[str, Any]]], list[str]]:
-    """Uses Docling (capped to `max_pages`, with formula/table/image extraction disabled)
-    to extract positioned text lines from the first `max_pages` pages.
+    """Uses pypdfium2 (or Docling fallback, capped to `max_pages` without formula/table/image
+    extraction) to extract positioned text lines from the first `max_pages` pages.
     Returns (total_pages, pages_lines_for_checked_pages, all_page_texts).
     """
     ext = os.path.splitext(file_path)[1].lower()
@@ -358,7 +378,7 @@ def _extract_pages_with_docling_fast(
                 logger.warning(f"Docling DOCX directory check fallback: {e}")
         return 1, [[]], [""]
 
-    # PDF handling: first read total_pages and raw page texts via pypdfium2
+    # PDF handling: read total_pages, positioned lines, and bounded page texts via pypdfium2
     total_pages, fallback_lines, all_page_texts = _extract_lines_with_pypdfium(file_path, max_pages)
     if total_pages == 0 or not _HAS_DOCLING:
         return total_pages, fallback_lines, all_page_texts
@@ -369,7 +389,9 @@ def _extract_pages_with_docling_fast(
     checked_char_count = sum(len(t.strip()) for t in all_page_texts[:check_count])
     has_digital_text = checked_char_count >= 40
 
-    if has_digital_text and NativePdfPipeline is None:
+    # Never run slow neural OCR on scanned PDFs during upload, and return immediately
+    # when pypdfium2 already extracted positioned text lines.
+    if not has_digital_text or any(fallback_lines) or NativePdfPipeline is None:
         return total_pages, fallback_lines, all_page_texts
 
     try:
@@ -741,17 +763,25 @@ def _resolve_page_numbers_from_directories(
     if total_pages <= 0:
         return [1]
 
+    scanned_pages = min(total_pages, len(all_page_texts))
     norm_page_texts = [
         _normalize_text_for_match(re.sub(r"-\s*\n\s*", "", txt or ""))
-        for txt in all_page_texts
+        for txt in all_page_texts[:scanned_pages]
     ]
 
-    # Votes per PDF page index: {page_idx: {printed_page: score}}
-    page_votes: dict[int, dict[int, int]] = {i: {} for i in range(total_pages)}
+    # Votes per scanned PDF page index: {page_idx: {printed_page: score}}
+    page_votes: dict[int, dict[int, int]] = {i: {} for i in range(scanned_pages)}
     # Votes for constant offset (printed_page - page_idx): {offset: score}
     offset_votes: dict[int, int] = {}
 
-    # 1. Match directory entries against non-directory pages
+    # 1. Match directory entries against non-directory pages within scanned range
+    first_content_idx = (
+        max(directory_page_indices) + 1
+        if directory_page_indices
+        and min(directory_page_indices) <= 5
+        and max(directory_page_indices) + 1 < scanned_pages
+        else 0
+    )
     for entry in all_entries:
         target_page = entry.get("page")
         if not isinstance(target_page, int) or target_page <= 0:
@@ -759,7 +789,7 @@ def _resolve_page_numbers_from_directories(
 
         best_idx = None
         best_weight = 0
-        for idx in range(total_pages):
+        for idx in range(first_content_idx, scanned_pages):
             if idx in directory_page_indices:
                 continue
             w = _entry_matches_page_text(entry, norm_page_texts[idx])
@@ -773,11 +803,11 @@ def _resolve_page_numbers_from_directories(
             offset = target_page - best_idx
             offset_votes[offset] = offset_votes.get(offset, 0) + best_weight
 
-    # 2. Check printed page numbers on each PDF page (directory-safe)
-    for idx in range(total_pages):
+    # 2. Check printed page numbers on each scanned PDF page (directory-safe)
+    for idx in range(scanned_pages):
         is_dir = idx in directory_page_indices
         printed = _detect_printed_number_ignoring_directory_lines(
-            all_page_texts[idx] if idx < len(all_page_texts) else "",
+            all_page_texts[idx],
             is_directory_page=is_dir,
         )
         if printed is not None:
@@ -791,7 +821,7 @@ def _resolve_page_numbers_from_directories(
     if offset_votes:
         dominant_offset = max(offset_votes.items(), key=lambda kv: (kv[1], -abs(kv[0])))[0]
 
-    # 4. Enforce a strictly sequential (+1) page sequence across the PDF pages
+    # 4. Enforce a strictly sequential (+1) page sequence across all PDF pages
     if dominant_offset is not None:
         return [max(1, dominant_offset + i) for i in range(total_pages)]
 
@@ -833,6 +863,8 @@ def check_document_directories(
         "picture_entries": [],
         "heading_levels": {},
         "page_numbers": [],
+        "page_labels": [],
+        "roman_prefix_count": 0,
         "physical_start_page": 1,
     }
 
@@ -941,6 +973,47 @@ def check_document_directories(
         all_entries=all_entries,
     )
 
+    from backend.services.extraction_service import (
+        detect_page_label_from_text_lines,
+        get_pdf_page_labels,
+        int_to_roman,
+        roman_to_int,
+    )
+
+    dominant_offset = (
+        page_numbers[-1] - (total_pages - 1) if page_numbers and total_pages > 0 else 1
+    )
+    roman_prefix_count = 0
+    if dominant_offset <= 0 and total_pages > 0:
+        roman_prefix_count = min(total_pages, 1 - dominant_offset)
+        embedded_lbls = get_pdf_page_labels(abs_path) if abs_path.lower().endswith(".pdf") else []
+        lower_votes = 0
+        upper_votes = 0
+        for idx in range(roman_prefix_count):
+            cand_lbl = (
+                embedded_lbls[idx]
+                if idx < len(embedded_lbls) and roman_to_int(embedded_lbls[idx]) is not None
+                else None
+            )
+            if cand_lbl is None and idx < len(all_page_texts):
+                p_lines = [ln.strip() for ln in all_page_texts[idx].splitlines() if ln.strip()]
+                det = detect_page_label_from_text_lines(p_lines)
+                if det and roman_to_int(det) is not None:
+                    cand_lbl = det
+            if cand_lbl:
+                if cand_lbl.islower():
+                    lower_votes += 1
+                else:
+                    upper_votes += 1
+        is_upper = upper_votes >= lower_votes
+        page_labels = [
+            int_to_roman(i + 1, uppercase=is_upper) for i in range(roman_prefix_count)
+        ] + [
+            str(dominant_offset + i) for i in range(roman_prefix_count, total_pages)
+        ]
+    else:
+        page_labels = [str(p) for p in page_numbers]
+
     has_toc = bool(entries_by_type["toc"] or "toc" in explicit_headers_seen)
     has_figures = bool(entries_by_type["figures"] or "figures" in explicit_headers_seen)
     has_tables = bool(entries_by_type["tables"] or "tables" in explicit_headers_seen)
@@ -972,6 +1045,8 @@ def check_document_directories(
         "picture_entries": entries_by_type["pictures"],
         "heading_levels": heading_levels,
         "page_numbers": page_numbers,
+        "page_labels": page_labels,
+        "roman_prefix_count": roman_prefix_count,
         "physical_start_page": page_numbers[0] if page_numbers else 1,
     }
 
@@ -1015,7 +1090,7 @@ def extract_directories_from_markdown(markdown_content: str) -> dict[str, Any]:
         stripped = raw_line.strip()
         if not stripped:
             continue
-        if re.match(r"^\(\(\d+\)\)$", stripped):
+        if re.match(r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)$", stripped):
             continue
 
         header_type = _match_directory_header(stripped)
@@ -1286,6 +1361,8 @@ def apply_directory_page_numbers(
     if not directory_info or not directory_info.get("has_any_directory"):
         return markdown_content
 
+    from backend.services.extraction_service import int_to_roman, roman_to_int
+
     all_entries = (
         (directory_info.get("toc_entries") or [])
         + (directory_info.get("figure_entries") or [])
@@ -1293,9 +1370,11 @@ def apply_directory_page_numbers(
         + (directory_info.get("picture_entries") or [])
     )
     known_pages = directory_info.get("page_numbers") or []
+    known_labels = directory_info.get("page_labels") or []
+    roman_prefix_count = int(directory_info.get("roman_prefix_count") or 0)
 
-    # Split markdown by ((num)) page markers
-    parts = re.split(r"(\(\(\d+\)\))", markdown_content)
+    # Split markdown by ((num)) or ((Roman)) page markers
+    parts = re.split(r"(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))", markdown_content)
     if len(parts) < 2:
         # If no page markers exist at all and we know physical_start_page, prepend it
         start_pg = directory_info.get("physical_start_page")
@@ -1303,14 +1382,42 @@ def apply_directory_page_numbers(
             return f"(({start_pg}))\n\n{markdown_content}"
         return markdown_content
 
-    marker_indices = [i for i, p in enumerate(parts) if re.match(r"^\(\(\d+\)\)$", p)]
+    marker_indices = [
+        i
+        for i, p in enumerate(parts)
+        if re.match(r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)$", p)
+    ]
     if not marker_indices:
         return markdown_content
+
+    existing_tokens = [parts[i][2:-2].strip() for i in marker_indices]
+    if all(not tok.isdigit() and roman_to_int(tok) is not None for tok in existing_tokens):
+        return markdown_content
+
+    has_frontmatter_in_slice = False
+    for seg_pos in range(min(len(marker_indices), max(1, roman_prefix_count))):
+        m_idx = marker_indices[seg_pos]
+        tok = parts[m_idx][2:-2].strip()
+        seg_text = parts[m_idx + 1] if (m_idx + 1) < len(parts) else ""
+        if (not tok.isdigit() and roman_to_int(tok) is not None) or any(
+            _match_directory_header(line.strip()) is not None
+            for line in seg_text.splitlines()
+            if line.strip()
+        ):
+            has_frontmatter_in_slice = True
+            break
+
+    min_allowed_offset = (
+        (1 - roman_prefix_count)
+        if (roman_prefix_count > 0 and has_frontmatter_in_slice)
+        else 1
+    )
 
     # Cross-check each segment's content against directory entries and accumulate offset votes
     offset_votes: dict[int, int] = {}
     if len(marker_indices) == len(known_pages) and known_pages:
-        offset_votes[int(known_pages[0])] = offset_votes.get(int(known_pages[0]), 0) + 3
+        init_off = (1 - roman_prefix_count) if roman_prefix_count > 0 else int(known_pages[0])
+        offset_votes[init_off] = offset_votes.get(init_off, 0) + 3
 
     for seg_pos, m_idx in enumerate(marker_indices):
         seg_text = parts[m_idx + 1] if (m_idx + 1) < len(parts) else ""
@@ -1328,24 +1435,48 @@ def apply_directory_page_numbers(
                 if not isinstance(target_pg, int):
                     continue
                 w = _entry_matches_page_text(entry, norm_seg)
-                if w > 0 and (target_pg - seg_pos) >= 1:
+                if w > 0 and (target_pg - seg_pos) >= min_allowed_offset:
                     offset = target_pg - seg_pos
                     offset_votes[offset] = offset_votes.get(offset, 0) + w
 
     if offset_votes:
         best_offset = max(offset_votes.items(), key=lambda kv: (kv[1], -abs(kv[0])))[0]
-        inferred_marker_pages = [max(1, best_offset + i) for i in range(len(marker_indices))]
+        if best_offset <= 0:
+            r_len = 1 - best_offset
+            inferred_marker_labels = [
+                (
+                    str(known_labels[i])
+                    if i < len(known_labels) and not str(known_labels[i]).isdigit()
+                    else int_to_roman(i + 1, uppercase=True)
+                )
+                if i < r_len
+                else str(best_offset + i)
+                for i in range(len(marker_indices))
+            ]
+        else:
+            inferred_marker_labels = [
+                str(max(1, best_offset + i)) for i in range(len(marker_indices))
+            ]
+    elif (
+        has_frontmatter_in_slice
+        and roman_prefix_count > 0
+        and len(marker_indices) <= roman_prefix_count
+        and len(known_labels) >= len(marker_indices)
+    ):
+        inferred_marker_labels = [str(known_labels[i]) for i in range(len(marker_indices))]
+    elif known_labels and len(known_labels) == len(marker_indices):
+        inferred_marker_labels = [str(lbl) for lbl in known_labels]
     elif known_pages:
         start_pg = int(known_pages[0])
-        inferred_marker_pages = [max(1, start_pg + i) for i in range(len(marker_indices))]
+        inferred_marker_labels = [str(max(1, start_pg + i)) for i in range(len(marker_indices))]
     else:
         start_pg = int(directory_info.get("physical_start_page") or 1)
-        inferred_marker_pages = [max(1, start_pg + i) for i in range(len(marker_indices))]
+        inferred_marker_labels = [str(max(1, start_pg + i)) for i in range(len(marker_indices))]
 
     for seg_pos, m_idx in enumerate(marker_indices):
-        new_pg = inferred_marker_pages[seg_pos]
-        if new_pg is not None:
-            parts[m_idx] = f"(({new_pg}))"
+        new_lbl = inferred_marker_labels[seg_pos]
+        if new_lbl is not None:
+            parts[m_idx] = f"(({new_lbl}))"
 
     return "".join(parts)
 

@@ -167,7 +167,7 @@ SYSTEM_PROMPTS: Final[dict[str, str]] = {
         "Deine Aufgabe ist es, den bereitgestellten Text so umzuformatieren und zu taggen, dass er den offiziellen Übertragungsregeln entspricht.\n\n"
         "WICHTIGE REGELN:\n"
         "1. Seitenzahlen & Seitenkorrektur:\n"
-        "   - Seitenzahlen (die im Originaltext vorhanden sind, z.B. als einfache Nummern am Seitenende/Seitenanfang oder bereits als ((45))) müssen in Doppelklammern gesetzt werden, z.B. ((45)). Vor und nach jeder Seitenzahl muss eine Leerzeile stehen, und sie muss auf einer eigenen Zeile stehen.\n"
+        "   - Seitenzahlen (die im Originaltext vorhanden sind, z.B. als einfache Nummern am Seitenende/Seitenanfang oder bereits als ((45))) müssen in Doppelklammern gesetzt werden, z.B. ((45)). Römische Seitenzahlen im Buch (z.B. ((I)), ((II)) oder ((i)), ((ii))) werden ebenso exakt in Doppelklammern als ((I)) bzw. ((i)) beibehalten. Vor und nach jeder Seitenzahl muss eine Leerzeile stehen, und sie muss auf einer eigenen Zeile stehen.\n"
         "   - Bei Doppelseiten, die als Ganzes betrachtet werden: ((20)) / ((21)).\n"
         "   - Seitenkorrektur: Falls ein Seitenmarker ((...)) offensichtlich eine falsche relative Nummer (wie ((1))) trägt, aber im Textkopf oder Textfuß die tatsächliche gedruckte Buchseitenzahl steht (z.B. '85' oder 'Seite 85'), korrigiere den Marker auf die tatsächliche gedruckte Seitenzahl (z.B. ((85))).\n"
         "   - WICHTIG: Jede Seitenzahl darf im Dokument pro Seite nur GENAU EINMAL vorkommen. Wiederhole oder dupliziere dieselbe Seitenzahl niemals direkt hintereinander (z.B. NIEMALS '((23))\\n\\n((23))').\n"

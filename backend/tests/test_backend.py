@@ -1564,3 +1564,172 @@ def test_runaway_token_repetition_sanitization():
     )
     cleaned_bild = sanitize_runaway_repetitions(bild_text)
     assert cleaned_bild.count("<Bild>") == 3
+
+
+def test_roman_numeral_helpers_and_page_selection():
+    """Test roman_to_int, int_to_roman, validate_pages_string, and resolve_page_selection_to_relative_indices."""
+    from backend.services.extraction_service import (
+        int_to_roman,
+        resolve_page_selection_to_relative_indices,
+        roman_to_int,
+        validate_pages_string,
+    )
+
+    assert roman_to_int("I") == 1
+    assert roman_to_int("iv") == 4
+    assert roman_to_int("IX") == 9
+    assert roman_to_int("XLII") == 42
+    assert roman_to_int("MMMCMXCIX") == 3999
+    assert roman_to_int("") is None
+    assert roman_to_int("IIII") is None
+    assert roman_to_int("45") is None
+    assert roman_to_int("ABC") is None
+
+    assert int_to_roman(1) == "I"
+    assert int_to_roman(4) == "IV"
+    assert int_to_roman(4, uppercase=False) == "iv"
+    assert int_to_roman(14) == "XIV"
+    assert int_to_roman(0) == "0"
+    assert int_to_roman(4000) == "4000"
+
+    # Physical start page out-of-bounds check (e.g. test_educational.pdf with physical_start=45)
+    ok_45, msg_45 = validate_pages_string("5", 1, physical_start=45, page_labels=["45"])
+    assert ok_45 is False
+    assert "liegt außerhalb des gültigen Bereichs" in msg_45
+
+    ok_valid_45, _ = validate_pages_string("45", 1, physical_start=45, page_labels=["45"])
+    assert ok_valid_45 is True
+
+    # Invalid characters check
+    ok_bad, msg_bad = validate_pages_string("1,2,abc", 6, page_labels=["I", "II", "III", "1", "2", "3"])
+    assert ok_bad is False
+    assert "ungültige Zeichen" in msg_bad
+
+    # Roman + Arabic document labels
+    labels = ["I", "II", "III", "1", "2", "3"]
+    assert validate_pages_string("I-III", 6, page_labels=labels) == (True, "")
+    assert validate_pages_string("i-ii, 1-2", 6, page_labels=labels) == (True, "")
+    assert validate_pages_string("II-2", 6, page_labels=labels) == (True, "")
+
+    ok_rom_oob, msg_rom_oob = validate_pages_string("I-V", 6, page_labels=labels)
+    assert ok_rom_oob is False
+    assert "liegt außerhalb des gültigen Bereichs" in msg_rom_oob
+
+    ok_no_rom, msg_no_rom = validate_pages_string("I-II", 3, page_labels=["1", "2", "3"])
+    assert ok_no_rom is False
+    assert "keine römischen Seitenzahlen" in msg_no_rom
+
+    # Resolution to 1-based relative PDF page indices
+    assert resolve_page_selection_to_relative_indices("I-III", 6, page_labels=labels) == [1, 2, 3]
+    assert resolve_page_selection_to_relative_indices("i-ii, 1-2", 6, page_labels=labels) == [1, 2, 4, 5]
+    assert resolve_page_selection_to_relative_indices("III-2", 6, page_labels=labels) == [3, 4, 5]
+    assert resolve_page_selection_to_relative_indices("45-46", 3, physical_start=45, page_labels=["45", "46", "47"]) == [1, 2]
+
+
+def test_get_pdf_page_labels_and_printed_roman_detection(tmp_path):
+    """Test get_pdf_page_labels and get_page_labels_for_pdf with sidecar/PageLabels and printed Roman footers."""
+    from reportlab.pdfbase.pdfdoc import PDFArray, PDFDictionary, PDFName
+    from reportlab.pdfgen import canvas
+
+    from backend.services.extraction_service import get_page_labels_for_pdf, get_pdf_page_labels
+
+    # 1. Synthetic PDF with embedded /PageLabels (I, II, III, 1, 2, 3) and printed footers
+    pdf_path = tmp_path / "roman_frontmatter.pdf"
+    c = canvas.Canvas(str(pdf_path))
+    printed_footers = ["Seite I", "Seite II", "Seite III", "Seite 1", "Seite 2", "Seite 3"]
+    for idx, footer in enumerate(printed_footers):
+        c.drawString(72, 720, f"Inhalt auf Dokumentseite {idx + 1}")
+        c.drawString(280, 36, footer)
+        c.showPage()
+
+    # Attach PDF /PageLabels number tree: pages 0..2 -> Roman uppercase ('R'), pages 3..5 -> Arabic ('D')
+    r_dict = PDFDictionary({"S": PDFName("R"), "St": 1})
+    d_dict = PDFDictionary({"S": PDFName("D"), "St": 1})
+    nums_array = PDFArray([0, r_dict, 3, d_dict])
+    c._doc.Catalog.PageLabels = PDFDictionary({"Nums": nums_array})
+    c.save()
+
+    embedded_labels = get_pdf_page_labels(str(pdf_path))
+    assert embedded_labels == ["I", "II", "III", "1", "2", "3"]
+    resolved_labels = get_page_labels_for_pdf(str(pdf_path))
+    assert resolved_labels == ["I", "II", "III", "1", "2", "3"]
+
+    # 2. Synthetic PDF without /PageLabels dictionary, relying on printed Roman footers
+    printed_only_path = tmp_path / "printed_roman_only.pdf"
+    c2 = canvas.Canvas(str(printed_only_path))
+    for idx, footer in enumerate(["I", "II", "III", "1", "2", "3"]):
+        c2.drawString(72, 720, f"Kapiteltext Abschnitt {idx + 1}")
+        c2.drawString(280, 36, footer)
+        c2.showPage()
+    c2.save()
+
+    assert get_pdf_page_labels(str(printed_only_path)) == []
+    assert get_page_labels_for_pdf(str(printed_only_path)) == ["I", "II", "III", "1", "2", "3"]
+
+
+def test_a11y_linter_roman_page_markers():
+    """Verify lint_markdown handles Roman page markers ((I)), ((II)) transitioning to ((1)), ((2))."""
+    from backend.services.a11y_linter import lint_markdown
+
+    valid_md = (
+        "((I))\n\n# Vorwort\n\nEinführungstext.\n\n"
+        "((II))\n\nInhaltsübersicht.\n\n"
+        "((1))\n\n# 1 Hauptkapitel\n\nErster Absatz.\n\n"
+        "((2))\n\nZweiter Absatz.\n"
+    )
+    report_ok = lint_markdown(valid_md)
+    non_monotonic_ok = [
+        i for i in report_ok.issues if i.rule in ("page_number_non_monotonic", "page_number_duplicate")
+    ]
+    assert len(non_monotonic_ok) == 0
+
+    dup_roman_md = "((I))\n\n# Vorwort\n\n((II))\n\nText.\n\n((II))\n\nDuplikat.\n"
+    report_dup = lint_markdown(dup_roman_md)
+    assert any(i.rule in ("page_number_duplicate", "page_number_non_monotonic") for i in report_dup.issues)
+
+    decreasing_roman_md = "((III))\n\n# Vorwort\n\n((I))\n\nRücksprung.\n"
+    report_dec = lint_markdown(decreasing_roman_md)
+    assert any(i.rule == "page_number_non_monotonic" for i in report_dec.issues)
+
+
+def test_api_pdf_preview_filtered_by_roman_pages(tmp_path):
+    """Verify GET /api/pdf/{task_id}?pages=I-II returns a cropped 2-page PDF while GET /api/pdf/{task_id} returns the full PDF."""
+    import uuid
+    import pypdfium2 as pdfium
+    from reportlab.pdfgen import canvas
+    from backend.services.task_manager import Task
+
+    pdf_path = tmp_path / "preview_roman_test.pdf"
+    c = canvas.Canvas(str(pdf_path))
+    for lbl in ["I", "II", "III", "1", "2"]:
+        c.drawString(72, 720, f"Seite {lbl}")
+        c.showPage()
+    c.save()
+
+    task_id = str(uuid.uuid4())
+    task = Task(
+        task_id=task_id,
+        original_name="preview_roman_test.pdf",
+        input_path=str(pdf_path),
+        extension=".pdf",
+        page_count=5,
+        physical_start_page=1,
+        page_labels=["I", "II", "III", "1", "2"],
+    )
+    active_tasks[task_id] = task
+
+    try:
+        full_res = client.get(f"/api/pdf/{task_id}")
+        assert full_res.status_code == 200
+        full_doc = pdfium.PdfDocument(full_res.content)
+        assert len(full_doc) == 5
+        full_doc.close()
+
+        filtered_res = client.get(f"/api/pdf/{task_id}?pages=I-II")
+        assert filtered_res.status_code == 200
+        filtered_doc = pdfium.PdfDocument(filtered_res.content)
+        assert len(filtered_doc) == 2
+        filtered_doc.close()
+    finally:
+        active_tasks.pop(task_id, None)
+

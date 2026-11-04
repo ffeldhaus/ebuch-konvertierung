@@ -212,13 +212,16 @@ class AppController {
   private activeBenchRulesFile: File | null = null;
   private activeBenchSourcePageCount: number = 0;
   private activeBenchPhysicalStartPage: number = 1;
+  private activeBenchPageLabels: string[] = [];
   private benchEvaluationResults: any = null;
   private activeBenchmarkTaskId: string | null = null;
   private benchmarkPollInterval: any = null;
   private taskId: string | null = null;
   private activePageCount: number = 0;
   private physicalStartPage: number = 1;
-  private currentPdfPage: number = -1;
+  private pageLabels: string[] = [];
+  private currentPdfPage: string = '';
+  private pdfPreviewDebounceTimer: number | null = null;
   private currentRawMarkdown: string = '';
   private currentStandardisedMarkdown: string = '';
 
@@ -242,6 +245,7 @@ class AppController {
   private activeBboxFilter = 'all';
   private layoutCache = new Map<string, {
     physical_start_page: number;
+    page_labels?: string[];
     blocks: Array<{
       type: string;
       text: string;
@@ -386,9 +390,9 @@ class AppController {
       const text = this.standardisedMarkdownTextarea.value;
       const cursorPos = this.standardisedMarkdownTextarea.selectionStart;
       const textBefore = text.slice(0, cursorPos);
-      const matches = [...textBefore.matchAll(/\(\((\d+)\)\)/g)];
+      const matches = [...textBefore.matchAll(/\(\((\d+|[IVXLCDMivxlcdm]+)\)\)/g)];
       if (matches.length > 0) {
-        const activePage = parseInt(matches[matches.length - 1][1], 10);
+        const activePage = matches[matches.length - 1][1];
         this.updatePdfPage(activePage);
         this.highlightPagePill(activePage);
       }
@@ -466,26 +470,39 @@ class AppController {
         const val = this.pagesInput.value.trim();
         if (!val) {
           this.clearInputError(this.pagesInput, this.pagesInputError);
+          this.refreshPdfPreview();
           return;
         }
         if (this.activePageCount > 0) {
-          const validation = this.validatePages(val, this.activePageCount, this.physicalStartPage);
+          const validation = this.validatePages(val, this.activePageCount, this.physicalStartPage, this.pageLabels);
           if (!validation.isValid) {
             this.showInputError(this.pagesInput, this.pagesInputError, this.pagesInputErrorText, validation.error || 'Ungültige Seitenauswahl.');
           } else {
             this.clearInputError(this.pagesInput, this.pagesInputError);
+            this.refreshPdfPreview();
           }
         }
+      });
+      this.pagesInput.addEventListener('change', () => {
+        this.refreshPdfPreview();
       });
       this.pagesInput.addEventListener('input', () => {
         const val = this.pagesInput.value.trim();
         if (!val || this.activePageCount === 0) {
           this.clearInputError(this.pagesInput, this.pagesInputError);
+          if (this.pdfPreviewDebounceTimer !== null) {
+            window.clearTimeout(this.pdfPreviewDebounceTimer);
+          }
+          this.pdfPreviewDebounceTimer = window.setTimeout(() => this.refreshPdfPreview(), 300);
           return;
         }
-        const validation = this.validatePages(val, this.activePageCount, this.physicalStartPage);
+        const validation = this.validatePages(val, this.activePageCount, this.physicalStartPage, this.pageLabels);
         if (validation.isValid) {
           this.clearInputError(this.pagesInput, this.pagesInputError);
+          if (this.pdfPreviewDebounceTimer !== null) {
+            window.clearTimeout(this.pdfPreviewDebounceTimer);
+          }
+          this.pdfPreviewDebounceTimer = window.setTimeout(() => this.refreshPdfPreview(), 300);
         }
       });
     }
@@ -678,7 +695,7 @@ class AppController {
     html = html.replace(/^-\t(.*$)/gim, '<li class="ml-4 list-disc text-slate-350">$1</li>');
     
     // Page indicators
-    html = html.replace(/\(\((\d+)\)\)/g, '<div data-page-anchor="$1" class="text-[9px] font-bold text-slate-500 border-t border-slate-800/50 pt-1.5 my-3">Seite $1</div>');
+    html = html.replace(/\(\((\d+|[IVXLCDMivxlcdm]+)\)\)/g, '<div data-page-anchor="$1" class="text-[9px] font-bold text-slate-500 border-t border-slate-800/50 pt-1.5 my-3">Seite $1</div>');
     
     // Formatting marks
     html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
@@ -1080,6 +1097,7 @@ class AppController {
       this.taskId = uploadData.task_id;
       this.activePageCount = uploadData.page_count || 0;
       this.physicalStartPage = uploadData.physical_start_page || 1;
+      this.pageLabels = Array.isArray(uploadData.page_labels) ? uploadData.page_labels.map(String) : [];
       localStorage.setItem('active_task_id', uploadData.task_id);
       this.updateRulesetUploadState(true);
       this.log(`Datei hochgeladen. Task-ID: ${this.taskId}`, 'success');
@@ -1096,7 +1114,7 @@ class AppController {
       if (ext === '.pdf' && this.activePageCount > 0) {
         this.pagesInput.disabled = false;
         this.pagesInput.classList.remove('cursor-not-allowed', 'opacity-60');
-        this.pagesInput.placeholder = `z. B. 1-5, 8 (Dokument hat ${this.activePageCount} ${this.activePageCount === 1 ? 'Seite' : 'Seiten'})`;
+        this.pagesInput.placeholder = this.formatPagesPlaceholder(this.activePageCount, this.pageLabels);
       } else {
         this.pagesInput.disabled = true;
         this.pagesInput.classList.add('cursor-not-allowed', 'opacity-60');
@@ -1104,7 +1122,7 @@ class AppController {
       }
 
       // Show PDF preview immediately
-      this.pdfViewerFrame.src = `/api/pdf/${this.taskId}`;
+      this.refreshPdfPreview();
       this.isPdfPaneVisible = true;
       this.updatePaneVisibility();
 
@@ -1127,6 +1145,12 @@ class AppController {
     this.taskId = null;
     this.activePageCount = 0;
     this.physicalStartPage = 1;
+    this.pageLabels = [];
+    this.currentPdfPage = '';
+    if (this.pdfPreviewDebounceTimer !== null) {
+      window.clearTimeout(this.pdfPreviewDebounceTimer);
+      this.pdfPreviewDebounceTimer = null;
+    }
     localStorage.removeItem('active_task_id');
     this.fileInput.value = '';
     this.fileStatus.classList.add('hidden');
@@ -1270,7 +1294,7 @@ class AppController {
     const isPdf = this.activeFile.name.toLowerCase().endsWith('.pdf');
     if (isPdf && this.activePageCount > 0) {
       const pagesVal = this.pagesInput.value.trim();
-      const validation = this.validatePages(pagesVal, this.activePageCount, this.physicalStartPage);
+      const validation = this.validatePages(pagesVal, this.activePageCount, this.physicalStartPage, this.pageLabels);
       console.log('startProcessing: validation result', { pagesVal, validation });
       if (!validation.isValid) {
         this.showInputError(this.pagesInput, this.pagesInputError, this.pagesInputErrorText, validation.error || 'Ungültige Seitenauswahl.');
@@ -1439,6 +1463,9 @@ class AppController {
         if (stateRes.ok) {
           const stateData = await stateRes.json();
           this.physicalStartPage = stateData.physical_start_page || 1;
+          if (Array.isArray(stateData.page_labels)) {
+            this.pageLabels = stateData.page_labels.map(String);
+          }
         }
       } catch (e) {
         console.error('Error fetching physical start page:', e);
@@ -1646,6 +1673,7 @@ class AppController {
       this.activeFile = new File([], data.original_name);
       this.activePageCount = data.page_count || 0;
       this.physicalStartPage = data.physical_start_page || 1;
+      this.pageLabels = Array.isArray(data.page_labels) ? data.page_labels.map(String) : [];
       
       // Restore select inputs
       if (data.engine) {
@@ -1657,7 +1685,7 @@ class AppController {
       if (data.extension === '.pdf' && this.activePageCount > 0) {
         this.pagesInput.disabled = false;
         this.pagesInput.classList.remove('cursor-not-allowed', 'opacity-60');
-        this.pagesInput.placeholder = `z. B. 1-5, 8 (Dokument hat ${this.activePageCount} ${this.activePageCount === 1 ? 'Seite' : 'Seiten'})`;
+        this.pagesInput.placeholder = this.formatPagesPlaceholder(this.activePageCount, this.pageLabels);
       }
       if (data.lang) {
         this.langSelect.value = data.lang;
@@ -1682,7 +1710,7 @@ class AppController {
       this.processBtn.textContent = 'Verarbeitung läuft...';
       
       // Set PDF Preview
-      this.pdfViewerFrame.src = `/api/pdf/${taskId}`;
+      this.refreshPdfPreview();
       this.updateRulesetUploadState(true);
       
       // Unconditionally restore raw markdown and standardised markdown if present
@@ -2343,12 +2371,12 @@ class AppController {
     this.standardisedMarkdownRendered.addEventListener('scroll', handleScrollBound);
   }
 
-  private getDivAnchors(div: HTMLDivElement): { pageNum: number; pos: number }[] {
-    const anchors: { pageNum: number; pos: number }[] = [];
+  private getDivAnchors(div: HTMLDivElement): { pageNum: string; pos: number }[] {
+    const anchors: { pageNum: string; pos: number }[] = [];
     const elements = Array.from(div.querySelectorAll('[data-page-anchor]'));
     elements.forEach(el => {
-      const pageNum = parseInt(el.getAttribute('data-page-anchor') || '', 10);
-      if (!isNaN(pageNum)) {
+      const pageNum = (el.getAttribute('data-page-anchor') || '').trim();
+      if (pageNum) {
         const pos = (el as HTMLElement).offsetTop - div.offsetTop;
         anchors.push({ pageNum, pos });
       }
@@ -2356,18 +2384,18 @@ class AppController {
     return anchors.sort((a, b) => a.pos - b.pos);
   }
 
-  private getTextareaAnchors(textarea: HTMLTextAreaElement): { pageNum: number; pos: number }[] {
-    const anchors: { pageNum: number; pos: number }[] = [];
+  private getTextareaAnchors(textarea: HTMLTextAreaElement): { pageNum: string; pos: number }[] {
+    const anchors: { pageNum: string; pos: number }[] = [];
     const text = textarea.value;
     const lines = text.split('\n');
     const totalLines = lines.length;
     const scrollHeight = textarea.scrollHeight;
     
     lines.forEach((line, index) => {
-      const match = line.match(/\(\((\d+)\)\)/);
+      const match = line.match(/\(\((\d+|[IVXLCDMivxlcdm]+)\)\)/);
       if (match) {
-        const pageNum = parseInt(match[1], 10);
-        if (!isNaN(pageNum)) {
+        const pageNum = match[1].trim();
+        if (pageNum) {
           const pos = (index / totalLines) * scrollHeight;
           anchors.push({ pageNum, pos });
         }
@@ -2376,7 +2404,7 @@ class AppController {
     return anchors.sort((a, b) => a.pos - b.pos);
   }
 
-  private getScrollAnchors(el: HTMLElement): { pageNum: number; pos: number }[] {
+  private getScrollAnchors(el: HTMLElement): { pageNum: string; pos: number }[] {
     if (el instanceof HTMLTextAreaElement) {
       return this.getTextareaAnchors(el);
     } else if (el instanceof HTMLDivElement) {
@@ -2385,32 +2413,252 @@ class AppController {
     return [];
   }
 
-  private updatePdfPage(pageNum: number) {
-    if (pageNum === this.currentPdfPage || pageNum <= 0) return;
-    this.currentPdfPage = pageNum;
-    const relativePage = this.physicalStartPage > 0 ? (pageNum - this.physicalStartPage + 1) : pageNum;
+  private romanToInt(val: string): number | null {
+    const s = (val || '').trim();
+    if (!s || !/^(?=[IVXLCDMivxlcdm]+$)M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$/i.test(s)) {
+      return null;
+    }
+    const romanMap: Record<string, number> = {
+      I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000,
+    };
+    let total = 0;
+    let prev = 0;
+    const upper = s.toUpperCase();
+    for (let i = upper.length - 1; i >= 0; i--) {
+      const cur = romanMap[upper[i]] || 0;
+      if (cur < prev) {
+        total -= cur;
+      } else {
+        total += cur;
+        prev = cur;
+      }
+    }
+    return total > 0 ? total : null;
+  }
+
+  private intToRoman(num: number, uppercase = true): string {
+    if (num <= 0 || num >= 4000) {
+      return String(num);
+    }
+    const pairs: Array<[number, string]> = [
+      [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+      [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+      [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+    ];
+    let rem = num;
+    const out: string[] = [];
+    for (const [val, sym] of pairs) {
+      while (rem >= val) {
+        out.push(sym);
+        rem -= val;
+      }
+    }
+    const res = out.join('');
+    return uppercase ? res : res.toLowerCase();
+  }
+
+  private formatPagesPlaceholder(pageCount: number, pageLabels: string[]): string {
+    const pageWord = pageCount === 1 ? 'Seite' : 'Seiten';
+    const romanLabels = (pageLabels || []).filter(l => this.romanToInt(l) !== null);
+    if (romanLabels.length > 0) {
+      const romanEnd = romanLabels[romanLabels.length - 1];
+      const romanRange = romanLabels.length > 1 ? `${romanLabels[0]}-${romanEnd}` : romanLabels[0];
+      return `z. B. ${romanRange}, 1-5 (${pageCount} ${pageWord})`;
+    }
+    return `z. B. 1-5, 8 (Dokument hat ${pageCount} ${pageWord})`;
+  }
+
+  private resolveSelectedRelativePages(
+    pagesVal: string,
+    pageCount: number,
+    physicalStartPage?: number,
+    pageLabels?: string[]
+  ): number[] {
+    const trimmed = (pagesVal || '').trim();
+    if (!trimmed || pageCount <= 0) {
+      return [];
+    }
+    const labels = pageLabels ?? this.pageLabels;
+    const labelToRel = new Map<string, number>();
+    if (labels && labels.length > 0) {
+      labels.forEach((lbl, idx) => {
+        const clean = String(lbl).trim();
+        if (clean) {
+          const up = clean.toUpperCase();
+          if (!labelToRel.has(up)) {
+            labelToRel.set(up, idx + 1);
+          }
+        }
+      });
+    }
+
+    const resolved = new Set<number>();
+    const fallbackNumeric: number[] = [];
+
+    for (const rawPart of trimmed.split(',')) {
+      const part = rawPart.trim();
+      if (!part) continue;
+      if (part.includes('-')) {
+        const subparts = part.split('-');
+        if (subparts.length !== 2) continue;
+        const sTok = subparts[0].trim();
+        const eTok = subparts[1].trim();
+        if (labelToRel.has(sTok.toUpperCase()) && labelToRel.has(eTok.toUpperCase())) {
+          const r1 = labelToRel.get(sTok.toUpperCase())!;
+          const r2 = labelToRel.get(eTok.toUpperCase())!;
+          for (let idx = Math.min(r1, r2); idx <= Math.max(r1, r2); idx++) {
+            if (idx >= 1 && idx <= pageCount) {
+              resolved.add(idx);
+            }
+          }
+          continue;
+        }
+        const sVal = /^\d+$/.test(sTok) ? parseInt(sTok, 10) : this.romanToInt(sTok);
+        const eVal = /^\d+$/.test(eTok) ? parseInt(eTok, 10) : this.romanToInt(eTok);
+        if (sVal !== null && eVal !== null && sVal > 0 && eVal > 0) {
+          for (let v = Math.min(sVal, eVal); v <= Math.max(sVal, eVal); v++) {
+            fallbackNumeric.push(v);
+          }
+        }
+      } else {
+        if (labelToRel.has(part.toUpperCase())) {
+          const idx = labelToRel.get(part.toUpperCase())!;
+          if (idx >= 1 && idx <= pageCount) {
+            resolved.add(idx);
+          }
+          continue;
+        }
+        const val = /^\d+$/.test(part) ? parseInt(part, 10) : this.romanToInt(part);
+        if (val !== null && val > 0) {
+          fallbackNumeric.push(val);
+        }
+      }
+    }
+
+    if (fallbackNumeric.length > 0) {
+      const sortedFb = Array.from(new Set(fallbackNumeric)).sort((a, b) => a - b);
+      const physicalStart = physicalStartPage || this.physicalStartPage || 1;
+      const isOffset = sortedFb[sortedFb.length - 1] > pageCount || (
+        physicalStart > 1 &&
+        sortedFb.every(p => p >= physicalStart && p < physicalStart + pageCount) &&
+        sortedFb.some(p => p > pageCount)
+      );
+      if (isOffset) {
+        let mapped = sortedFb.map(p => p - physicalStart + 1);
+        if (mapped.some(p => p < 1 || p > pageCount)) {
+          mapped = sortedFb.map(p => p - sortedFb[0] + 1);
+        }
+        for (const idx of mapped) {
+          if (idx >= 1 && idx <= pageCount) {
+            resolved.add(idx);
+          }
+        }
+      } else {
+        for (const idx of sortedFb) {
+          if (idx >= 1 && idx <= pageCount) {
+            resolved.add(idx);
+          }
+        }
+      }
+    }
+
+    return Array.from(resolved).sort((a, b) => a - b);
+  }
+
+  private refreshPdfPreview() {
+    if (!this.taskId || !this.pdfViewerFrame) return;
+    if (this.activeFile && !this.activeFile.name.toLowerCase().endsWith('.pdf')) return;
+
+    const val = this.pagesInput?.value.trim() || '';
+    let targetUrl = `/api/pdf/${this.taskId}`;
+    if (val && this.activePageCount > 0) {
+      const validation = this.validatePages(val, this.activePageCount, this.physicalStartPage, this.pageLabels);
+      if (!validation.isValid) {
+        return;
+      }
+      targetUrl = `/api/pdf/${this.taskId}?pages=${encodeURIComponent(val)}`;
+    }
+
+    const currentSrc = this.pdfViewerFrame.getAttribute('src') || '';
+    const currentBase = currentSrc.split('#')[0];
+    if (currentBase !== targetUrl) {
+      this.pdfViewerFrame.src = targetUrl;
+    }
+
+    this.updatePagePills();
+    if (this.isBboxOverlayActive) {
+      const selectedIndices = this.getSelectedBboxPageIndices();
+      if (selectedIndices.length > 0 && !selectedIndices.includes(this.currentBboxPageIdx)) {
+        this.currentBboxPageIdx = selectedIndices[0];
+      }
+      this.renderBboxPage();
+    }
+  }
+
+  private updatePdfPage(pageLabel: string | number) {
+    const labelStr = String(pageLabel).trim();
+    if (!labelStr || labelStr.toUpperCase() === this.currentPdfPage.toUpperCase()) return;
+    this.currentPdfPage = labelStr;
+
+    let relativePage = -1;
+    if (this.pageLabels && this.pageLabels.length > 0) {
+      const matchIdx = this.pageLabels.findIndex(l => String(l).trim().toUpperCase() === labelStr.toUpperCase());
+      if (matchIdx !== -1) {
+        relativePage = matchIdx + 1;
+      }
+    }
+    if (relativePage < 1) {
+      if (/^\d+$/.test(labelStr)) {
+        const num = parseInt(labelStr, 10);
+        if (num <= 0) return;
+        relativePage = this.physicalStartPage > 0 ? (num - this.physicalStartPage + 1) : num;
+        if (relativePage < 1 && num >= 1 && num <= Math.max(1, this.activePageCount)) {
+          relativePage = num;
+        }
+      } else {
+        const rVal = this.romanToInt(labelStr);
+        if (rVal === null || rVal <= 0) return;
+        relativePage = rVal;
+      }
+    }
+
     if (relativePage >= 1) {
       this.currentBboxPageIdx = relativePage - 1;
       if (this.isBboxOverlayActive) {
         this.renderBboxPage();
       }
     }
-    if (this.pdfViewerFrame && this.taskId) {
-      try {
-        if (relativePage >= 1) {
-          const url = `/api/pdf/${this.taskId}#page=${relativePage}`;
-          const iframeWindow = this.pdfViewerFrame.contentWindow;
-          if (iframeWindow) {
-            iframeWindow.location.replace(url);
-          } else {
-            this.pdfViewerFrame.src = url;
+    if (this.pdfViewerFrame && this.taskId && relativePage >= 1) {
+      let iframePage = relativePage;
+      let baseUrl = `/api/pdf/${this.taskId}`;
+      const pagesVal = this.pagesInput?.value.trim() || '';
+      if (pagesVal && this.activePageCount > 0) {
+        const validation = this.validatePages(pagesVal, this.activePageCount, this.physicalStartPage, this.pageLabels);
+        if (validation.isValid) {
+          baseUrl = `/api/pdf/${this.taskId}?pages=${encodeURIComponent(pagesVal)}`;
+          const selectedRelPages = this.resolveSelectedRelativePages(
+            pagesVal,
+            this.activePageCount,
+            this.physicalStartPage,
+            this.pageLabels
+          );
+          const posIdx = selectedRelPages.indexOf(relativePage);
+          if (posIdx !== -1) {
+            iframePage = posIdx + 1;
           }
+        }
+      }
+      const url = `${baseUrl}#page=${iframePage}`;
+      try {
+        const iframeWindow = this.pdfViewerFrame.contentWindow;
+        if (iframeWindow) {
+          iframeWindow.location.replace(url);
+        } else {
+          this.pdfViewerFrame.src = url;
         }
       } catch (e) {
         console.error('Error syncing PDF scroll page:', e);
-        if (relativePage >= 1) {
-          this.pdfViewerFrame.src = `/api/pdf/${this.taskId}#page=${relativePage}`;
-        }
+        this.pdfViewerFrame.src = url;
       }
     }
   }
@@ -2433,7 +2681,7 @@ class AppController {
       this.standardisedMarkdownRendered
     ];
     
-    let activePageNum = -1;
+    let activePageNum = '';
     
     if (sourceAnchors.length > 0 && maxScroll > 0) {
       let activeAnchorIdx = -1;
@@ -2459,7 +2707,7 @@ class AppController {
           if (targetAnchors.length > 0 && targetMaxScroll > 0) {
             if (activeAnchorIdx === -1) {
               const nextSource = sourceAnchors[0];
-              const nextTarget = targetAnchors.find(a => a.pageNum === nextSource.pageNum);
+              const nextTarget = targetAnchors.find(a => a.pageNum.toUpperCase() === nextSource.pageNum.toUpperCase());
               if (nextTarget && nextSource.pos > 0) {
                 const pct = scrollTop / nextSource.pos;
                 target.scrollTop = pct * nextTarget.pos;
@@ -2469,7 +2717,7 @@ class AppController {
               }
             } else if (activeAnchorIdx === sourceAnchors.length - 1) {
               const prevSource = sourceAnchors[activeAnchorIdx];
-              const prevTarget = targetAnchors.find(a => a.pageNum === prevSource.pageNum);
+              const prevTarget = targetAnchors.find(a => a.pageNum.toUpperCase() === prevSource.pageNum.toUpperCase());
               if (prevTarget && maxScroll > prevSource.pos) {
                 const pct = (scrollTop - prevSource.pos) / (maxScroll - prevSource.pos);
                 target.scrollTop = prevTarget.pos + pct * (targetMaxScroll - prevTarget.pos);
@@ -2480,8 +2728,8 @@ class AppController {
             } else {
               const prevSource = sourceAnchors[activeAnchorIdx];
               const nextSource = sourceAnchors[activeAnchorIdx + 1];
-              const prevTarget = targetAnchors.find(a => a.pageNum === prevSource.pageNum);
-              const nextTarget = targetAnchors.find(a => a.pageNum === nextSource.pageNum);
+              const prevTarget = targetAnchors.find(a => a.pageNum.toUpperCase() === prevSource.pageNum.toUpperCase());
+              const nextTarget = targetAnchors.find(a => a.pageNum.toUpperCase() === nextSource.pageNum.toUpperCase());
               
               if (prevTarget && nextTarget && nextSource.pos > prevSource.pos) {
                 const pct = (scrollTop - prevSource.pos) / (nextSource.pos - prevSource.pos);
@@ -2506,7 +2754,7 @@ class AppController {
       });
     }
     
-    if (activePageNum > 0) {
+    if (activePageNum) {
       this.updatePdfPage(activePageNum);
     }
     
@@ -2516,20 +2764,84 @@ class AppController {
     }, 100);
   }
 
-  private validatePages(pagesVal: string, pageCount: number, physicalStartPage?: number): { isValid: boolean; error?: string } {
+  private validatePages(
+    pagesVal: string,
+    pageCount: number,
+    physicalStartPage?: number,
+    pageLabels?: string[]
+  ): { isValid: boolean; error?: string } {
     if (!pagesVal.trim()) {
       return { isValid: true };
     }
     
-    if (!/^[0-9,\-\s]+$/.test(pagesVal)) {
+    if (!/^[0-9IVXLCDMivxlcdm,\-\s]+$/.test(pagesVal)) {
       return { 
         isValid: false, 
-        error: 'Die Seitenauswahl enthält ungültige Zeichen. Erlaubt sind nur Zahlen, Kommas, Bindestriche und Leerzeichen (z. B. "1, 3, 5-10").' 
+        error: 'Die Seitenauswahl enthält ungültige Zeichen. Erlaubt sind nur Zahlen, römische Zahlen, Kommas, Bindestriche und Leerzeichen (z. B. "I-IV, 1-5").' 
       };
     }
 
+    const labels = pageLabels ?? this.pageLabels;
+    const labelToRel = new Map<string, number>();
+    const romanLabelsList: string[] = [];
+    if (labels && labels.length > 0) {
+      labels.forEach((lbl, idx) => {
+        const clean = String(lbl).trim();
+        if (clean) {
+          const up = clean.toUpperCase();
+          if (!labelToRel.has(up)) {
+            labelToRel.set(up, idx + 1);
+          }
+          if (this.romanToInt(clean) !== null) {
+            romanLabelsList.push(clean);
+          }
+        }
+      });
+    }
+    const hasLabels = labelToRel.size > 0;
+    const hasRoman = romanLabelsList.length > 0;
+    const physicalStart = physicalStartPage || this.physicalStartPage || 1;
+
+    const checkRomanToken = (tok: string): { isValid: boolean; error?: string } => {
+      const rVal = this.romanToInt(tok);
+      if (rVal === null) {
+        return {
+          isValid: false,
+          error: `Ungültige Seitenzahl: "${tok}".`
+        };
+      }
+      if (hasLabels) {
+        if (!hasRoman) {
+          const validRange = physicalStart > 1
+            ? `${physicalStart}-${physicalStart + pageCount - 1}`
+            : `1-${pageCount}`;
+          return {
+            isValid: false,
+            error: `Dieses Dokument verwendet keine römischen Seitenzahlen (gültiger Bereich: ${validRange}).`
+          };
+        }
+        if (!labelToRel.has(tok.toUpperCase())) {
+          const validRoman = romanLabelsList.length >= 2
+            ? `${romanLabelsList[0]}-${romanLabelsList[romanLabelsList.length - 1]}`
+            : romanLabelsList[0];
+          return {
+            isValid: false,
+            error: `Römische Seitenzahl "${tok}" liegt außerhalb des gültigen Bereichs (${validRoman}).`
+          };
+        }
+      } else if (rVal > pageCount) {
+        return {
+          isValid: false,
+          error: `Römische Seitenzahl "${tok}" liegt außerhalb des gültigen Bereichs (I-${this.intToRoman(Math.max(1, pageCount))}).`
+        };
+      }
+      return { isValid: true };
+    };
+
     const parts = pagesVal.split(',');
-    const allPages: number[] = [];
+    const arabicPages: number[] = [];
+    let totalSelected = 0;
+
     for (let part of parts) {
       part = part.trim();
       if (!part) continue;
@@ -2539,87 +2851,162 @@ class AppController {
         if (subparts.length !== 2) {
           return {
             isValid: false,
-            error: `Ungültiger Seitenbereich: "${part}". Ein Bereich muss genau zwei Zahlen getrennt durch einen Bindestrich enthalten (z. B. "5-10").`
+            error: `Ungültiger Seitenbereich: "${part}". Ein Bereich muss genau zwei Seitenangaben getrennt durch einen Bindestrich enthalten (z. B. "I-IV" oder "5-10").`
           };
         }
         const startStr = subparts[0].trim();
         const endStr = subparts[1].trim();
-        if (!/^\d+$/.test(startStr) || !/^\d+$/.test(endStr)) {
+        if (!startStr || !endStr) {
           return {
             isValid: false,
-            error: `Ungültiger Seitenbereich: "${part}". Start- und Endwert müssen positive Ganzzahlen sein.`
+            error: `Ungültiger Seitenbereich: "${part}".`
           };
         }
-        const start = parseInt(startStr, 10);
-        const end = parseInt(endStr, 10);
-        if (start === 0 || end === 0) {
+
+        const sIsInt = /^\d+$/.test(startStr);
+        const eIsInt = /^\d+$/.test(endStr);
+        const sRom = sIsInt ? null : this.romanToInt(startStr);
+        const eRom = eIsInt ? null : this.romanToInt(endStr);
+
+        if (sIsInt && eIsInt) {
+          const start = parseInt(startStr, 10);
+          const end = parseInt(endStr, 10);
+          if (start === 0 || end === 0) {
+            return {
+              isValid: false,
+              error: `Ungültiger Seitenbereich: "${part}". Seitenzahlen müssen bei 1 beginnen.`
+            };
+          }
+          if (start > end) {
+            return {
+              isValid: false,
+              error: `Ungültiger Seitenbereich: "${part}". Der Startwert muss kleiner oder gleich dem Endwert sein.`
+            };
+          }
+          for (let p = start; p <= end; p++) {
+            arabicPages.push(p);
+          }
+          totalSelected += end - start + 1;
+        } else if (sRom !== null && eRom !== null) {
+          if (sRom > eRom) {
+            return {
+              isValid: false,
+              error: `Ungültiger Seitenbereich: "${part}". Der Startwert muss kleiner oder gleich dem Endwert sein.`
+            };
+          }
+          for (let v = sRom; v <= eRom; v++) {
+            const candidate = v === sRom ? startStr : (v === eRom ? endStr : this.intToRoman(v));
+            const res = checkRomanToken(candidate);
+            if (!res.isValid) {
+              return res;
+            }
+          }
+          totalSelected += eRom - sRom + 1;
+        } else if ((sRom !== null || sIsInt) && (eRom !== null || eIsInt)) {
+          if ((sIsInt && parseInt(startStr, 10) === 0) || (eIsInt && parseInt(endStr, 10) === 0)) {
+            return {
+              isValid: false,
+              error: `Ungültiger Seitenbereich: "${part}". Seitenzahlen müssen bei 1 beginnen.`
+            };
+          }
+          const romTok = sRom !== null ? startStr : endStr;
+          const romRes = checkRomanToken(romTok);
+          if (!romRes.isValid) {
+            return romRes;
+          }
+          if (hasLabels) {
+            let relS = labelToRel.get(startStr.toUpperCase());
+            let relE = labelToRel.get(endStr.toUpperCase());
+            if (relS === undefined && sIsInt) {
+              const sNum = parseInt(startStr, 10);
+              if (sNum >= 1 && sNum <= pageCount) relS = sNum;
+            }
+            if (relE === undefined && eIsInt) {
+              const eNum = parseInt(endStr, 10);
+              if (eNum >= 1 && eNum <= pageCount) relE = eNum;
+            }
+            if (relS === undefined || relE === undefined) {
+              return {
+                isValid: false,
+                error: `Seitenbereich "${part}" liegt außerhalb des gültigen Bereichs.`
+              };
+            }
+            if (relS > relE) {
+              return {
+                isValid: false,
+                error: `Ungültiger Seitenbereich: "${part}". Der Startwert muss kleiner oder gleich dem Endwert sein.`
+              };
+            }
+            totalSelected += relE - relS + 1;
+          } else {
+            const sNum = sIsInt ? parseInt(startStr, 10) : (sRom || 0);
+            const eNum = eIsInt ? parseInt(endStr, 10) : (eRom || 0);
+            if (sNum > eNum) {
+              return {
+                isValid: false,
+                error: `Ungültiger Seitenbereich: "${part}". Der Startwert muss kleiner oder gleich dem Endwert sein.`
+              };
+            }
+            if (eNum > pageCount) {
+              return {
+                isValid: false,
+                error: `Seitenbereich "${part}" liegt außerhalb des gültigen Bereichs (1-${pageCount}).`
+              };
+            }
+            totalSelected += eNum - sNum + 1;
+          }
+        } else {
           return {
             isValid: false,
-            error: `Ungültiger Seitenbereich: "${part}". Seitenzahlen müssen bei 1 beginnen.`
+            error: `Ungültiger Seitenbereich: "${part}".`
           };
-        }
-        if (start > end) {
-          return {
-            isValid: false,
-            error: `Ungültiger Seitenbereich: "${part}". Der Startwert muss kleiner oder gleich dem Endwert sein.`
-          };
-        }
-        for (let p = start; p <= end; p++) {
-          allPages.push(p);
         }
       } else {
-        if (!/^\d+$/.test(part)) {
-          return {
-            isValid: false,
-            error: `Ungültige Seitenzahl: "${part}". Seitenzahlen müssen positive Ganzzahlen sein.`
-          };
+        if (/^\d+$/.test(part)) {
+          const p = parseInt(part, 10);
+          if (p === 0) {
+            return {
+              isValid: false,
+              error: `Ungültige Seitenzahl: "${part}". Seitenzahlen müssen bei 1 beginnen.`
+            };
+          }
+          arabicPages.push(p);
+          totalSelected += 1;
+        } else {
+          const res = checkRomanToken(part);
+          if (!res.isValid) {
+            return res;
+          }
+          totalSelected += 1;
         }
-        const p = parseInt(part, 10);
-        if (p === 0) {
-          return {
-            isValid: false,
-            error: `Ungültige Seitenzahl: "${part}". Seitenzahlen müssen bei 1 beginnen.`
-          };
-        }
-        allPages.push(p);
       }
     }
     
-    if (allPages.length === 0) {
-      return { isValid: true };
-    }
-
-    const minPage = Math.min(...allPages);
-    const maxPage = Math.max(...allPages);
-    const totalSelected = allPages.length;
-
-    const physicalStart = physicalStartPage || this.physicalStartPage || 1;
-    const isPhysicalOffset = physicalStart > 1 || minPage > (pageCount + 5);
-
-    if (isPhysicalOffset) {
-      for (const p of allPages) {
-        if (p < physicalStart || p >= physicalStart + pageCount) {
-          if (p < 1 || p > pageCount) {
+    if (arabicPages.length > 0) {
+      for (const p of arabicPages) {
+        const inLabels = hasLabels && labelToRel.has(String(p));
+        const inPhysical = p >= physicalStart && p < physicalStart + pageCount;
+        const inRelative = p >= 1 && p <= pageCount;
+        if (!inLabels && !inPhysical && !inRelative) {
+          if (physicalStart > 1) {
             return {
               isValid: false,
               error: `Seitenzahl "${p}" liegt außerhalb des gültigen Bereichs (relativ 1-${pageCount} oder physisch ${physicalStart}-${physicalStart + pageCount - 1}).`
             };
           }
+          return {
+            isValid: false,
+            error: `Seitenauswahl "${p}" liegt außerhalb des gültigen Bereichs (1-${pageCount}).`
+          };
         }
       }
-      if (totalSelected > pageCount) {
-        return {
-          isValid: false,
-          error: `Seitenauswahl umfasst ${totalSelected} Seiten, aber die PDF-Datei hat nur ${pageCount} ${pageCount === 1 ? 'Seite' : 'Seiten'}.`
-        };
-      }
-    } else {
-      if (maxPage > pageCount) {
-        return {
-          isValid: false,
-          error: `Seitenauswahl "${maxPage}" liegt außerhalb des gültigen Bereichs (1-${pageCount}).`
-        };
-      }
+    }
+
+    if (totalSelected > pageCount) {
+      return {
+        isValid: false,
+        error: `Seitenauswahl umfasst ${totalSelected} Seiten, aber die PDF-Datei hat nur ${pageCount} ${pageCount === 1 ? 'Seite' : 'Seiten'}.`
+      };
     }
     
     return { isValid: true };
@@ -2675,10 +3062,35 @@ class AppController {
   private updatePagePills() {
     if (!this.pdfPagePillsContainer) return;
     const md = this.standardisedMarkdownTextarea.value || this.rawMarkdownTextarea.value;
-    const matches = [...md.matchAll(/\(\((\d+)\)\)/g)];
-    const uniquePages = [...new Set(matches.map(m => parseInt(m[1], 10)))].sort((a, b) => a - b);
+    const matches = [...md.matchAll(/\(\((\d+|[IVXLCDMivxlcdm]+)\)\)/g)];
+    const uniquePages: string[] = [];
+    const seen = new Set<string>();
+    for (const m of matches) {
+      const lbl = m[1];
+      const key = lbl.toUpperCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniquePages.push(lbl);
+      }
+    }
     
     if (uniquePages.length === 0) {
+      const pagesVal = this.pagesInput?.value.trim() || '';
+      if (pagesVal && this.activePageCount > 0) {
+        const validation = this.validatePages(pagesVal, this.activePageCount, this.physicalStartPage, this.pageLabels);
+        if (validation.isValid) {
+          const selectedRel = this.resolveSelectedRelativePages(
+            pagesVal,
+            this.activePageCount,
+            this.physicalStartPage,
+            this.pageLabels
+          );
+          const selectedCount = selectedRel.length || this.activePageCount;
+          const escapedPages = pagesVal.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          this.pdfPagePillsContainer.innerHTML = `<span class="text-[9px] bg-indigo-950/80 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/40 font-mono tabular-nums">Auswahl: S. ${escapedPages} (${selectedCount}/${this.activePageCount})</span>`;
+          return;
+        }
+      }
       this.pdfPagePillsContainer.innerHTML = '<span class="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-750">PDF-Vorschau</span>';
       return;
     }
@@ -2691,21 +3103,25 @@ class AppController {
 
     this.pdfPagePillsContainer.querySelectorAll('.pdf-page-pill').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        const p = parseInt((e.currentTarget as HTMLElement).getAttribute('data-page') || '1', 10);
+        const p = (e.currentTarget as HTMLElement).getAttribute('data-page') || '1';
         this.jumpToPage(p);
       });
     });
     this.updateCharReplaceBadge();
   }
 
-  private jumpToPage(pageNum: number) {
-    this.updatePdfPage(pageNum);
-    this.highlightPagePill(pageNum);
+  private jumpToPage(pageLabel: string | number) {
+    const labelStr = String(pageLabel);
+    this.updatePdfPage(labelStr);
+    this.highlightPagePill(labelStr);
 
-    // Jump editor scroll & cursor to ((pageNum))
+    // Jump editor scroll & cursor to ((pageLabel))
     const text = this.standardisedMarkdownTextarea.value;
-    const tag = `((${pageNum}))`;
-    const idx = text.indexOf(tag);
+    const tag = `((${labelStr}))`;
+    let idx = text.indexOf(tag);
+    if (idx === -1) {
+      idx = text.toLowerCase().indexOf(tag.toLowerCase());
+    }
     if (idx !== -1) {
       this.standardisedMarkdownTextarea.focus();
       this.standardisedMarkdownTextarea.setSelectionRange(idx, idx + tag.length);
@@ -2717,11 +3133,12 @@ class AppController {
     }
   }
 
-  private highlightPagePill(pageNum: number) {
+  private highlightPagePill(pageLabel: string | number) {
     if (!this.pdfPagePillsContainer) return;
+    const target = String(pageLabel).toUpperCase();
     this.pdfPagePillsContainer.querySelectorAll('.pdf-page-pill').forEach(el => {
-      const p = parseInt(el.getAttribute('data-page') || '0', 10);
-      if (p === pageNum) {
+      const p = (el.getAttribute('data-page') || '').toUpperCase();
+      if (p === target) {
         el.className = 'pdf-page-pill text-[9px] bg-indigo-600 text-white font-bold px-1.5 py-0.5 rounded border border-indigo-400 shadow-sm transition-colors cursor-pointer flex-shrink-0';
       } else {
         el.className = 'pdf-page-pill text-[9px] bg-slate-800 hover:bg-indigo-600 hover:text-white text-slate-300 px-1.5 py-0.5 rounded border border-slate-700 transition-colors cursor-pointer flex-shrink-0';
@@ -2733,6 +3150,33 @@ class AppController {
   // Interactive Grounding BBox Overlay (#pdf-bbox-viewer)
   // -------------------------------------------------------------
 
+  private getSelectedBboxPageIndices(): number[] {
+    const totalPages = this.getTotalBboxPages();
+    const val = this.pagesInput?.value.trim() || '';
+    if (val && this.activePageCount > 0) {
+      const validation = this.validatePages(val, this.activePageCount, this.physicalStartPage, this.pageLabels);
+      if (validation.isValid) {
+        const relPages = this.resolveSelectedRelativePages(
+          val,
+          totalPages,
+          this.physicalStartPage,
+          this.pageLabels
+        );
+        if (relPages.length > 0) {
+          return relPages.map(p => p - 1).filter(idx => idx >= 0 && idx < totalPages);
+        }
+      }
+    }
+    return Array.from({ length: totalPages }, (_, i) => i);
+  }
+
+  private getPageLabelForIndex(pageIdx: number): string {
+    if (this.pageLabels && pageIdx >= 0 && pageIdx < this.pageLabels.length && this.pageLabels[pageIdx]) {
+      return this.pageLabels[pageIdx];
+    }
+    return String((this.physicalStartPage || 1) + pageIdx);
+  }
+
   private initBboxOverlayEvents() {
     if (this.btnToggleBboxOverlay) {
       this.btnToggleBboxOverlay.addEventListener('click', () => {
@@ -2741,24 +3185,27 @@ class AppController {
     }
     if (this.bboxPrevPageBtn) {
       this.bboxPrevPageBtn.addEventListener('click', () => {
-        if (this.currentBboxPageIdx > 0) {
-          this.currentBboxPageIdx--;
+        const selectedIndices = this.getSelectedBboxPageIndices();
+        const curPos = selectedIndices.indexOf(this.currentBboxPageIdx);
+        if (curPos > 0) {
+          this.currentBboxPageIdx = selectedIndices[curPos - 1];
           this.renderBboxPage();
-          const physPage = (this.physicalStartPage || 1) + this.currentBboxPageIdx;
-          this.currentPdfPage = physPage;
-          this.highlightPagePill(physPage);
+          const pageLabel = this.getPageLabelForIndex(this.currentBboxPageIdx);
+          this.currentPdfPage = pageLabel;
+          this.highlightPagePill(pageLabel);
         }
       });
     }
     if (this.bboxNextPageBtn) {
       this.bboxNextPageBtn.addEventListener('click', () => {
-        const totalPages = this.getTotalBboxPages();
-        if (this.currentBboxPageIdx < totalPages - 1) {
-          this.currentBboxPageIdx++;
+        const selectedIndices = this.getSelectedBboxPageIndices();
+        const curPos = selectedIndices.indexOf(this.currentBboxPageIdx);
+        if (curPos !== -1 && curPos < selectedIndices.length - 1) {
+          this.currentBboxPageIdx = selectedIndices[curPos + 1];
           this.renderBboxPage();
-          const physPage = (this.physicalStartPage || 1) + this.currentBboxPageIdx;
-          this.currentPdfPage = physPage;
-          this.highlightPagePill(physPage);
+          const pageLabel = this.getPageLabelForIndex(this.currentBboxPageIdx);
+          this.currentPdfPage = pageLabel;
+          this.highlightPagePill(pageLabel);
         }
       });
     }
@@ -2815,19 +3262,24 @@ class AppController {
         const res = await fetch(`/api/tasks/${taskId}/layout`);
         if (res.ok) {
           const data = await res.json();
+          const pageLabels = Array.isArray(data.page_labels) ? data.page_labels.map(String) : this.pageLabels;
           this.layoutCache.set(taskId, {
             physical_start_page: data.physical_start_page || this.physicalStartPage || 1,
+            page_labels: pageLabels,
             blocks: Array.isArray(data.blocks) ? data.blocks : [],
           });
           if (data.physical_start_page) {
             this.physicalStartPage = data.physical_start_page;
           }
+          if (Array.isArray(data.page_labels) && data.page_labels.length > 0) {
+            this.pageLabels = data.page_labels.map(String);
+          }
         } else {
-          this.layoutCache.set(taskId, { physical_start_page: this.physicalStartPage || 1, blocks: [] });
+          this.layoutCache.set(taskId, { physical_start_page: this.physicalStartPage || 1, page_labels: this.pageLabels, blocks: [] });
         }
       } catch (e) {
         console.warn('Could not load layout blocks for task:', e);
-        this.layoutCache.set(taskId, { physical_start_page: this.physicalStartPage || 1, blocks: [] });
+        this.layoutCache.set(taskId, { physical_start_page: this.physicalStartPage || 1, page_labels: this.pageLabels, blocks: [] });
       }
     }
     this.renderBboxPage();
@@ -2878,19 +3330,27 @@ class AppController {
     if (!this.bboxOverlayLayer || !this.bboxFilterChips || !this.bboxPageIndicator) return;
 
     const totalPages = this.getTotalBboxPages();
-    if (this.currentBboxPageIdx >= totalPages) {
+    const selectedIndices = this.getSelectedBboxPageIndices();
+    if (selectedIndices.length > 0 && !selectedIndices.includes(this.currentBboxPageIdx)) {
+      this.currentBboxPageIdx = selectedIndices[0];
+    } else if (this.currentBboxPageIdx >= totalPages) {
       this.currentBboxPageIdx = Math.max(0, totalPages - 1);
-    }
-    if (this.currentBboxPageIdx < 0) {
+    } else if (this.currentBboxPageIdx < 0) {
       this.currentBboxPageIdx = 0;
     }
 
-    this.bboxPageIndicator.textContent = `Seite ${this.currentBboxPageIdx + 1} / ${totalPages}`;
+    const posInSelection = Math.max(0, selectedIndices.indexOf(this.currentBboxPageIdx)) + 1;
+    const pageLabel = this.getPageLabelForIndex(this.currentBboxPageIdx);
+    if (selectedIndices.length < totalPages || (this.pageLabels && this.pageLabels.length > 0 && pageLabel !== String(posInSelection))) {
+      this.bboxPageIndicator.textContent = `Seite ${pageLabel} (${posInSelection} / ${selectedIndices.length})`;
+    } else {
+      this.bboxPageIndicator.textContent = `Seite ${posInSelection} / ${totalPages}`;
+    }
     if (this.bboxPrevPageBtn) {
-      this.bboxPrevPageBtn.disabled = this.currentBboxPageIdx <= 0;
+      this.bboxPrevPageBtn.disabled = posInSelection <= 1;
     }
     if (this.bboxNextPageBtn) {
-      this.bboxNextPageBtn.disabled = this.currentBboxPageIdx >= totalPages - 1;
+      this.bboxNextPageBtn.disabled = posInSelection >= selectedIndices.length;
     }
 
     if (this.bboxPageImg && this.taskId) {
@@ -3548,7 +4008,7 @@ class AppController {
           return;
         }
         if (this.activeBenchSourcePageCount > 0) {
-          const validation = this.validatePages(val, this.activeBenchSourcePageCount, this.activeBenchPhysicalStartPage);
+          const validation = this.validatePages(val, this.activeBenchSourcePageCount, this.activeBenchPhysicalStartPage, this.activeBenchPageLabels);
           if (!validation.isValid) {
             this.showInputError(this.benchPagesInput, this.benchPagesInputError, this.benchPagesInputErrorText, validation.error || 'Ungültige Seitenauswahl.');
           } else {
@@ -3562,7 +4022,7 @@ class AppController {
           this.clearInputError(this.benchPagesInput, this.benchPagesInputError);
           return;
         }
-        const validation = this.validatePages(val, this.activeBenchSourcePageCount, this.activeBenchPhysicalStartPage);
+        const validation = this.validatePages(val, this.activeBenchSourcePageCount, this.activeBenchPhysicalStartPage, this.activeBenchPageLabels);
         if (validation.isValid) {
           this.clearInputError(this.benchPagesInput, this.benchPagesInputError);
         }
@@ -3636,11 +4096,15 @@ class AppController {
         const data = await res.json();
         this.activeBenchSourcePageCount = data.page_count || 0;
         this.activeBenchPhysicalStartPage = data.physical_start_page || 1;
+        this.activeBenchPageLabels = Array.isArray(data.page_labels) ? data.page_labels.map(String) : [];
         if (this.benchPagesInput) {
           if (this.activeBenchSourcePageCount > 0) {
             this.benchPagesInput.disabled = false;
             this.benchPagesInput.classList.remove('cursor-not-allowed', 'opacity-60');
-            this.benchPagesInput.placeholder = `z. B. 1-5, 8 (Dokument hat ${this.activeBenchSourcePageCount} ${this.activeBenchSourcePageCount === 1 ? 'Seite' : 'Seiten'})`;
+            this.benchPagesInput.placeholder = this.formatPagesPlaceholder(
+              this.activeBenchSourcePageCount,
+              this.activeBenchPageLabels
+            );
           } else {
             this.benchPagesInput.disabled = true;
             this.benchPagesInput.classList.add('cursor-not-allowed', 'opacity-60');
@@ -3693,7 +4157,7 @@ class AppController {
     // Validate page range against source PDF page count
     const pagesVal = this.benchPagesInput?.value.trim();
     if (pagesVal && this.activeBenchSourcePageCount > 0) {
-      const validation = this.validatePages(pagesVal, this.activeBenchSourcePageCount, this.activeBenchPhysicalStartPage);
+      const validation = this.validatePages(pagesVal, this.activeBenchSourcePageCount, this.activeBenchPhysicalStartPage, this.activeBenchPageLabels);
       if (!validation.isValid) {
         this.showInputError(this.benchPagesInput, this.benchPagesInputError, this.benchPagesInputErrorText, validation.error || 'Ungültige Seitenauswahl.');
         if (this.benchPagesInput) this.benchPagesInput.focus();

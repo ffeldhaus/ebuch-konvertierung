@@ -23,7 +23,9 @@ from backend.services.docx_service import convert_markdown_to_docx
 from backend.services.extraction_service import (
     detect_physical_start_page,
     extract_pdf_pages,
+    get_page_labels_for_pdf,
     get_pdf_page_count,
+    resolve_page_selection_to_relative_indices,
     run_background_extraction,
     validate_pages_string,
 )
@@ -240,14 +242,41 @@ async def upload_file(file: UploadFile = File(...)):
 
     page_count = 0
     physical_start_page = 1
+    page_labels: list[str] = []
     directory_info = await asyncio.to_thread(
         check_document_directories, input_path, max_pages=20
     )
     if file_ext == ".pdf":
-        page_count = await asyncio.to_thread(get_pdf_page_count, input_path)
-        physical_start_page = await asyncio.to_thread(
-            detect_physical_start_page, input_path, directory_info=directory_info
+        dir_nums = (
+            directory_info.get("page_numbers")
+            if isinstance(directory_info, dict)
+            else None
         )
+        page_count = (
+            len(dir_nums)
+            if isinstance(dir_nums, list) and dir_nums
+            else await asyncio.to_thread(get_pdf_page_count, input_path)
+        )
+        if (
+            isinstance(directory_info, dict)
+            and directory_info.get("has_any_directory")
+            and isinstance(directory_info.get("page_labels"), list)
+            and len(directory_info["page_labels"]) == page_count
+        ):
+            physical_start_page = int(directory_info.get("physical_start_page", 1))
+            page_labels = [str(x) for x in directory_info["page_labels"]]
+        else:
+            physical_start_page = await asyncio.to_thread(
+                detect_physical_start_page, input_path, directory_info=directory_info
+            )
+            page_labels = await asyncio.to_thread(
+                get_page_labels_for_pdf,
+                input_path,
+                fallback_start_page=physical_start_page,
+                directory_info=directory_info,
+            )
+            if isinstance(directory_info, dict):
+                directory_info["page_labels"] = page_labels
 
     task = await task_manager.create(
         task_id=task_id,
@@ -257,6 +286,7 @@ async def upload_file(file: UploadFile = File(...)):
         page_count=page_count,
     )
     task.physical_start_page = physical_start_page
+    task.page_labels = page_labels
     task.directory_info = directory_info
     await asyncio.to_thread(
         save_directory_info, os.path.join(OUTPUT_DIR, task_id), directory_info
@@ -281,6 +311,7 @@ async def upload_file(file: UploadFile = File(...)):
         "filename": file.filename,
         "page_count": page_count,
         "physical_start_page": physical_start_page,
+        "page_labels": page_labels,
         "directories": directory_info,
     }
 
@@ -298,17 +329,44 @@ async def get_pdf_page_count_endpoint(file: UploadFile = File(...)):
         
     try:
         from backend.services.directory_service import check_document_directories
-        page_count = await asyncio.to_thread(get_pdf_page_count, tmp_path)
         directory_info = await asyncio.to_thread(
             check_document_directories, tmp_path, max_pages=20
         )
-        physical_start = await asyncio.to_thread(
-            detect_physical_start_page, tmp_path, directory_info=directory_info
+        dir_nums = (
+            directory_info.get("page_numbers")
+            if isinstance(directory_info, dict)
+            else None
         )
+        page_count = (
+            len(dir_nums)
+            if isinstance(dir_nums, list) and dir_nums
+            else await asyncio.to_thread(get_pdf_page_count, tmp_path)
+        )
+        if (
+            isinstance(directory_info, dict)
+            and directory_info.get("has_any_directory")
+            and isinstance(directory_info.get("page_labels"), list)
+            and len(directory_info["page_labels"]) == page_count
+        ):
+            physical_start = int(directory_info.get("physical_start_page", 1))
+            page_labels = [str(x) for x in directory_info["page_labels"]]
+        else:
+            physical_start = await asyncio.to_thread(
+                detect_physical_start_page, tmp_path, directory_info=directory_info
+            )
+            page_labels = await asyncio.to_thread(
+                get_page_labels_for_pdf,
+                tmp_path,
+                fallback_start_page=physical_start,
+                directory_info=directory_info,
+            )
+            if isinstance(directory_info, dict):
+                directory_info["page_labels"] = page_labels
         return {
             "filename": file.filename,
             "page_count": page_count,
             "physical_start_page": physical_start,
+            "page_labels": page_labels,
             "directories": directory_info,
         }
     finally:
@@ -356,7 +414,10 @@ async def extract_markdown(
 
             if page_count > 0:
                 is_valid, err_msg = validate_pages_string(
-                    pages, page_count, physical_start=task.physical_start_page
+                    pages,
+                    page_count,
+                    physical_start=task.physical_start_page,
+                    page_labels=task.page_labels or None,
                 )
                 if not is_valid:
                     raise HTTPException(status_code=400, detail=err_msg)
@@ -551,10 +612,12 @@ async def get_task_layout(task_id: str) -> TaskLayoutResponse:
         raise HTTPException(status_code=404, detail="Task not found.")
 
     physical_start = int(getattr(task, "physical_start_page", 1) or 1) if task else 1
+    page_labels = list(getattr(task, "page_labels", None) or []) if task else []
     blocks = await asyncio.to_thread(_load_task_layout_blocks, task_id)
     return TaskLayoutResponse(
         task_id=task_id,
         physical_start_page=physical_start,
+        page_labels=page_labels,
         blocks=blocks,
     )
 
@@ -1181,7 +1244,9 @@ def _resume_markdown(task) -> str | None:
         raw = task.raw_markdown
     if not raw:
         return None
-    if task.extension == ".pdf" and not re.search(r"^\(\(\d+\)\)", raw, flags=re.MULTILINE):
+    if task.extension == ".pdf" and not re.search(
+        r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)", raw, flags=re.MULTILINE
+    ):
         try:
             import glob
 
@@ -1483,13 +1548,51 @@ async def get_ruleset(task_id: str):
 
 
 @app.get("/api/pdf/{task_id}")
-async def serve_pdf(task_id: str):
-    """Serves the uploaded PDF file for inline viewing."""
+async def serve_pdf(task_id: str, pages: str | None = None):
+    """Serves the uploaded PDF file (or a filtered page subset when ``pages`` is active) for inline viewing."""
     task = await task_manager.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
 
     if task.extension.lower() == ".pdf":
+        eff_pages = pages.strip() if pages is not None else (task.pages or "").strip()
+        if eff_pages and os.path.exists(task.input_path):
+            total_pages = task.page_count or await asyncio.to_thread(get_pdf_page_count, task.input_path)
+            if total_pages > 0:
+                is_valid, _ = validate_pages_string(
+                    eff_pages,
+                    total_pages,
+                    physical_start=task.physical_start_page,
+                    page_labels=task.page_labels or None,
+                )
+                if is_valid:
+                    mapped_indices = resolve_page_selection_to_relative_indices(
+                        eff_pages,
+                        total_pages,
+                        physical_start=task.physical_start_page,
+                        page_labels=task.page_labels or None,
+                    )
+                    if mapped_indices and mapped_indices != list(range(1, total_pages + 1)):
+                        import hashlib
+
+                        idx_csv = ",".join(str(i) for i in mapped_indices)
+                        idx_hash = hashlib.sha256(idx_csv.encode("utf-8")).hexdigest()[:12]
+                        preview_dir = os.path.join(UPLOAD_DIR, "preview")
+                        os.makedirs(preview_dir, exist_ok=True)
+                        preview_pdf_path = os.path.join(preview_dir, f"{task_id}_{idx_hash}.pdf")
+                        if not os.path.exists(preview_pdf_path):
+                            extracted = await asyncio.to_thread(
+                                extract_pdf_pages,
+                                task.input_path,
+                                idx_csv,
+                                preview_pdf_path,
+                                task.page_labels or None,
+                                True,
+                            )
+                            if extracted and os.path.exists(preview_pdf_path):
+                                return FileResponse(preview_pdf_path, media_type="application/pdf")
+                        else:
+                            return FileResponse(preview_pdf_path, media_type="application/pdf")
         return FileResponse(task.input_path, media_type="application/pdf")
     else:
         return HTMLResponse(
@@ -1682,11 +1785,20 @@ async def custom_benchmark_evaluate(
                 f.write(content)
             
             total_pages = await asyncio.to_thread(get_pdf_page_count, raw_source_path)
-            is_valid, err_msg = validate_pages_string(pages.strip(), total_pages)
+            source_labels = await asyncio.to_thread(get_page_labels_for_pdf, raw_source_path)
+            is_valid, err_msg = validate_pages_string(
+                pages.strip(), total_pages, page_labels=source_labels or None
+            )
             if not is_valid:
                 raise HTTPException(status_code=400, detail=err_msg)
             
-            extracted = await asyncio.to_thread(extract_pdf_pages, raw_source_path, pages.strip(), source_path)
+            extracted = await asyncio.to_thread(
+                extract_pdf_pages,
+                raw_source_path,
+                pages.strip(),
+                source_path,
+                source_labels or None,
+            )
             cropped_count = await asyncio.to_thread(get_pdf_page_count, source_path) if os.path.exists(source_path) else 0
             if not extracted or not os.path.exists(source_path) or cropped_count == 0:
                 raise HTTPException(status_code=400, detail=f"Ungültiger Seitenbereich '{pages.strip()}'. Keine Seiten konnten extrahiert werden.")

@@ -1,5 +1,4 @@
-"""
-Tests for fast post-upload directory detection (Inhaltsverzeichnis, Abbildungsverzeichnis,
+"""Tests for fast post-upload directory detection (Inhaltsverzeichnis, Abbildungsverzeichnis,
 Tabellenverzeichnis, Bildverzeichnis) and directory-assisted page number & heading level
 reconstruction.
 """
@@ -7,17 +6,18 @@ reconstruction.
 import json
 import os
 import time
-import pytest
+
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.services.a11y_linter import lint_markdown
 from backend.services.directory_service import (
     MAX_DIRECTORY_CHECK_PAGES,
+    apply_directory_page_numbers,
     build_fast_docling_pipeline_options,
     check_document_directories,
-    apply_directory_heading_levels,
-    apply_directory_page_numbers,
 )
+from backend.services.extraction_postprocess import reconstruct_title_hierarchy
 from backend.services.extraction_service import (
     detect_physical_start_page,
     get_physical_page_numbers_for_pdf,
@@ -28,8 +28,6 @@ from backend.services.fibs_postprocess import (
     post_process_structure,
 )
 from backend.services.llm_service import _build_system_prompt
-from backend.services.extraction_postprocess import reconstruct_title_hierarchy
-from backend.services.a11y_linter import lint_markdown
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TEST_DATA_DIR = os.path.join(PROJECT_ROOT, "testdata")
@@ -37,8 +35,7 @@ PHYSIK_VERZEICHNISSE_PDF = os.path.join(TEST_DATA_DIR, "sek2_physik_verzeichniss
 
 
 def test_fast_docling_pipeline_disables_formulas_tables_and_images():
-    """
-    Verifies that the fast Docling directory-check configuration caps pages at 20
+    """Verifies that the fast Docling directory-check configuration caps pages at 20
     and disables formula enrichment, table structure, and image extraction.
     """
     assert MAX_DIRECTORY_CHECK_PAGES == 20
@@ -54,8 +51,7 @@ def test_fast_docling_pipeline_disables_formulas_tables_and_images():
 
 
 def test_test_document_with_directories_exists_and_is_checked_quickly():
-    """
-    Verifies that test_data/sek2_physik_verzeichnisse.pdf exists and that
+    """Verifies that test_data/sek2_physik_verzeichnisse.pdf exists and that
     check_document_directories detects all four directory types quickly via Docling.
     """
     assert os.path.exists(PHYSIK_VERZEICHNISSE_PDF), (
@@ -116,8 +112,7 @@ def test_test_document_with_directories_exists_and_is_checked_quickly():
 
 
 def test_directory_used_for_accurate_page_number_detection():
-    """
-    Verifies that directory entries (TOC, figures, tables, pictures) are matched against
+    """Verifies that directory entries (TOC, figures, tables, pictures) are matched against
     actual PDF page contents to accurately infer physical page numbers even when pages
     lack printed footer/header page numbers or when a directory page ends with a target page number.
     """
@@ -127,8 +122,7 @@ def test_directory_used_for_accurate_page_number_detection():
 
 
 def test_directory_page_numbers_correct_metadata_and_markdown_markers(tmp_path):
-    """
-    Verifies that insert_page_numbers_from_metadata and apply_directory_page_numbers
+    """Verifies that insert_page_numbers_from_metadata and apply_directory_page_numbers
     use directory entries to inject and repair ((page)) markers.
     """
     info = check_document_directories(PHYSIK_VERZEICHNISSE_PDF, max_pages=20)
@@ -186,8 +180,7 @@ def test_directory_page_numbers_correct_metadata_and_markdown_markers(tmp_path):
 
 
 def test_directory_used_for_heading_level_detection():
-    """
-    Verifies that TOC entries and their inferred levels (H1..H4) improve heading hierarchy
+    """Verifies that TOC entries and their inferred levels (H1..H4) improve heading hierarchy
     detection in reconstruct_title_hierarchy, infer_heading_hierarchy, and post_process_structure,
     even when headings are unnumbered or flattened to '#' / plain lines by OCR.
     """
@@ -240,8 +233,7 @@ def test_directory_used_for_heading_level_detection():
 
 
 def test_upload_and_page_count_endpoints_return_directory_check_info():
-    """
-    Verifies that POST /api/upload and POST /api/pdf/page-count run the fast directory check
+    """Verifies that POST /api/upload and POST /api/pdf/page-count run the fast directory check
     and return both the detected directories and the directory-resolved physical_start_page.
     """
     client = TestClient(app)
@@ -302,8 +294,7 @@ def test_upload_and_page_count_endpoints_return_directory_check_info():
 
 
 def test_sek2_physik_verzeichnisse_golden_files_pass_a11y_linter():
-    """
-    Verifies that the golden ground truth files for sek2_physik_verzeichnisse exist
+    """Verifies that the golden ground truth files for sek2_physik_verzeichnisse exist
     and pass the FIBS 09/2025 accessibility linter with 100/100.
     """
     golden_dir = os.path.join(PROJECT_ROOT, "testdata", "golden")
@@ -313,7 +304,7 @@ def test_sek2_physik_verzeichnisse_golden_files_pass_a11y_linter():
     assert os.path.exists(raw_path)
     assert os.path.exists(ueb_path)
 
-    with open(ueb_path, "r", encoding="utf-8") as f:
+    with open(ueb_path, encoding="utf-8") as f:
         ueb_md = f.read()
 
     for p in (44, 45, 46, 47):
@@ -325,8 +316,7 @@ def test_sek2_physik_verzeichnisse_golden_files_pass_a11y_linter():
 
 
 def test_directory_edge_cases_table_captions_leader_dots_and_partial_pages():
-    """
-    Verifies edge cases:
+    """Verifies edge cases:
     - Table captions from Tabellenverzeichnis demoted from H1/H2 to H3 (###).
     - Directory leader dots ('........ 45') stripped cleanly in post_process_structure
       without turning into fill-in-the-blank '_..._' placeholders.
@@ -364,8 +354,7 @@ def test_directory_edge_cases_table_captions_leader_dots_and_partial_pages():
 
 
 def test_monotonic_page_sequence_rejects_outliers_and_replaces_wrong_markers(tmp_path):
-    """
-    Regression test for TODO 'Nicht-monotone Seitenzahlen nach Infinity-Extraktion':
+    """Regression test for TODO 'Nicht-monotone Seitenzahlen nach Infinity-Extraktion':
     1. _resolve_page_sequence must strictly return a monotonic sequence even when OCR detects
        noisy non-monotonic outliers (e.g. [24, None, None, 23, 28, None, 90, None, 18]).
     2. apply_directory_page_numbers must never produce non-monotonic markers when spurious
@@ -374,6 +363,7 @@ def test_monotonic_page_sequence_rejects_outliers_and_replaces_wrong_markers(tmp
        markers emitted by an extractor instead of inserting new markers alongside them.
     """
     import re
+
     from backend.services.extraction_service import _resolve_page_sequence
 
     # 1. _resolve_page_sequence with scattered non-monotonic outliers and no duplicate offset
@@ -425,5 +415,239 @@ def test_monotonic_page_sequence_rejects_outliers_and_replaces_wrong_markers(tmp
     )
     fixed_markers = [int(m) for m in re.findall(r"\(\((\d+)\)\)", fixed_md)]
     assert fixed_markers == [28, 29, 30, 31, 32], f"Expected [28, 29, 30, 31, 32], got {fixed_markers}"
+
+
+def test_full_book_roman_frontmatter_and_individual_chapter_conversion(tmp_path):
+    """End-to-end test for a complete 20-page book (`sek2_physik_gesamtwerk.pdf`) with:
+      - Pages 1–5 of PDF: Roman numerals I–V (Title, Vorwort, Inhaltsverzeichnis,
+        Abbildungsverzeichnis, Bildverzeichnis, Tabellenverzeichnis)
+      - Pages 6–14 of PDF: Kapitel 1 (book pages 1–9)
+      - Pages 15–20 of PDF: Kapitel 2 (book pages 10–15)
+    Verifies that converting Front Matter ('I-V'), Chapter 1 ('1-9'), or Chapter 2 ('10-15')
+    individually still analyzes the full-book TOC/directories, resolves the exact PDF page slice
+    (e.g. '10-15' -> PDF pages 15–20), and produces accurate ((10))..((15)) page markers and
+    TOC-derived heading levels (# .. ####).
+    """
+    import re
+
+    from backend.services.extraction_service import (
+        extract_pdf_pages,
+        get_page_labels_for_pdf,
+        get_pdf_page_count,
+        get_pdf_page_labels,
+        resolve_page_selection_to_relative_indices,
+    )
+
+    gesamtwerk_pdf = os.path.join(TEST_DATA_DIR, "sek2_physik_gesamtwerk.pdf")
+    assert os.path.exists(gesamtwerk_pdf), f"Expected full-book PDF {gesamtwerk_pdf} to exist."
+    assert get_pdf_page_count(gesamtwerk_pdf) == 20
+
+    expected_full_labels = ["I", "II", "III", "IV", "V"] + [str(i) for i in range(1, 16)]
+    assert get_pdf_page_labels(gesamtwerk_pdf) == expected_full_labels
+    assert get_page_labels_for_pdf(gesamtwerk_pdf) == expected_full_labels
+
+    # 1. Analyze full-book directories (first 20 pages)
+    info = check_document_directories(gesamtwerk_pdf, max_pages=20)
+    assert info["has_any_directory"] is True
+    assert info["has_toc"] is True
+    assert info["has_list_of_figures"] is True
+    assert info["has_list_of_tables"] is True
+    assert info["has_list_of_pictures"] is True
+    assert info["roman_prefix_count"] == 5
+    assert info["page_labels"] == expected_full_labels
+
+    # 2. Convert Front Matter individually (pages="I-V" -> PDF pages 1–5)
+    rel_front = resolve_page_selection_to_relative_indices(
+        "I-V", 20, page_labels=info["page_labels"]
+    )
+    assert rel_front == [1, 2, 3, 4, 5]
+    cropped_front = tmp_path / "cropped_front.pdf"
+    assert extract_pdf_pages(gesamtwerk_pdf, "I-V", str(cropped_front), page_labels=info["page_labels"]) is True
+    assert get_pdf_page_count(str(cropped_front)) == 5
+    assert get_page_labels_for_pdf(str(cropped_front)) == ["I", "II", "III", "IV", "V"]
+
+    front_blocks = [
+        {"type": "title", "text": "Physik Oberstufe – Gesamtband", "page_idx": 0},
+        {"type": "title", "text": "Vorwort und Hinweise zur Arbeit mit diesem Buch", "page_idx": 1},
+        {"type": "title", "text": "Inhaltsverzeichnis", "page_idx": 2},
+        {"type": "title", "text": "Abbildungsverzeichnis", "page_idx": 3},
+        {"type": "title", "text": "Tabellenverzeichnis", "page_idx": 4},
+    ]
+    front_json = tmp_path / "front_content_list.json"
+    front_json.write_text(json.dumps(front_blocks), encoding="utf-8")
+    front_raw = (
+        "# Physik Oberstufe – Gesamtband\n\n"
+        "# Vorwort und Hinweise zur Arbeit mit diesem Buch\n\n"
+        "# Inhaltsverzeichnis\n\n"
+        "## Abbildungsverzeichnis\n\n"
+        "## Tabellenverzeichnis\n"
+    )
+    front_marked = insert_page_numbers_from_metadata(
+        front_raw,
+        str(front_json),
+        "I-V",
+        pdf_path=str(cropped_front),
+        directory_info=info,
+    )
+    front_markers = re.findall(r"\(\(([IVXLCDM]+|\d+)\)\)", front_marked)
+    assert front_markers == ["I", "II", "III", "IV", "V"]
+
+    # 3. Convert Chapter 1 individually (pages="1-9" -> PDF pages 6–14)
+    rel_ch1 = resolve_page_selection_to_relative_indices(
+        "1-9", 20, page_labels=info["page_labels"]
+    )
+    assert rel_ch1 == [6, 7, 8, 9, 10, 11, 12, 13, 14]
+    cropped_ch1 = tmp_path / "cropped_ch1.pdf"
+    assert extract_pdf_pages(gesamtwerk_pdf, "1-9", str(cropped_ch1), page_labels=info["page_labels"]) is True
+    assert get_pdf_page_count(str(cropped_ch1)) == 9
+    assert get_page_labels_for_pdf(str(cropped_ch1)) == [str(i) for i in range(1, 10)]
+
+    # 4. Convert Chapter 2 individually (pages="10-15" -> PDF pages 15–20!)
+    rel_ch2 = resolve_page_selection_to_relative_indices(
+        "10-15", 20, page_labels=info["page_labels"]
+    )
+    assert rel_ch2 == [15, 16, 17, 18, 19, 20]
+    cropped_ch2 = tmp_path / "cropped_ch2.pdf"
+    assert extract_pdf_pages(gesamtwerk_pdf, "10-15", str(cropped_ch2), page_labels=info["page_labels"]) is True
+    assert get_pdf_page_count(str(cropped_ch2)) == 6
+    assert get_page_labels_for_pdf(str(cropped_ch2)) == ["10", "11", "12", "13", "14", "15"]
+
+    ch2_blocks = [
+        {"type": "title", "text": "Kapitel 2: Thermodynamik und Wärmekraftmaschinen", "page_idx": 0},
+        {"type": "title", "text": "Tab. 2.1: Zustandsgrößen und Freiheitsgrade ein- und mehratomiger idealer Gase", "page_idx": 1},
+        {"type": "title", "text": "2.2 Erster Hauptsatz der Thermodynamik", "page_idx": 2},
+        {"type": "title", "text": "Kalorimetrische Messung der spezifischen Wärmekapazität", "page_idx": 3},
+        {"type": "title", "text": "Wärmeaustausch mit dem Kalorimetergefäß", "page_idx": 4},
+        {"type": "title", "text": "2.3 Entropie und Kreisprozesse", "page_idx": 5},
+    ]
+    ch2_json = tmp_path / "ch2_content_list.json"
+    ch2_json.write_text(json.dumps(ch2_blocks), encoding="utf-8")
+
+    # Simulate extracted Chapter 2 markdown where OCR initially emitted PDF-relative ((1))..((6))
+    # or PDF-index ((15))..((20)) markers and flattened/unnumbered headings
+    ch2_wrong_markers_md = (
+        "((1))\n\n"
+        "# Kapitel 2: Thermodynamik und Wärmekraftmaschinen\n\n"
+        "# 2.1 Temperatur, Teilchenmodell und ideale Gase\n\n"
+        "Die Thermodynamik verbindet die makroskopisch messbaren Zustandsgrößen.\n\n"
+        "((2))\n\n"
+        "# Tab. 2.1: Zustandsgrößen und Freiheitsgrade ein- und mehratomiger idealer Gase\n\n"
+        "| Gasart | Freiheitsgrade |\n| :--- | :--- |\n| Helium | f = 3 |\n\n"
+        "((3))\n\n"
+        "# 2.2 Erster Hauptsatz der Thermodynamik\n\n"
+        "Der erste Hauptsatz der Thermodynamik überträgt das Prinzip der Energieerhaltung.\n\n"
+        "((4))\n\n"
+        "Kalorimetrische Messung der spezifischen Wärmekapazität\n\n"
+        "# Bild 2.1: Aufbau eines elektrischen Schülerkalorimeters mit Rührer und Temperaturfühler\n\n"
+        "((5))\n\n"
+        "Wärmeaustausch mit dem Kalorimetergefäß\n\n"
+        "# Tab. 2.2: Spezifische Wärmekapazitäten ausgewählter Festkörper und Flüssigkeiten\n\n"
+        "((6))\n\n"
+        "# 2.3 Entropie und Kreisprozesse\n\n"
+        "Während der erste Hauptsatz lediglich die Energiebilanz überwacht.\n"
+    )
+
+    ch2_with_meta = insert_page_numbers_from_metadata(
+        ch2_wrong_markers_md,
+        str(ch2_json),
+        "10-15",
+        pdf_path=str(cropped_ch2),
+        directory_info=info,
+    )
+    assert re.findall(r"\(\((\d+)\)\)", ch2_with_meta) == ["10", "11", "12", "13", "14", "15"]
+
+    # Also verify apply_directory_page_numbers alone repairs ((15))..((20)) (PDF indices) to ((10))..((15))
+    ch2_pdf_idx_md = (
+        ch2_wrong_markers_md.replace("((1))", "((15))")
+        .replace("((2))", "((16))")
+        .replace("((3))", "((17))")
+        .replace("((4))", "((18))")
+        .replace("((5))", "((19))")
+        .replace("((6))", "((20))")
+    )
+    ch2_repaired = apply_directory_page_numbers(ch2_pdf_idx_md, info)
+    assert re.findall(r"\(\((\d+)\)\)", ch2_repaired) == ["10", "11", "12", "13", "14", "15"]
+
+    # Verify TOC-assisted heading hierarchy reconstruction on Chapter 2
+    ch2_final = post_process_structure(
+        reconstruct_title_hierarchy(ch2_with_meta, directory_info=info),
+        directory_info=info,
+    )
+    assert "# Kapitel 2: Thermodynamik und Wärmekraftmaschinen" in ch2_final
+    assert "## 2.1 Temperatur, Teilchenmodell und ideale Gase" in ch2_final
+    assert "### Tab. 2.1: Zustandsgrößen und Freiheitsgrade ein- und mehratomiger idealer Gase" in ch2_final
+    assert "## 2.2 Erster Hauptsatz der Thermodynamik" in ch2_final
+    assert "### Kalorimetrische Messung der spezifischen Wärmekapazität" in ch2_final
+    assert "#### Wärmeaustausch mit dem Kalorimetergefäß" in ch2_final
+    assert "### Tab. 2.2: Spezifische Wärmekapazitäten ausgewählter Festkörper und Flüssigkeiten" in ch2_final
+    assert "## 2.3 Entropie und Kreisprozesse" in ch2_final
+    assert re.findall(r"\(\((\d+)\)\)", ch2_final) == ["10", "11", "12", "13", "14", "15"]
+
+
+def test_large_556_page_pdf_directory_and_page_label_detection_under_half_second(tmp_path):
+    """Performance regression test for large textbooks (556 pages):
+    Verifies that check_document_directories, get_page_labels_for_pdf, and
+    get_physical_page_numbers_for_pdf complete in under 0.5 seconds total without
+    O(N) PDF re-opens or full-book Docling/text scans.
+    """
+    from reportlab.pdfbase.pdfdoc import PDFArray, PDFDictionary, PDFName
+    from reportlab.pdfgen import canvas
+
+    from backend.services.extraction_service import get_page_labels_for_pdf
+
+    total_pages = 556
+    roman_front = ["I", "II", "III", "IV", "V"]
+    pdf_path = tmp_path / "large_556_pages.pdf"
+
+    c = canvas.Canvas(str(pdf_path))
+    for idx in range(total_pages):
+        if idx < 5:
+            rom = roman_front[idx]
+            if idx == 2:
+                c.drawString(48, 760, "Inhaltsverzeichnis")
+                c.drawString(48, 730, "Kapitel 1: Mechanik und Kinematik ........................ 1")
+                c.drawString(64, 710, "1.1 Gleichförmige Bewegung ............................... 2")
+                c.drawString(48, 690, "Kapitel 20: Astrophysik und Kosmologie ................... 551")
+            else:
+                c.drawString(48, 760, f"Frontmatter Abschnitt {rom}")
+            c.drawString(280, 36, f"Seite {rom}")
+        else:
+            body_page = idx - 4
+            if body_page == 1:
+                c.drawString(48, 760, "Kapitel 1: Mechanik und Kinematik")
+            elif body_page == 2:
+                c.drawString(48, 760, "1.1 Gleichförmige Bewegung")
+            elif body_page == 551:
+                c.drawString(48, 760, "Kapitel 20: Astrophysik und Kosmologie")
+            else:
+                c.drawString(48, 760, f"Lehrtext auf Seite {body_page}")
+            c.drawString(280, 36, f"Seite {body_page}")
+        c.showPage()
+
+    r_dict = PDFDictionary({"S": PDFName("R"), "St": 1})
+    d_dict = PDFDictionary({"S": PDFName("D"), "St": 1})
+    c._doc.Catalog.PageLabels = PDFDictionary({"Nums": PDFArray([0, r_dict, 5, d_dict])})
+    c.save()
+
+    expected_labels = roman_front + [str(i) for i in range(1, 552)]
+
+    t0 = time.perf_counter()
+    dir_info = check_document_directories(str(pdf_path), max_pages=20)
+    labels = get_page_labels_for_pdf(str(pdf_path), directory_info=dir_info)
+    phys_With_dir = get_physical_page_numbers_for_pdf(str(pdf_path), directory_info=dir_info)
+    phys_without_dir = get_physical_page_numbers_for_pdf(
+        str(pdf_path), directory_info={"has_any_directory": False}
+    )
+    elapsed = time.perf_counter() - t0
+
+    assert elapsed < 0.5, f"556-page detection took {elapsed:.3f}s (expected < 0.5s)"
+    assert dir_info["has_toc"] is True
+    assert dir_info["roman_prefix_count"] == 5
+    assert labels == expected_labels
+    assert len(phys_With_dir) == total_pages
+    assert phys_With_dir[-1] == 551
+    assert len(phys_without_dir) == total_pages
+
+
 
 
