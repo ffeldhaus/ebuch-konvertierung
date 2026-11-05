@@ -1911,4 +1911,93 @@ def test_custom_benchmark_evaluate_with_existing_source_task_id(tmp_path, monkey
             benchmark_task_manager.delete_run(bench_task_id)
 
 
+def test_custom_benchmark_direct_existing_transfer_evaluation_and_feedback(tmp_path, monkeypatch):
+    """Verify existing_transfer mode skips re-extraction/re-standardisation and writes a Gemma feedback report."""
+    import uuid
+    from pathlib import Path
+
+    from reportlab.pdfgen import canvas
+
+    import backend.services.custom_benchmark_service as cbs
+    from backend.services.task_manager import Task
+
+    monkeypatch.setenv("E2E_MOCK", "true")
+    monkeypatch.setattr(cbs, "PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        cbs,
+        "evaluate_with_gemma_judge",
+        lambda *args, **kwargs: {"overall_judge_score": 88.0, "judge_feedback": "Gute Struktur."},
+    )
+
+    extraction_called = False
+    standardise_called = False
+
+    def _forbid_extraction(*args, **kwargs):
+        nonlocal extraction_called
+        extraction_called = True
+        raise AssertionError("run_single_engine_extraction must not be called in existing_transfer mode")
+
+    def _forbid_standardise(*args, **kwargs):
+        nonlocal standardise_called
+        standardise_called = True
+        raise AssertionError("standardise_markdown must not be called in existing_transfer mode")
+
+    monkeypatch.setattr(cbs, "run_single_engine_extraction", _forbid_extraction)
+    monkeypatch.setattr(cbs, "standardise_markdown", _forbid_standardise)
+
+    pdf_path = tmp_path / "Mechanik.pdf"
+    c = canvas.Canvas(str(pdf_path))
+    for p in range(1, 4):
+        c.drawString(72, 720, f"Seite {p}")
+        c.showPage()
+    c.save()
+
+    src_task_id = f"src-{uuid.uuid4().hex[:8]}"
+    task = Task(
+        task_id=src_task_id,
+        original_name="Mechanik.pdf",
+        input_path=str(pdf_path),
+        extension=".pdf",
+        engine="lightonocr",
+        pages="2-3",
+        standardised_markdown="((2))\n\n# Mechanik\n\n((3))\n\nAlter Text.\n",
+        raw_markdown="((2))\n\n# Mechanik\n\n((3))\n\nAlter Roh-Text.\n",
+    )
+
+    existing_transfer = {
+        "source_task_id": task.task_id,
+        "original_name": task.original_name,
+        "engine": task.engine,
+        "pages": task.pages,
+        "raw_markdown": task.raw_markdown,
+        "standardised_markdown": task.standardised_markdown,
+        "ground_truth_filename": "gt.md",
+    }
+
+    result = cbs.evaluate_custom_submission(
+        source_pdf_path=str(pdf_path),
+        ground_truth_md="((2))\n\n# Mechanik\n\n((3))\n\nKorrigierter Referenztext mit <Rahmen>\nMerksatz.\n</Rahmen>\n",
+        ruleset_key="uebertragungsregeln_09_2025",
+        engines=["infinity", "docling"],
+        task_id=f"bench-{uuid.uuid4().hex[:8]}",
+        pages="2-3",
+        existing_transfer=existing_transfer,
+    )
+
+    assert extraction_called is False
+    assert standardise_called is False
+    assert result["mode"] == "existing_transfer"
+    assert len(result["rankings"]) == 1
+    assert result["rankings"][0]["engine"] == "lightonocr"
+    assert result["feedback_report"]
+    assert "## " in result["feedback_report"]
+    assert "## Anhang: Automatisch ermittelte Kennzahlen" in result["feedback_report"]
+
+    feedback_id = result["feedback_id"]
+    report_path = Path(tmp_path) / "assets" / "feedback" / src_task_id / feedback_id / "report.md"
+    assert report_path.is_file()
+    assert report_path.read_text(encoding="utf-8") == result["feedback_report"]
+
+
+
 

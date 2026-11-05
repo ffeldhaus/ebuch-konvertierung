@@ -41,7 +41,7 @@ interface FeedbackReportSummary {
 }
 
 /** One parsed entry of the report's "Offene Fragen" section (answer null = open/skipped). */
-interface OpenQuestion {
+export interface OpenQuestion {
   question: string;
   answer: string | null;
 }
@@ -178,6 +178,7 @@ export class FeedbackController {
   private draftAnswers: (string | null)[] = [];
   private questionIdx = 0;
   private isSavingAnswers = false;
+  private externalQuestionsCallback: ((report: string, questions: OpenQuestion[]) => void) | null = null;
   // Wheel paging state: one page per wheel gesture (no fluid scrolling)
   private wheelAccum = 0;
   private wheelLocked = false;
@@ -888,6 +889,7 @@ export class FeedbackController {
 
   private showReport(report: string, filename: string, ref: { taskId: string; feedbackId: string } | null,
     questions: OpenQuestion[], scroll = true) {
+    this.externalQuestionsCallback = null;
     this.currentReport = report;
     this.currentReportName = filename;
     this.currentReportRef = ref;
@@ -911,6 +913,26 @@ export class FeedbackController {
       : `❓ Offene Fragen beantworten (${total})`;
   }
 
+  /** Opens the shared Open Questions modal for a report displayed outside the Feedback view (e.g. Benchmark). */
+  openExternalReportQuestions(
+    taskId: string,
+    feedbackId: string,
+    report: string,
+    questions: OpenQuestion[],
+    onUpdated: (updatedReport: string, updatedQuestions: OpenQuestion[]) => void,
+  ) {
+    if (!this.initialized) {
+      this.bindEvents();
+      this.initialized = true;
+    }
+    this.currentReport = report;
+    this.currentReportName = `feedback_${feedbackId}.md`;
+    this.currentReportRef = { taskId, feedbackId };
+    this.openQuestions = questions;
+    this.externalQuestionsCallback = onUpdated;
+    this.openQuestionsModal();
+  }
+
   private openQuestionsModal() {
     if (!this.openQuestions.length || !this.currentReportRef) return;
     this.draftAnswers = this.openQuestions.map(q => q.answer);
@@ -923,7 +945,9 @@ export class FeedbackController {
   private closeQuestionsModal() {
     if (this.isSavingAnswers) return;
     this.questionsModal.classList.add('hidden');
-    this.answerQuestionsBtn.focus();
+    if (!this.externalQuestionsCallback) {
+      this.answerQuestionsBtn.focus();
+    }
   }
 
   private renderQuestion() {
@@ -985,8 +1009,14 @@ export class FeedbackController {
       if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
       this.isSavingAnswers = false;
       this.closeQuestionsModal();
-      this.showReport(data.report, this.currentReportName, this.currentReportRef, data.open_questions || [], false);
-      this.flashButton(this.copyReportBtn, '📋 Kopieren (inkl. Antworten)');
+      if (this.externalQuestionsCallback) {
+        this.currentReport = data.report;
+        this.openQuestions = data.open_questions || [];
+        this.externalQuestionsCallback(data.report, this.openQuestions);
+      } else {
+        this.showReport(data.report, this.currentReportName, this.currentReportRef, data.open_questions || [], false);
+        this.flashButton(this.copyReportBtn, '📋 Kopieren (inkl. Antworten)');
+      }
     } catch (e) {
       this.isSavingAnswers = false;
       this.opts.showError(`Die Antworten konnten nicht gespeichert werden: ${(e as Error).message}`, 'Speichern fehlgeschlagen');

@@ -1796,14 +1796,33 @@ async def custom_benchmark_evaluate(
         )
 
     src_task = None
+    existing_std_md = ""
+    existing_raw_md = ""
+    has_existing_transfer = False
+    has_valid_src_pdf = False
     if not has_uploaded_source:
         src_task = await task_manager.get(clean_source_task_id)
-        if not src_task or not src_task.input_path or not os.path.exists(src_task.input_path):
+        if src_task is not None:
+            existing_std_md = _load_original_transfer(src_task)
+            raw_md_path = os.path.join(OUTPUT_DIR, src_task.task_id, f"{src_task.task_id}_extracted.md")
+            if os.path.exists(raw_md_path):
+                with open(raw_md_path, encoding="utf-8", errors="ignore") as rf:
+                    existing_raw_md = rf.read()
+            elif getattr(src_task, "extracted_markdown", None):
+                existing_raw_md = src_task.extracted_markdown or ""
+            has_existing_transfer = bool(
+                (existing_std_md and existing_std_md.strip()) or (existing_raw_md and existing_raw_md.strip())
+            )
+            has_valid_src_pdf = bool(src_task.input_path and os.path.exists(src_task.input_path))
+        if not src_task or (not has_valid_src_pdf and not has_existing_transfer):
             raise HTTPException(
                 status_code=404,
                 detail="Quell-PDF der ausgewählten Übertragung wurde nicht gefunden.",
             )
-        source_filename = src_task.original_name or os.path.basename(src_task.input_path)
+        source_filename = (
+            src_task.original_name
+            or (os.path.basename(src_task.input_path) if src_task.input_path else f"{src_task.task_id}.pdf")
+        )
         if pages is None and src_task.pages:
             pages = src_task.pages
     else:
@@ -1826,9 +1845,13 @@ async def custom_benchmark_evaluate(
     source_path = os.path.join(task_dir, source_filename)
     gt_path = os.path.join(task_dir, ground_truth_file.filename)
 
-    selected_engines = [e.strip() for e in engines.split(",") if e.strip()]
-    if not selected_engines:
-        selected_engines = ["infinity", "docling"]
+    if src_task is not None and has_existing_transfer:
+        existing_engine = (src_task.engine or "infinity").strip().lower()
+        selected_engines = [existing_engine]
+    else:
+        selected_engines = [e.strip() for e in engines.split(",") if e.strip()]
+        if not selected_engines:
+            selected_engines = ["infinity", "docling"]
 
     from backend.services.benchmark_task_manager import benchmark_task_manager
     benchmark_task = benchmark_task_manager.create_task(
@@ -1844,7 +1867,11 @@ async def custom_benchmark_evaluate(
         benchmark_task.add_log(f"Lade Quelldokument '{source_filename}'...")
 
         # Save source PDF (cropped if page range requested)
-        if pages and pages.strip():
+        if src_task is not None and not has_valid_src_pdf:
+            benchmark_task.add_log(
+                "Kein Quell-PDF vorhanden – verwende gespeicherte Übertragung der ausgewählten Aufgabe direkt."
+            )
+        elif pages and pages.strip():
             if src_task is not None:
                 raw_source_path = src_task.input_path
                 total_pages = src_task.page_count or await asyncio.to_thread(get_pdf_page_count, raw_source_path)
@@ -1870,36 +1897,44 @@ async def custom_benchmark_evaluate(
                 physical_start=physical_start,
                 page_labels=source_labels or None,
             )
-            if not is_valid:
+            if not is_valid and not has_existing_transfer:
                 raise HTTPException(status_code=400, detail=err_msg)
 
-            rel_indices = resolve_page_selection_to_relative_indices(
-                pages.strip(),
-                total_pages,
-                physical_start=physical_start,
-                page_labels=source_labels or None,
-            )
-            rel_pages_str = ",".join(str(i) for i in rel_indices)
-            extracted = await asyncio.to_thread(
-                extract_pdf_pages,
-                raw_source_path,
-                rel_pages_str,
-                source_path,
-                source_labels or None,
-                True,
-            )
-            cropped_count = (
-                await asyncio.to_thread(get_pdf_page_count, source_path) if os.path.exists(source_path) else 0
-            )
-            if not extracted or not os.path.exists(source_path) or cropped_count == 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Ungültiger Seitenbereich '{pages.strip()}'. Keine Seiten konnten extrahiert werden.",
+            if is_valid:
+                rel_indices = resolve_page_selection_to_relative_indices(
+                    pages.strip(),
+                    total_pages,
+                    physical_start=physical_start,
+                    page_labels=source_labels or None,
                 )
+                rel_pages_str = ",".join(str(i) for i in rel_indices)
+                extracted = await asyncio.to_thread(
+                    extract_pdf_pages,
+                    raw_source_path,
+                    rel_pages_str,
+                    source_path,
+                    source_labels or None,
+                    True,
+                )
+                cropped_count = (
+                    await asyncio.to_thread(get_pdf_page_count, source_path) if os.path.exists(source_path) else 0
+                )
+            else:
+                extracted = False
+                cropped_count = 0
 
-            benchmark_task.add_log(
-                f"Seitenbereich [{pages.strip()}] ausgewählt. Quell-PDF gekürzt ({cropped_count} von {total_pages} Seiten)."
-            )
+            if not extracted or not os.path.exists(source_path) or cropped_count == 0:
+                if has_existing_transfer and src_task is not None and has_valid_src_pdf:
+                    await asyncio.to_thread(shutil.copyfile, src_task.input_path, source_path)
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Ungültiger Seitenbereich '{pages.strip()}'. Keine Seiten konnten extrahiert werden.",
+                    )
+            else:
+                benchmark_task.add_log(
+                    f"Seitenbereich [{pages.strip()}] ausgewählt. Quell-PDF gekürzt ({cropped_count} von {total_pages} Seiten)."
+                )
         else:
             if src_task is not None:
                 await asyncio.to_thread(shutil.copyfile, src_task.input_path, source_path)
@@ -1985,18 +2020,48 @@ async def custom_benchmark_evaluate(
             benchmark_task.add_log(f"Dokumenten-spezifische Übertragungsregeln geladen ({len(custom_rules)} Zeichen).")
             logger.info(f"Custom rules saved for benchmark task {task_id} ({len(custom_rules)} chars)")
 
+        existing_transfer: dict | None = None
+        if src_task is not None and has_existing_transfer:
+            existing_engine = (src_task.engine or "infinity").strip().lower()
+            existing_transfer = {
+                "source_task_id": src_task.task_id,
+                "original_name": src_task.original_name or source_filename,
+                "engine": existing_engine,
+                "standardisation_backend": getattr(src_task, "standardisation_backend", None) or "gemma",
+                "pages": pages or src_task.pages,
+                "standardised_markdown": existing_std_md or existing_raw_md,
+                "raw_markdown": existing_raw_md or existing_std_md,
+                "image_dir": os.path.join(OUTPUT_DIR, src_task.task_id, "images"),
+                "duration_seconds": round(max(0.1, (src_task.finished_at - src_task.started_at)), 2)
+                if (src_task.finished_at and src_task.started_at and src_task.finished_at > src_task.started_at)
+                else 1.0,
+                "custom_rules": custom_rules,
+                "ground_truth_filename": ground_truth_file.filename,
+            }
+
         async def _run_bg():
+            import inspect
+
             loop = asyncio.get_event_loop()
             try:
-                await loop.run_in_executor(
-                    _BENCHMARK_EXECUTOR,
-                    evaluate_custom_submission,
+                eval_args = [
                     source_path,
                     gt_content,
                     ruleset,
                     selected_engines,
                     task_id,
-                    pages
+                    pages,
+                ]
+                if existing_transfer is not None:
+                    sig_params = inspect.signature(evaluate_custom_submission).parameters
+                    if "existing_transfer" in sig_params or any(
+                        p.kind == inspect.Parameter.VAR_POSITIONAL for p in sig_params.values()
+                    ):
+                        eval_args.append(existing_transfer)
+                await loop.run_in_executor(
+                    _BENCHMARK_EXECUTOR,
+                    evaluate_custom_submission,
+                    *eval_args,
                 )
             except Exception as ex:
                 logger.error(f"Benchmark background execution failed: {ex}", exc_info=True)
@@ -2011,6 +2076,8 @@ async def custom_benchmark_evaluate(
         return {
             "task_id": task_id,
             "status": "running",
+            "mode": "existing_transfer" if existing_transfer else "multi_engine_benchmark",
+            "source_task_id": src_task.task_id if src_task else None,
             "source_filename": source_filename,
             "ground_truth_filename": ground_truth_file.filename,
             "is_docx_ground_truth": gt_filename_lower.endswith(".docx"),

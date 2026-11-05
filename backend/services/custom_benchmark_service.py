@@ -1,10 +1,12 @@
 """Custom multi-engine benchmark evaluation service for user-uploaded PDFs and ground truths."""
 
+import asyncio
 import json
 import logging
 import os
 import re
 import time
+import uuid
 from typing import Any
 
 from backend.services.diff_service import get_diff_highlighting
@@ -141,17 +143,147 @@ def run_single_engine_extraction(
         raise ValueError(f"Unknown extraction engine: {engine}")
 
 
+def _generate_developer_feedback_report(
+    std_md: str,
+    ground_truth_md: str,
+    existing_transfer: dict[str, Any],
+    ruleset_key: str,
+    task: Any | None = None,
+) -> dict[str, Any]:
+    """Generates and persists a Gemma 4 developer feedback report comparing an existing transfer to Ground Truth.
+
+    Args:
+        std_md: Standardised (or raw) Markdown from the existing conversion task.
+        ground_truth_md: Reference Ground Truth Markdown.
+        existing_transfer: Metadata and content dictionary of the existing conversion task.
+        ruleset_key: Active benchmark ruleset key (``"raw"`` or ``"uebertragungsregeln_09_2025"``).
+        task: Optional ``BenchmarkTask`` instance for live progress and log updates.
+
+    Returns:
+        Dictionary containing ``feedback_id``, ``source_task_id``, ``feedback_report``,
+        ``open_questions``, ``change_summary``, and ``lint_comparison``.
+    """
+    from backend.services import feedback_service as fs
+    from backend.services.prompts import build_analysis_prompt
+
+    change_summary = fs.compute_change_summary(std_md, ground_truth_md)
+    lint_cmp = fs.compare_lint_reports(std_md, ground_truth_md)
+    if task:
+        task.add_log(
+            f"{change_summary['hunk_count']} Änderungsblöcke erkannt "
+            f"(Ähnlichkeit {change_summary['similarity']:.1%})."
+        )
+
+    engine_name = str(existing_transfer.get("engine") or "infinity")
+    task_meta = {
+        "Quelldokument": existing_transfer.get("original_name") or "Unbekannt",
+        "Engine": engine_name,
+        "Standardisierungs-Backend": existing_transfer.get("standardisation_backend") or "gemma",
+        "Seitenauswahl": existing_transfer.get("pages") or "alle",
+        "Regelsatz": "Roh-Extraktion (Ohne LLM)"
+        if ruleset_key == "raw"
+        else "Übertragungsregeln FIBS (September 2025)",
+    }
+    final_prompt = build_analysis_prompt(change_summary, lint_cmp, "", task_meta, 0)
+
+    source_task_id = str(existing_transfer.get("source_task_id") or (task.task_id if task else "bench"))
+    feedback_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    work_dir = os.path.join(PROJECT_ROOT, "assets", "feedback", source_task_id, feedback_id)
+    os.makedirs(work_dir, exist_ok=True)
+
+    with open(os.path.join(work_dir, "original.md"), "w", encoding="utf-8") as f:
+        f.write(std_md)
+    with open(os.path.join(work_dir, "revised.md"), "w", encoding="utf-8") as f:
+        f.write(ground_truth_md)
+
+    if task:
+        task.update_progress("Erstelle Gemma 4 Entwickler-Feedback-Bericht...", 0, engine_name, 0.9)
+
+    if os.environ.get("E2E_MOCK") == "true":
+        raw_report = fs.generate_mock_report(change_summary, "", [])
+    else:
+        release_gpu_memory()
+
+        def _on_event(kind: str, data: dict[str, Any]) -> None:
+            if task and kind == "log" and data.get("message"):
+                task.add_log(str(data["message"]))
+
+        try:
+            analysis_res = asyncio.run(
+                fs.run_gemma_feedback_analysis(final_prompt, [], work_dir, _on_event)
+            )
+            raw_report = str(analysis_res.get("report") or "")
+        except Exception as exc:
+            logger.warning("Gemma feedback analysis failed, using heuristic fallback report: %s", exc)
+            raw_report = ""
+        finally:
+            release_gpu_memory()
+
+        if not raw_report.strip():
+            if task:
+                task.add_log("Gemma lieferte keine Antwort – heuristischer Fallback-Bericht wird erstellt.")
+            raw_report = fs.generate_mock_report(change_summary, "", [])
+
+    report = fs.redact_long_passages(fs.normalize_report_markdown(raw_report), [std_md, ground_truth_md])
+    report = report.rstrip() + "\n" + fs.build_statistics_appendix(change_summary, lint_cmp, task_meta)
+
+    clean_change_summary = {k: v for k, v in change_summary.items() if k != "hunks"}
+    with open(os.path.join(work_dir, "report.md"), "w", encoding="utf-8") as f:
+        f.write(report)
+    with open(os.path.join(work_dir, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "feedback_id": feedback_id,
+                "task_id": source_task_id,
+                "created_at": time.time(),
+                "original_name": existing_transfer.get("original_name") or "Unbekannt",
+                "revised_filename": existing_transfer.get("ground_truth_filename") or "ground_truth.md",
+                "region_count": 0,
+                "regions": [],
+                "region_findings": [],
+                "change_summary": clean_change_summary,
+                "lint_comparison": lint_cmp,
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    open_questions = [q.model_dump() for q in fs.extract_open_questions(report)]
+    return {
+        "feedback_id": feedback_id,
+        "source_task_id": source_task_id,
+        "feedback_report": report,
+        "open_questions": open_questions,
+        "change_summary": clean_change_summary,
+        "lint_comparison": lint_cmp,
+    }
+
+
 def evaluate_custom_submission(
     source_pdf_path: str,
     ground_truth_md: str,
     ruleset_key: str = "uebertragungsregeln_09_2025",
     engines: list[str] | None = None,
     task_id: str | None = None,
-    pages: str | None = None
+    pages: str | None = None,
+    existing_transfer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Evaluates one or more layout extraction engines on a user-uploaded PDF
-    directly against a user-provided ground truth Markdown document.
-    Integrates with BenchmarkTaskManager for progress updates, live logging, abort, and skip.
+    """Evaluates one or more layout extraction engines or an existing conversion against Ground Truth.
+
+    Args:
+        source_pdf_path: Path to the (optionally cropped) source PDF document.
+        ground_truth_md: Reference Ground Truth Markdown text.
+        ruleset_key: Active benchmark ruleset key (``"raw"`` or ``"uebertragungsregeln_09_2025"``).
+        engines: List of OCR engine identifiers to benchmark.
+        task_id: Benchmark task identifier for state and progress persistence.
+        pages: Optional page selection string.
+        existing_transfer: Optional dictionary with pre-existing conversion Markdown and metadata;
+            when provided, skips re-extraction/re-standardisation and also generates a Gemma 4
+            developer feedback report.
+
+    Returns:
+        Final evaluation dictionary containing rankings, metrics, and optional feedback report data.
     """
     from backend.services.benchmark_task_manager import benchmark_task_manager
     from backend.services.diff_service import strip_ground_truth_preamble
@@ -159,14 +291,18 @@ def evaluate_custom_submission(
 
     ground_truth_md = strip_ground_truth_preamble(ground_truth_md)
     task = benchmark_task_manager.get_task(task_id) if task_id else None
-    
+
     if pages:
         m = re.search(r"(\d+)", pages)
         physical_start_page = int(m.group(1)) if m else 1
-    else:
+    elif os.path.exists(source_pdf_path):
         physical_start_page = detect_physical_start_page(source_pdf_path)
+    else:
+        physical_start_page = 1
 
-    if not engines:
+    if existing_transfer:
+        engines = [str(existing_transfer.get("engine") or (engines[0] if engines else "infinity")).strip().lower()]
+    elif not engines:
         engines = ["docling", "infinity", "lightonocr"]
 
     import pypdfium2
@@ -174,7 +310,8 @@ def evaluate_custom_submission(
         pdf = pypdfium2.PdfDocument(source_pdf_path)
         page_count = len(pdf)
     except Exception:
-        page_count = 1
+        gt_page_markers = list(dict.fromkeys(re.findall(r"\(\((\d+)\)\)", ground_truth_md)))
+        page_count = max(1, len(gt_page_markers))
 
     temp_base = os.path.join(PROJECT_ROOT, "assets", "output", task_id or f"custom_bench_{int(time.time())}")
     os.makedirs(temp_base, exist_ok=True)
@@ -189,6 +326,7 @@ def evaluate_custom_submission(
 
     extracted_cache: dict[str, tuple[str, float]] = {}
     engine_results = []
+    feedback_data: dict[str, Any] = {}
     license_tags = {
         "lightonocr": "Apache 2.0 (Commercial)",
         "infinity": "Apache 2.0 (Commercial)",
@@ -198,7 +336,12 @@ def evaluate_custom_submission(
     if task:
         task.status = "running"
         task.started_at = time.strftime("%Y-%m-%d %H:%M:%S")
-        task.add_log(f"Benchmark gestartet über {len(engines)} Engine(s) auf {page_count} Seite(n).")
+        if existing_transfer:
+            task.add_log(
+                f"Direkt-Vergleich & Entwickler-Feedback für bestehende Übertragung [{engines[0]}] auf {page_count} Seite(n) gestartet."
+            )
+        else:
+            task.add_log(f"Benchmark gestartet über {len(engines)} Engine(s) auf {page_count} Seite(n).")
 
     for idx, engine in enumerate(engines):
         # 0. Check abort before engine starts
@@ -206,58 +349,89 @@ def evaluate_custom_submission(
             task.add_log(f"Benchmark bei Engine [{engine}] abgebrochen.", level="warning")
             break
 
-        if task:
-            task.reset_skip_flag()
-            task.update_progress(f"Extrahiere Layout mit [{engine}]...", idx, engine, 0.1)
-
         eng_out_dir = os.path.join(temp_base, engine)
-        logger.info(f"--> Benchmarking [{engine}] on custom source PDF ({page_count} pages)...")
-        
-        # 1. Extraction (reusing already extracted Docling / Infinity / LightOnOCR if cached)
-        try:
-            raw_md, duration = run_single_engine_extraction(engine, source_pdf_path, eng_out_dir, extracted_cache=extracted_cache, task=task)
-            extracted_cache[engine] = (raw_md, duration)
-        except Exception as e:
-            logger.error(f"Extraction failed for {engine}: {e}")
+        os.makedirs(eng_out_dir, exist_ok=True)
+
+        if existing_transfer:
             if task:
-                task.add_log(f"Fehler bei Extraktion mit {engine}: {str(e)}", level="error")
-            raw_md = f"# Extraktionsfehler ({engine})\n{str(e)}"
-            duration = 1.0
-
-        # Check skip/abort after extraction
-        if task and task.is_abort_requested():
-            break
-        if task and task.should_skip_engine():
-            task.add_log(f"Engine [{engine}] nach Extraktion übersprungen.")
-            continue
-
-        # 2. Sequential GPU release
-        if task:
-            task.update_progress("Bereinige Apple Silicon GPU Cache...", idx, engine, 0.35)
-        release_gpu_memory()
-
-        # 3. Gemma standardization if ruleset requested (with document-specific custom_ruleset.txt support)
-        if ruleset_key != "raw" and raw_md and not raw_md.startswith("# Extraktionsfehler"):
-            if task:
-                task.update_progress(f"Gemma 4 12B Standardisierung ({ruleset_key})...", idx, engine, 0.5)
-            logger.info(f"Applying Gemma standardization [{ruleset_key}] for {engine}...")
+                task.reset_skip_flag()
+                task.update_progress(f"Übernehme bestehende Übertragung [{engine}]...", idx, engine, 0.25)
+                task.add_log("Übernehme bestehende Übertragung aus Aufgabe (keine Neu-Extraktion erforderlich).")
+            raw_md = str(existing_transfer.get("raw_markdown") or existing_transfer.get("standardised_markdown") or "")
+            std_md = (
+                str(existing_transfer.get("standardised_markdown") or raw_md)
+                if ruleset_key != "raw"
+                else raw_md
+            )
+            duration = max(0.1, float(existing_transfer.get("duration_seconds") or 1.0))
+            base_name = os.path.splitext(os.path.basename(source_pdf_path))[0] or engine
             try:
-                std_md = standardise_markdown(raw_md, ruleset_key=ruleset_key, task_id=task_id, physical_start_page=physical_start_page)
+                with open(os.path.join(eng_out_dir, f"{base_name}.md"), "w", encoding="utf-8") as rf:
+                    rf.write(raw_md)
+                with open(os.path.join(eng_out_dir, f"{engine}_standardised.md"), "w", encoding="utf-8") as sf:
+                    sf.write(std_md)
             except Exception as e:
-                logger.error(f"Standardization failed for {engine}: {e}")
-                std_md = raw_md
+                logger.warning("Could not persist existing transfer markdown: %s", e)
         else:
-            std_md = raw_md
+            if task:
+                task.reset_skip_flag()
+                task.update_progress(f"Extrahiere Layout mit [{engine}]...", idx, engine, 0.1)
 
-        # Check skip/abort after standardization
-        if task and task.is_abort_requested():
-            break
-        if task and task.should_skip_engine():
-            task.add_log(f"Engine [{engine}] nach Standardisierung übersprungen.")
-            continue
+            logger.info(f"--> Benchmarking [{engine}] on custom source PDF ({page_count} pages)...")
+
+            # 1. Extraction (reusing already extracted Docling / Infinity / LightOnOCR if cached)
+            try:
+                raw_md, duration = run_single_engine_extraction(
+                    engine, source_pdf_path, eng_out_dir, extracted_cache=extracted_cache, task=task
+                )
+                extracted_cache[engine] = (raw_md, duration)
+            except Exception as e:
+                logger.error(f"Extraction failed for {engine}: {e}")
+                if task:
+                    task.add_log(f"Fehler bei Extraktion mit {engine}: {str(e)}", level="error")
+                raw_md = f"# Extraktionsfehler ({engine})\n{str(e)}"
+                duration = 1.0
+
+            # Check skip/abort after extraction
+            if task and task.is_abort_requested():
+                break
+            if task and task.should_skip_engine():
+                task.add_log(f"Engine [{engine}] nach Extraktion übersprungen.")
+                continue
+
+            # 2. Sequential GPU release
+            if task:
+                task.update_progress("Bereinige Apple Silicon GPU Cache...", idx, engine, 0.35)
+            release_gpu_memory()
+
+            # 3. Gemma standardization if ruleset requested (with document-specific custom_ruleset.txt support)
+            if ruleset_key != "raw" and raw_md and not raw_md.startswith("# Extraktionsfehler"):
+                if task:
+                    task.update_progress(f"Gemma 4 12B Standardisierung ({ruleset_key})...", idx, engine, 0.5)
+                logger.info(f"Applying Gemma standardization [{ruleset_key}] for {engine}...")
+                try:
+                    std_md = standardise_markdown(
+                        raw_md, ruleset_key=ruleset_key, task_id=task_id, physical_start_page=physical_start_page
+                    )
+                except Exception as e:
+                    logger.error(f"Standardization failed for {engine}: {e}")
+                    std_md = raw_md
+            else:
+                std_md = raw_md
+
+            # Check skip/abort after standardization
+            if task and task.is_abort_requested():
+                break
+            if task and task.should_skip_engine():
+                task.add_log(f"Engine [{engine}] nach Standardisierung übersprungen.")
+                continue
 
         # 4. Evaluation against uploaded ground truth
         i_img_dir = os.path.join(eng_out_dir, "images")
+        if existing_transfer:
+            ext_img_dir = str(existing_transfer.get("image_dir") or "")
+            if ext_img_dir and os.path.isdir(ext_img_dir):
+                i_img_dir = ext_img_dir
         (
             composite,
             h_metric,
@@ -295,7 +469,7 @@ def evaluate_custom_submission(
         except Exception as e:
             logger.error(f"Failed to generate candidate DOCX for {engine}: {e}")
 
-        result_item = {
+        result_item: dict[str, Any] = {
             "engine": engine,
             "version": get_engine_version(engine),
             "license": license_tags.get(engine, "Open Source"),
@@ -316,6 +490,15 @@ def evaluate_custom_submission(
             "docx_url": f"/api/benchmark/download-docx/{task_id}/{engine}" if task_id else None,
             "diff_html": diff_html
         }
+        if existing_transfer:
+            feedback_data = _generate_developer_feedback_report(
+                std_md=std_md,
+                ground_truth_md=ground_truth_md,
+                existing_transfer=existing_transfer,
+                ruleset_key=ruleset_key,
+                task=task,
+            )
+            result_item.update(feedback_data)
         engine_results.append(result_item)
         if task:
             task.add_log(f"Engine [{engine}] abgeschlossen: Gesamt-Score {round(composite, 1)}/100 ({round(duration, 1)}s)")
@@ -323,13 +506,16 @@ def evaluate_custom_submission(
     # Sort descending by composite score
     engine_results.sort(key=lambda x: x["composite_score"], reverse=True)
 
-    final_evaluation = {
+    final_evaluation: dict[str, Any] = {
         "task_id": task_id,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "mode": "existing_transfer" if existing_transfer else "multi_engine_benchmark",
         "ruleset": ruleset_key,
         "page_count": page_count,
         "rankings": engine_results
     }
+    if existing_transfer and feedback_data:
+        final_evaluation.update(feedback_data)
 
     if task:
         task.results = final_evaluation
@@ -447,13 +633,24 @@ def re_evaluate_submission(task_id: str) -> dict[str, Any]:
     source_filename = task_data.get("source_filename", "")
 
     updated_rankings = []
+    ruleset_key = task_data.get("ruleset") or "uebertragungsregeln_09_2025"
     for item in old_rankings:
         engine = item.get("engine", "unknown")
         raw_md = item.get("raw_markdown", "")
-        std_md = item.get("extracted_markdown", "") or raw_md
+        std_md = item.get("extracted_markdown", "")
+        eng_out_dir = item.get("output_dir") or os.path.join(task_dir, engine)
+        if not std_md and ruleset_key != "raw":
+            std_cand = os.path.join(eng_out_dir, f"{engine}_standardised.md")
+            if os.path.exists(std_cand):
+                try:
+                    with open(std_cand, encoding="utf-8") as sf:
+                        std_md = sf.read()
+                except Exception:
+                    pass
+        std_md = std_md or raw_md
 
         # Re-evaluate all metrics against cleaned ground truth
-        i_img_dir = os.path.join(item.get("output_dir", ""), "images") if item.get("output_dir") else None
+        i_img_dir = os.path.join(eng_out_dir, "images") if os.path.isdir(os.path.join(eng_out_dir, "images")) else None
         (
             composite,
             h_metric,
@@ -466,7 +663,7 @@ def re_evaluate_submission(task_id: str) -> dict[str, Any]:
         ) = _score_candidate_against_ground_truth(
             std_md=std_md,
             ground_truth_md=gt_md_clean,
-            ruleset_key=task_data.get("ruleset") or "uebertragungsregeln_09_2025",
+            ruleset_key=ruleset_key,
             dataset_name=source_filename,
             image_dir=i_img_dir,
             raw_markdown=raw_md,
@@ -497,13 +694,24 @@ def re_evaluate_submission(task_id: str) -> dict[str, Any]:
     # Sort descending by composite score
     updated_rankings.sort(key=lambda x: x["composite_score"], reverse=True)
 
-    results_data = {
+    results_data: dict[str, Any] = {
         "task_id": task_id,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "mode": old_eval.get("mode", "multi_engine_benchmark"),
         "ruleset": task_data.get("ruleset", "uebertragungsregeln_09_2025"),
         "page_count": old_eval.get("page_count", 1),
-        "rankings": updated_rankings
+        "rankings": updated_rankings,
     }
+    for key in (
+        "feedback_id",
+        "source_task_id",
+        "feedback_report",
+        "open_questions",
+        "change_summary",
+        "lint_comparison",
+    ):
+        if key in old_eval:
+            results_data[key] = old_eval[key]
 
     # Update in-memory task
     if task:

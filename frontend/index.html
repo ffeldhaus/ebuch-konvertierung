@@ -598,7 +598,10 @@
           <!-- Engine Checkboxes -->
           <div class="space-y-1.5">
             <span class="text-[11px] text-slate-400 font-semibold">Zu evaluierende Engines:</span>
-            <div class="grid grid-cols-1 gap-1.5 text-[11px]">
+            <div id="bench-existing-transfer-hint" class="hidden p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[10px] text-emerald-300 leading-snug">
+              ✅ Vorhandene Übertragung wird direkt gegen die Ground Truth verglichen &amp; Gemma-Entwickler-Feedback erstellt (keine Neu-Extraktion).
+            </div>
+            <div id="bench-engines-container" class="grid grid-cols-1 gap-1.5 text-[11px]">
               <label class="flex items-center space-x-1.5 bg-slate-950 p-1.5 rounded-lg border border-slate-850 cursor-pointer hover:border-slate-700">
                 <input type="checkbox" id="bench-eng-infinity" value="infinity" checked class="accent-indigo-500">
                 <span class="text-slate-200 font-semibold text-indigo-300">⚡ Infinity-Parser2-Flash + Docling Layout</span>
@@ -756,6 +759,10 @@
             <span>🤖</span>
             <span>Gemma 4 Judge Analyse</span>
           </button>
+          <button id="bench-tab-btn-feedback" class="hidden px-3 py-1.5 rounded-lg bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800 transition-all flex items-center space-x-1.5">
+            <span>💬</span>
+            <span>Entwickler-Feedback (Gemma 4)</span>
+          </button>
         </div>
 
         <!-- Inspector Panes -->
@@ -773,6 +780,20 @@
 
         <div id="bench-tab-pane-judge" class="hidden h-96 overflow-y-auto p-5 rounded-xl bg-slate-950 text-xs text-slate-300 border border-slate-850 space-y-4">
           <!-- Injected by app.ts -->
+        </div>
+
+        <div id="bench-tab-pane-feedback" class="hidden h-[32rem] overflow-y-auto p-5 rounded-xl bg-slate-950 text-xs text-slate-200 border border-slate-850 space-y-4">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+            <h5 class="text-xs font-bold text-slate-100 flex items-center space-x-1.5">
+              <span>💬 Fehleranalyse &amp; Maßnahmen für den Coding Assistant (Gemma 4)</span>
+            </h5>
+            <div class="flex flex-wrap items-center gap-2">
+              <button id="bench-fb-answer-questions-btn" type="button" class="hidden px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-medium transition-colors">❓ Offene Fragen beantworten</button>
+              <button id="bench-fb-copy-btn" type="button" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors">📋 Für Coding Assistant kopieren</button>
+              <button id="bench-fb-download-btn" type="button" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition-colors">💾 Bericht (.md)</button>
+            </div>
+          </div>
+          <div id="bench-fb-report-content" class="fb-report select-text"></div>
         </div>
       </div>
 

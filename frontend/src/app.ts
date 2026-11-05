@@ -1,4 +1,4 @@
-import { FeedbackController } from './feedback';
+import { FeedbackController, OpenQuestion, renderReportMarkdown } from './feedback';
 import { SettingsController } from './settings';
 
 // Stepper and state management
@@ -200,10 +200,18 @@ class AppController {
   private benchTabBtnRaw = document.getElementById('bench-tab-btn-raw') as HTMLButtonElement;
   private benchTabBtnStd = document.getElementById('bench-tab-btn-std') as HTMLButtonElement;
   private benchTabBtnJudge = document.getElementById('bench-tab-btn-judge') as HTMLButtonElement;
+  private benchTabBtnFeedback = document.getElementById('bench-tab-btn-feedback') as HTMLButtonElement | null;
   private benchTabPaneDiff = document.getElementById('bench-tab-pane-diff') as HTMLDivElement;
   private benchTabPaneRaw = document.getElementById('bench-tab-pane-raw') as HTMLDivElement;
   private benchTabPaneStd = document.getElementById('bench-tab-pane-std') as HTMLDivElement;
   private benchTabPaneJudge = document.getElementById('bench-tab-pane-judge') as HTMLDivElement;
+  private benchTabPaneFeedback = document.getElementById('bench-tab-pane-feedback') as HTMLDivElement | null;
+  private benchExistingTransferHint = document.getElementById('bench-existing-transfer-hint') as HTMLDivElement | null;
+  private benchEnginesContainer = document.getElementById('bench-engines-container') as HTMLDivElement | null;
+  private benchFbAnswerQuestionsBtn = document.getElementById('bench-fb-answer-questions-btn') as HTMLButtonElement | null;
+  private benchFbCopyBtn = document.getElementById('bench-fb-copy-btn') as HTMLButtonElement | null;
+  private benchFbDownloadBtn = document.getElementById('bench-fb-download-btn') as HTMLButtonElement | null;
+  private benchFbReportContent = document.getElementById('bench-fb-report-content') as HTMLDivElement | null;
   private benchReevaluateBtn = document.getElementById('bench-reevaluate-btn') as HTMLButtonElement;
   private benchReevaluateIcon = document.getElementById('bench-reevaluate-icon') as HTMLSpanElement;
   private benchReevaluateText = document.getElementById('bench-reevaluate-text') as HTMLSpanElement;
@@ -217,6 +225,10 @@ class AppController {
   private activeBenchPhysicalStartPage: number = 1;
   private activeBenchPageLabels: string[] = [];
   private benchEvaluationResults: any = null;
+  private activeBenchFeedbackReport: string = '';
+  private activeBenchFeedbackId: string | null = null;
+  private activeBenchFeedbackSourceTaskId: string | null = null;
+  private activeBenchOpenQuestions: OpenQuestion[] = [];
   private activeBenchmarkTaskId: string | null = null;
   private benchmarkPollInterval: any = null;
   private taskId: string | null = null;
@@ -4075,6 +4087,37 @@ class AppController {
     if (this.benchTabBtnRaw) this.benchTabBtnRaw.addEventListener('click', () => this.switchInspectorTab('raw'));
     if (this.benchTabBtnStd) this.benchTabBtnStd.addEventListener('click', () => this.switchInspectorTab('std'));
     if (this.benchTabBtnJudge) this.benchTabBtnJudge.addEventListener('click', () => this.switchInspectorTab('judge'));
+    if (this.benchTabBtnFeedback) this.benchTabBtnFeedback.addEventListener('click', () => this.switchInspectorTab('feedback'));
+
+    if (this.benchFbCopyBtn) {
+      this.benchFbCopyBtn.addEventListener('click', async () => {
+        if (!this.activeBenchFeedbackReport) return;
+        try {
+          await navigator.clipboard.writeText(this.activeBenchFeedbackReport);
+          this.showToast('📋 Entwickler-Feedback in die Zwischenablage kopiert!');
+        } catch {
+          this.showErrorModal('Der Bericht konnte nicht in die Zwischenablage kopiert werden.', 'Kopieren fehlgeschlagen');
+        }
+      });
+    }
+
+    if (this.benchFbDownloadBtn) {
+      this.benchFbDownloadBtn.addEventListener('click', () => {
+        if (!this.activeBenchFeedbackReport) return;
+        const blob = new Blob([this.activeBenchFeedbackReport], { type: 'text/markdown;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `feedback_${this.activeBenchFeedbackId || 'report'}.md`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      });
+    }
+
+    if (this.benchFbAnswerQuestionsBtn) {
+      this.benchFbAnswerQuestionsBtn.addEventListener('click', () => {
+        this.openBenchmarkFeedbackQuestionsModal();
+      });
+    }
 
     // Engine diff switcher
     if (this.benchDiffEngineSelect) {
@@ -4233,9 +4276,43 @@ class AppController {
     }
   }
 
+  private setBenchmarkExistingTransferMode(enabled: boolean, engine?: string | null) {
+    if (enabled) {
+      this.benchExistingTransferHint?.classList.remove('hidden');
+      this.benchEnginesContainer?.classList.add('opacity-60');
+      const eng = String(engine || 'infinity').toLowerCase();
+      const target = eng.includes('lighton') ? 'lightonocr' : eng.includes('docling') ? 'docling' : 'infinity';
+      if (this.benchEngInfinity) {
+        this.benchEngInfinity.checked = target === 'infinity';
+        this.benchEngInfinity.disabled = true;
+      }
+      if (this.benchEngLightonocr) {
+        this.benchEngLightonocr.checked = target === 'lightonocr';
+        this.benchEngLightonocr.disabled = true;
+      }
+      if (this.benchEngDocling) {
+        this.benchEngDocling.checked = target === 'docling';
+        this.benchEngDocling.disabled = true;
+      }
+      if (this.startCustomBenchmarkBtn) {
+        this.startCustomBenchmarkBtn.innerHTML = '<span>🚀</span><span>Übertragung Evaluieren &amp; Feedback</span>';
+      }
+    } else {
+      this.benchExistingTransferHint?.classList.add('hidden');
+      this.benchEnginesContainer?.classList.remove('opacity-60');
+      if (this.benchEngInfinity) this.benchEngInfinity.disabled = false;
+      if (this.benchEngLightonocr) this.benchEngLightonocr.disabled = false;
+      if (this.benchEngDocling) this.benchEngDocling.disabled = false;
+      if (this.startCustomBenchmarkBtn) {
+        this.startCustomBenchmarkBtn.innerHTML = '<span>🚀</span><span>Benchmark Ausführen</span>';
+      }
+    }
+  }
+
   private async handleBenchmarkSourceTaskSelect(taskId: string) {
     if (!taskId) {
       this.activeBenchSourceTaskId = null;
+      this.setBenchmarkExistingTransferMode(false);
       if (!this.activeBenchSourceFile) {
         if (this.benchSourceFilename) this.benchSourceFilename.textContent = 'PDF hier ablegen oder klicken';
         if (this.benchSourceBadge) {
@@ -4269,6 +4346,15 @@ class AppController {
 
       this.activeBenchSourceTaskId = taskId;
       this.activeBenchSourceFile = null;
+
+      const hasExistingTransfer = Boolean(
+        data.status === 'completed' ||
+        data.has_standardised_markdown ||
+        data.standardised_markdown ||
+        data.raw_markdown ||
+        data.engine
+      );
+      this.setBenchmarkExistingTransferMode(hasExistingTransfer, data.engine);
 
       // Update Box 1: Quell-Dokument (PDF)
       if (this.benchSourceFilename) {
@@ -4343,6 +4429,7 @@ class AppController {
     }
     this.activeBenchSourceTaskId = null;
     if (this.benchSourceTaskSelect) this.benchSourceTaskSelect.value = '';
+    this.setBenchmarkExistingTransferMode(false);
     this.activeBenchSourceFile = file;
     if (this.benchSourceFilename) this.benchSourceFilename.textContent = file.name;
     if (this.benchSourceBadge) {
@@ -4602,6 +4689,14 @@ class AppController {
             task.results.task_id = taskId;
             this.benchEvaluationResults = task.results;
             this.renderBenchmarkResults(this.benchEvaluationResults);
+            if (
+              task.status === 'completed' &&
+              this.activeBenchOpenQuestions.some(q => q.answer === null) &&
+              this.activeBenchFeedbackSourceTaskId &&
+              this.activeBenchFeedbackId
+            ) {
+              this.openBenchmarkFeedbackQuestionsModal();
+            }
           } else if (task.status === 'aborted') {
             this.showErrorModal('Der Benchmark wurde auf Benutzerwunsch abgebrochen.', 'Benchmark Abgebrochen');
           } else if (task.status === 'failed') {
@@ -4810,12 +4905,13 @@ class AppController {
     }
   }
 
-  private switchInspectorTab(tab: 'diff' | 'raw' | 'std' | 'judge') {
+  private switchInspectorTab(tab: 'diff' | 'raw' | 'std' | 'judge' | 'feedback') {
     const btns = [
       { id: 'diff', el: this.benchTabBtnDiff, pane: this.benchTabPaneDiff },
       { id: 'raw', el: this.benchTabBtnRaw, pane: this.benchTabPaneRaw },
       { id: 'std', el: this.benchTabBtnStd, pane: this.benchTabPaneStd },
-      { id: 'judge', el: this.benchTabBtnJudge, pane: this.benchTabPaneJudge }
+      { id: 'judge', el: this.benchTabBtnJudge, pane: this.benchTabPaneJudge },
+      { id: 'feedback', el: this.benchTabBtnFeedback, pane: this.benchTabPaneFeedback },
     ];
 
     btns.forEach(b => {
@@ -4833,6 +4929,59 @@ class AppController {
     if (this.benchDiffEngineSelect && this.benchDiffEngineSelect.value) {
       this.renderDiffForEngine(this.benchDiffEngineSelect.value);
     }
+  }
+
+  private updateBenchmarkFeedbackQuestionsBtn() {
+    if (!this.benchFbAnswerQuestionsBtn) return;
+    const total = this.activeBenchOpenQuestions.length;
+    const answered = this.activeBenchOpenQuestions.filter(q => q.answer).length;
+    const canAnswer = total > 0 && Boolean(this.activeBenchFeedbackSourceTaskId && this.activeBenchFeedbackId);
+    this.benchFbAnswerQuestionsBtn.classList.toggle('hidden', !canAnswer);
+    if (canAnswer) {
+      this.benchFbAnswerQuestionsBtn.textContent = answered
+        ? `✏️ Antworten bearbeiten (${answered}/${total})`
+        : `❓ Offene Fragen beantworten (${total})`;
+    }
+  }
+
+  private openBenchmarkFeedbackQuestionsModal() {
+    if (
+      !this.activeBenchOpenQuestions.length ||
+      !this.activeBenchFeedbackSourceTaskId ||
+      !this.activeBenchFeedbackId
+    ) {
+      return;
+    }
+    if (!this.feedbackController) {
+      this.feedbackController = new FeedbackController({
+        showError: (message, title) => this.showErrorModal(message, title),
+      });
+    }
+    this.feedbackController.openExternalReportQuestions(
+      this.activeBenchFeedbackSourceTaskId,
+      this.activeBenchFeedbackId,
+      this.activeBenchFeedbackReport,
+      this.activeBenchOpenQuestions,
+      (updatedReport, updatedQuestions) => {
+        this.activeBenchFeedbackReport = updatedReport;
+        this.activeBenchOpenQuestions = updatedQuestions;
+        if (this.benchEvaluationResults) {
+          this.benchEvaluationResults.feedback_report = updatedReport;
+          this.benchEvaluationResults.open_questions = updatedQuestions;
+          const eng = this.benchDiffEngineSelect?.value;
+          const engEntry = this.benchEvaluationResults.rankings?.find((r: any) => r.engine === eng);
+          if (engEntry) {
+            engEntry.feedback_report = updatedReport;
+            engEntry.open_questions = updatedQuestions;
+          }
+        }
+        if (this.benchFbReportContent) {
+          this.benchFbReportContent.innerHTML = renderReportMarkdown(updatedReport);
+        }
+        this.updateBenchmarkFeedbackQuestionsBtn();
+        this.showToast('✅ Antworten in den Entwickler-Feedback-Bericht übernommen!');
+      }
+    );
   }
 
   private renderBenchmarkResults(data: any) {
@@ -4930,6 +5079,11 @@ class AppController {
 
       if (data.rankings.length > 0) {
         this.renderDiffForEngine(data.rankings[0].engine);
+        if (data.mode === 'existing_transfer' || Boolean(this.activeBenchFeedbackReport)) {
+          this.switchInspectorTab('feedback');
+        } else if (this.benchTabPaneFeedback && !this.benchTabPaneFeedback.classList.contains('hidden')) {
+          this.switchInspectorTab('diff');
+        }
       }
     }
   }
@@ -5038,6 +5192,24 @@ class AppController {
         </div>
       `;
     }
+
+    // Tab 5: Gemma 4 Developer Feedback Report
+    const feedbackReport = String(engineData.feedback_report || this.benchEvaluationResults.feedback_report || '');
+    this.activeBenchFeedbackReport = feedbackReport;
+    this.activeBenchFeedbackId = engineData.feedback_id || this.benchEvaluationResults.feedback_id || null;
+    this.activeBenchFeedbackSourceTaskId = engineData.source_task_id || this.benchEvaluationResults.source_task_id || null;
+    this.activeBenchOpenQuestions = Array.isArray(engineData.open_questions)
+      ? engineData.open_questions
+      : Array.isArray(this.benchEvaluationResults.open_questions)
+        ? this.benchEvaluationResults.open_questions
+        : [];
+    if (this.benchTabBtnFeedback) {
+      this.benchTabBtnFeedback.classList.toggle('hidden', !feedbackReport);
+    }
+    if (this.benchFbReportContent) {
+      this.benchFbReportContent.innerHTML = feedbackReport ? renderReportMarkdown(feedbackReport) : '';
+    }
+    this.updateBenchmarkFeedbackQuestionsBtn();
 
     // DOCX download button
     if (this.benchDownloadDocxBtn) {
