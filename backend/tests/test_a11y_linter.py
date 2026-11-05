@@ -240,3 +240,32 @@ Ein **wichtiger** Begriff © mit Lücke: 5 + 3 = ____.
     assert "_..._" in fixed
     report = lint_markdown(fixed)
     assert report.score == 100
+
+
+def test_lint_bild_allows_enumerated_prose_and_nue_or_newline_descriptions():
+    """Verify 2b: no false list_delimiter or image_format issues on human FIBS <Bild> blocks."""
+    from backend.services.a11y_linter import autofix_markdown
+
+    md = """# Kapitel 1: Mechanik
+
+((10))
+
+<Bild> Grafik:
+Beschreibung mit Bildtext:
+1. Zustand: Feder entspannt.
+2. Zustand: Feder gespannt.
+- Pfeil zeigt nach rechts.
+</Bild>
+
+<Bild> Foto: n. ü. </Bild>
+
+<Bild> Schema: n. ü. [siehe Text] </Bild>
+"""
+    report = lint_markdown(md)
+    assert report.score == 100
+    assert report.issues == []
+
+    fixed, _ = autofix_markdown(md)
+    assert "1. Zustand: Feder entspannt." in fixed
+    assert "1.\tZustand" not in fixed
+

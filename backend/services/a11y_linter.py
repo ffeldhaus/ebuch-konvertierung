@@ -107,7 +107,9 @@ def lint_markdown(
         if (
             desc
             and not CAPTION_BLOCK_RE.match(desc)
-            and not re.match(r"^[^:\n]{1,40}:[ \t]*\nBeschreibung(?: mit Bildtext)?:", desc)
+            and not re.match(r"^[^:\n]{1,60}:?\s+Beschreibung(?: mit Bildtext)?\s*:", desc, re.IGNORECASE)
+            and not re.match(r"^Beschreibung(?: mit Bildtext)?\s*:", desc, re.IGNORECASE)
+            and not re.search(r"\bn\.\s*ü\.|\bnicht übertragen\b", desc, re.IGNORECASE)
         ):
             _add_issue(
                 "image_format",
@@ -191,24 +193,30 @@ def lint_markdown(
                 f"{{{ref}}}",
             )
 
-    # 4. List Formatting (Tab separator after bullet/number)
+    # 4. List Formatting (Tab separator after bullet/number, outside <Bild> blocks)
+    in_bild_list_check = False
     for idx, line in enumerate(lines):
-        if re.match(r"^[\-\*]\s+[^\t]", line) and not re.match(r"^[\-\*]\t", line):
-            _add_issue(
-                "list_delimiter",
-                "info",
-                idx + 1,
-                "Listenpunkt muss nach dem Aufzählungszeichen einen Tabulator (\\t) statt eines Leerzeichens enthalten.",
-                line.strip(),
-            )
-        elif re.match(r"^\d+[\.\)]\s+[^\t]", line) and not re.match(r"^\d+[\.\)]\t", line):
-            _add_issue(
-                "list_delimiter",
-                "info",
-                idx + 1,
-                "Nummerierte Liste muss nach der Ziffer einen Tabulator (\\t) statt eines Leerzeichens enthalten.",
-                line.strip(),
-            )
+        if re.search(r"<Bild\b", line, re.IGNORECASE):
+            in_bild_list_check = True
+        if not in_bild_list_check:
+            if re.match(r"^[\-\*]\s+[^\t]", line) and not re.match(r"^[\-\*]\t", line):
+                _add_issue(
+                    "list_delimiter",
+                    "info",
+                    idx + 1,
+                    "Listenpunkt muss nach dem Aufzählungszeichen einen Tabulator (\\t) statt eines Leerzeichens enthalten.",
+                    line.strip(),
+                )
+            elif re.match(r"^\d+[\.\)]\s+[^\t]", line) and not re.match(r"^\d+[\.\)]\t", line):
+                _add_issue(
+                    "list_delimiter",
+                    "info",
+                    idx + 1,
+                    "Nummerierte Liste muss nach der Ziffer einen Tabulator (\\t) statt eines Leerzeichens enthalten.",
+                    line.strip(),
+                )
+        if re.search(r"</Bild>", line, re.IGNORECASE):
+            in_bild_list_check = False
 
     # 5. Math Formula Tags (<L> and </L>)
     open_math = len(re.findall(r"<L\b[^>]*>", content, re.IGNORECASE))
@@ -479,8 +487,8 @@ def autofix_markdown(content: str) -> tuple[str, list[str]]:
             )
             continue
 
-        bullet_match = re.match(r"^(\s*)([\-\*])[ ]+([^\t].*)$", modified_line)
-        num_match = re.match(r"^(\s*)(\d+[\.\)])[ ]+([^\t].*)$", modified_line)
+        bullet_match = re.match(r"^(\s*)([\-\*])[ ]+([^\t].*)$", modified_line) if not in_bild_autofix else None
+        num_match = re.match(r"^(\s*)(\d+[\.\)])[ ]+([^\t].*)$", modified_line) if not in_bild_autofix else None
 
         if bullet_match:
             indent, bullet, rest = bullet_match.groups()

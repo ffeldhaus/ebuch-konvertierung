@@ -111,8 +111,9 @@ VLM_PROMPT_RULES: Final[str] = (
     "   - Verbindungen und Pfeile zwischen Kästen schreibst du als ' \\to ' (z.B. 'Begriff A \\to Begriff B \\to Begriff C').\n"
     "   - Bei Verzweigungen schreibst du jeden Ast in eine eigene Zeile, beginnend mit dem Ausgangsbegriff.\n"
     "   - Beschreibe NICHT die Lage von Linien oder Kästen (also nicht 'oben links führt eine Linie zu ...').\n"
+    "   - Bei Koordinaten-/Kurven-/Liniendiagrammen (Diagramm) gib immer 'x-Achse: <Größe mit Einheit und Wertebereich>', 'y-Achse: <Größe mit Einheit und Wertebereich>' sowie den Kurvenverlauf mit den wichtigsten Werten (z.B. Start-, Extrem-/Scheitel- und Endwerte) an.\n"
     "6. Verwende möglichst keine Aufzählung. Wenn eine Aufzählung unvermeidbar ist, steht jeder Punkt in einer eigenen Zeile und beginnt mit '-' gefolgt von einem Tabulator.\n"
-    "7. Keine Markdown-Formatierung (kein **fett**, keine Überschriften).\n\n"
+    "7. Keine Markdown-Formatierung (kein **fett**, niemals Markdown-Überschriften wie #, ##, ### innerhalb von <Bild>...</Bild>).\n\n"
 )
 
 VLM_ANSWER_FORMAT: Final[str] = (
@@ -298,7 +299,18 @@ def build_custom_rules_block(custom_rules: str) -> str:
         t"ZUSÄTZLICHE DATEISPEZIFISCHE REGELN:\n"
         t"Die folgenden Regeln gelten speziell für diese Datei. Diese dateispezifischen Regeln "
         t"haben absolute Priorität und überschreiben alle eventuellen Widersprüche zu den obigen globalen Regeln:\n"
-        t'"""\n{cleaned:strip_markers}\n"""'
+        t'"""\n{cleaned:strip_markers}\n"""\n'
+        t"STRIKTE DURCHSETZUNG DER BUCHKONFERENZ-REGELN:\n"
+        t"- Halte jede in den dateispezifischen Regeln definierte Überschriften-Hierarchie (# bis #####) strikt ein "
+        t"(wenn z.B. '##### Überschrift 5' für 'Aufgaben:' und jede Aufgabennummer festgelegt ist, gib '##### Aufgaben' "
+        t"sowie jede Aufgabennummer '##### <Nr>' jeweils auf einer eigenen Zeile aus und setze den Aufgabentext als "
+        t"separaten Absatz darunter).\n"
+        t"- Wenn für Bildunterschriften/Material-Kürzel eine Überschriftenebene oder Platzierung vor dem Bild festgelegt "
+        t"ist (z.B. '#### M1 ...' vor '<Bild>...</Bild>'), platziere die Überschrift/Bildunterschrift direkt VOR "
+        t"'<Bild>...</Bild>' und wiederhole sie NICHT noch einmal nach '</Bild>'.\n"
+        t"- Trenne vorangestellte fettgedruckte oder mit Punkt/Bullet abgetrennte Absatz-Stichwörter "
+        t"('Stichwort • Text...' bzw. '**Stichwort** • Text...') gemäß der festgelegten Überschriftenebene "
+        t"in eine eigene Überschrift und einen nachfolgenden Absatz auf (z.B. '#### Stichwort\\n\\nText...')."
     )
 
 
@@ -436,11 +448,18 @@ def _format_hunks(change_summary: dict[str, Any]) -> str:
     lines = []
     for idx, h in enumerate(change_summary["hunks"], 1):
         cats = ", ".join(CATEGORY_LABELS.get(c, c) for c in h.categories)
-        lines.append(f"[{idx}] {h.op} | Zeile {h.original_line}→{h.revised_line} | Kategorien: {cats}")
+        lines.append(
+            f"[{idx}] {h.op} | Zeile {h.original_line}→{h.revised_line} "
+            f"(-{h.removed_line_count}/+{h.added_line_count} Zeilen) | Kategorien: {cats}"
+        )
         for s in h.removed:
             lines.append(f"    - ALT: {s}")
+        if h.removed_line_count > len(h.removed):
+            lines.append(f"    - ALT: (… +{h.removed_line_count - len(h.removed)} weitere ALT-Zeilen)")
         for s in h.added:
             lines.append(f"    + NEU: {s}")
+        if h.added_line_count > len(h.added):
+            lines.append(f"    + NEU: (… +{h.added_line_count - len(h.added)} weitere NEU-Zeilen)")
     if change_summary.get("truncated"):
         lines.append(f"(… {change_summary['hunk_count'] - len(change_summary['hunks'])} weitere Änderungen ausgelassen)")
     return "\n".join(lines) if lines else "(keine Unterschiede gefunden)"
@@ -453,6 +472,7 @@ def build_analysis_prompt(
     task_meta: dict[str, Any],
     region_count: int,
     formatted_hunks: str | None = None,
+    custom_ruleset: str = "",
 ) -> str:
     """Builds the final text-only Gemma prompt for synthesizing the coding-assistant feedback report.
 
@@ -463,6 +483,7 @@ def build_analysis_prompt(
         task_meta: Metadata dictionary describing the conversion task.
         region_count: Number of marked PDF region screenshots.
         formatted_hunks: Optional pre-formatted string representation of diff hunks.
+        custom_ruleset: Optional document-specific custom ruleset (``custom_ruleset.txt``).
 
     Returns:
         Rendered prompt string for the feedback report generation.
@@ -477,7 +498,22 @@ def build_analysis_prompt(
         "\n".join(f"- {t}: {n}×" for t, n in change_summary["category_transitions"].items())
         or "- keine"
     )
+    anomalies = change_summary.get("structural_anomalies") or []
+    anomalies_lines = (
+        "\n".join(f"- {a}" for a in anomalies)
+        if anomalies
+        else "- (keine automatischen Struktur-Anomalien erkannt)"
+    )
     meta_lines = "\n".join(f"- {k}: {v}" for k, v in task_meta.items() if v not in (None, ""))
+    custom_rules_clean = (custom_ruleset or "").strip()
+    custom_rules_section = (
+        render_prompt(
+            t"\n## Dateispezifische Zusatzregeln (Buchkonferenz / custom_ruleset.txt)\n"
+            t"{custom_rules_clean:strip_markers,max_chars=4000}\n"
+        )
+        if custom_rules_clean
+        else ""
+    )
     feedback_block = (
         feedback_text.strip()
         if feedback_text and feedback_text.strip()
@@ -506,7 +542,7 @@ Deine Aufgabe: Finde heraus, WAS bei der automatischen Übertragung falsch gelau
 
 ## Auftragsdaten
 {meta_lines}
-
+{custom_rules_section}
 ## Statistik der Korrekturen (ALT = automatische Übertragung, NEU = menschliche Korrektur)
 Ähnlichkeit: {similarity:.2%}, {hunk_count:d} Änderungsblöcke, +{lines_added:d} / -{lines_removed:d} Zeilen
 Betroffene Kategorien:
@@ -515,6 +551,9 @@ Kategorie-Wechsel (ALT → NEU):
 {trans_lines}
 Barrierefreiheits-Linter: Score automatisch {score_orig} → korrigiert {score_rev}
 Durch Korrektur behobene Linter-Regeln: {fixed_json}
+
+## Automatisch erkannte Struktur-Anomalien & Mengenvergleiche
+{anomalies_lines}
 
 ## Änderungsblöcke (gekürzte Ausschnitte)
 {formatted_hunks}
@@ -527,10 +566,10 @@ Durch Korrektur behobene Linter-Regeln: {fixed_json}
 
 ## STRIKTE AUSGABEREGELN
 1. Gib KEINE längeren Textpassagen aus dem Schulbuch wieder (urheberrechtlich geschützt). Zitiere höchstens 3–8 Wörter als Beispiel, kürze mit „…“.
-2. Beschreibe stattdessen MUSTER (z. B. „Aufgabennummern werden als Fließtext statt als ### Überschrift ausgegeben“) mit kurzen Beispielen.
+2. Beschreibe stattdessen MUSTER (z. B. „Aufgabennummern werden als Fließtext statt als ### Überschrift ausgegeben“) mit kurzen Beispielen. Jede kritische Anomalie unter „## Automatisch erkannte Struktur-Anomalien & Mengenvergleiche“ MUSS als Muster im Bericht abgedeckt werden.
 3. Ordne jedes Muster einer Pipeline-Stufe zu und nenne konkrete, GENERISCHE Lösungsansätze (Heuristik auf Struktur-/Layout-Merkmalen, Prompt-Anpassung, Post-Processing-Schritt). Keine dokumentspezifischen Sonderfälle, keine Wortlisten mit Begriffen aus diesem Schulbuch, keine hartkodierten Texte.
-4. Unterscheide echte Fehler von reinen Stilkorrekturen.
-5. Nenne nur Dateien und Funktionen aus der Pipeline-Beschreibung oben. Bist du unsicher, schreibe „(zu prüfen)“ dahinter.
+4. Unterscheide echte Fehler von reinen Stilkorrekturen. WICHTIG: `ALT` ist IMMER die fehlerhafte automatische Übertragung des Konverters; `NEU` ist die menschliche Referenz-Korrektur (das Zielformat). Verwechsle NIEMALS die Richtung `ALT` → `NEU`! Im `<Bild>`-Block sind laut FIBS 09/2025 BEIDE Präfixe gültig: `Beschreibung mit Bildtext:` (wenn Text/Beschriftung im Bild vorkommt) und `Beschreibung:` (ohne Bildtext) – empfiehl NIEMALS, `Beschreibung mit Bildtext:` pauschal zu entfernen.
+5. Nenne nur Dateien und Funktionen aus der Pipeline-Beschreibung oben. Bist du unsicher, schreibe „(zu prüfen)“ dahinter. Falls dateispezifische Zusatzregeln (`custom_ruleset.txt`) angegeben sind, prüfe, ob `ALT` diese verletzt hat, und stelle KEINE offenen Fragen zu Punkten, die bereits in den Zusatzregeln beantwortet sind.
 6. Lesbarkeit: kurze Sätze; alle Felder eines Musters als Aufzählung `- **Feld:** …`; keine LaTeX-Notation im Fließtext (Pfeile immer als → schreiben); E-Buch-Syntax und Code in Backticks. Verweise NICHT auf Blocknummern wie [6] – der Leser sieht die Änderungsblöcke nicht; nenne stattdessen die ungefähre Anzahl.
 7. Testdaten: Beschreibe für jedes Muster, welche Testdaten ein Coding Assistant braucht, um Fix und Regression abzusichern:
    - Art: Unit-Test-Snippet (kurzes synthetisches Markdown ALT → erwartet), PDF-Seite für E2E-/Benchmark-Tests oder Golden-Ground-Truth-Referenz.

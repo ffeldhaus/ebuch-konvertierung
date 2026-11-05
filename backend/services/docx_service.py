@@ -542,29 +542,114 @@ def _docx_list_level(paragraph: Any, style_name: str) -> int:
     Returns:
         Nesting level (``>= 1``) for list paragraphs, or ``0`` for non-list paragraphs.
     """
-    is_list_style = (
-        bool(re.match(r"^(?:list|liste|listenpunkt|aufzählungszeichen)\b", style_name))
-        and "continue" not in style_name
-        and "fortsetzung" not in style_name
-    )
-    m = re.search(r"\b([2-9])\s*$", style_name)
-    if is_list_style and m:
-        return int(m.group(1))
+    if "continue" in style_name or "fortsetzung" in style_name:
+        return 0
 
     text = paragraph.text.strip()
-    if not (is_list_style or fc.DOCX_LIST_MARKER_RE.match(text)):
+    has_marker = bool(fc.DOCX_LIST_MARKER_RE.match(text))
+    p_pr = getattr(paragraph._p, "pPr", None)
+    has_numpr = bool(p_pr is not None and getattr(p_pr, "numPr", None) is not None)
+    is_auto_bullet_style = bool(
+        re.match(r"^(?:list\s+(?:bullet|number)|listenpunkt|aufzählungszeichen)\b", style_name)
+    )
+    is_generic_list_style = bool(re.match(r"^(?:list|liste)\b", style_name))
+
+    if not (is_auto_bullet_style or has_marker or (is_generic_list_style and has_numpr)):
         return 0
+
+    m = re.search(r"\b([2-9])\s*$", style_name)
+    if (is_auto_bullet_style or is_generic_list_style) and m:
+        return int(m.group(1))
+
     indent = paragraph.paragraph_format.left_indent
     if indent is not None and indent.cm >= 1.5:
         return max(1, int(round(indent.cm)))
     return 1
 
 
+def _extract_paragraph_markdown(paragraph: Any, is_heading: bool) -> str:
+    """Extract paragraph text while preserving run-level bold (``*...*``) and italic (``_..._``).
+
+    Skips run-level wrapping inside headings, FIBS XML-like structural tags, or runs
+    that already carry explicit FIBS emphasis delimiters written by ``add_formatted_text``.
+
+    Args:
+        paragraph: ``python-docx`` Paragraph object.
+        is_heading: Whether the paragraph uses a heading style.
+
+    Returns:
+        Extracted Markdown string for the paragraph.
+    """
+    raw_text = paragraph.text.strip()
+    if not raw_text:
+        return ""
+    if is_heading or raw_text.startswith(
+        ("<Bild", "</Bild", "<Rahmen", "</Rahmen", "<Anmerkung", "</Anmerkung", "<Lückentext", "</Lückentext", "<Tabelle", "</Tabelle")
+    ):
+        return raw_text
+    runs = getattr(paragraph, "runs", None) or []
+    if not runs or not any(r.bold is True or r.italic is True for r in runs):
+        return raw_text
+    if "".join(r.text for r in runs).strip() != raw_text:
+        return raw_text
+
+    merged: list[tuple[str, bool, bool]] = []
+    for r in runs:
+        if not r.text:
+            continue
+        b = r.bold is True
+        it = r.italic is True and not b
+        if merged and merged[-1][1] == b and merged[-1][2] == it:
+            merged[-1] = (merged[-1][0] + r.text, b, it)
+        else:
+            merged.append((r.text, b, it))
+
+    out_parts: list[str] = []
+    seen_non_ws = False
+    for seg_text, is_bold, is_italic in merged:
+        if not (is_bold or is_italic) or not seg_text.strip():
+            if seg_text.strip():
+                seen_non_ws = True
+            out_parts.append(seg_text)
+            continue
+
+        formatted_lines: list[str] = []
+        for ln_idx, ln in enumerate(seg_text.split("\n")):
+            m_ws = re.match(r"^(\s*)(.*?)(\s*)$", ln, re.DOTALL)
+            if not m_ws or not m_ws.group(2):
+                formatted_lines.append(ln)
+                continue
+            lead, core, trail = m_ws.groups()
+            list_prefix = ""
+            if not seen_non_ws and ln_idx == 0:
+                m_marker = re.match(
+                    r"^(?:[-*+•]|\d+[.)]|[a-zA-Z][.)]|\[[ xX]?\])(?:\t+|\s+)",
+                    core,
+                )
+                if m_marker:
+                    list_prefix = m_marker.group(0)
+                    core = core[len(list_prefix) :]
+            seen_non_ws = True
+            if core:
+                already_wrapped = (
+                    (core.startswith("*") and core.endswith("*"))
+                    or (core.startswith("_") and core.endswith("_"))
+                    or (core.startswith("%") and core.endswith("%"))
+                )
+                if not already_wrapped:
+                    core = f"*{core}*" if is_bold else f"_{core}_"
+            formatted_lines.append(f"{lead}{list_prefix}{core}{trail}")
+        out_parts.append("\n".join(formatted_lines))
+
+    return "".join(out_parts).strip()
+
+
 def extract_markdown_from_docx(docx_source: str) -> str:
     r"""Parse a Microsoft Word DOCX file and extract standard E-Buch Markdown text.
 
     Preserves heading hierarchies (``#`` … ``######``), list tabulations (``-\\t...``)
-    including nesting (two spaces per extra level), tables, and bookmark page boundaries.
+    including nesting (two spaces per extra level), run-level bold/italic emphasis,
+    tables, and bookmark page boundaries.
 
     Args:
         docx_source: Filesystem path to the ``.docx`` file.
@@ -579,7 +664,8 @@ def extract_markdown_from_docx(docx_source: str) -> str:
         raise FileNotFoundError(f"DOCX file not found: {docx_source}")
 
     doc = Document(docx_source)
-    extracted_elements = []
+    extracted_elements: list[str] = []
+    open_bild_lines: list[str] = []
 
     from docx.table import Table
     from docx.text.paragraph import Paragraph
@@ -587,12 +673,26 @@ def extract_markdown_from_docx(docx_source: str) -> str:
     for element in doc.element.body:
         if element.tag.endswith("p"):
             p = Paragraph(element, doc)
-            text = p.text.strip()
-            if not text:
+            raw_stripped = p.text.strip()
+            if not raw_stripped:
+                continue
+
+            if open_bild_lines:
+                open_bild_lines.append(raw_stripped)
+                if re.search(r"</Bild>\s*$", raw_stripped, re.IGNORECASE):
+                    extracted_elements.append("\n".join(open_bild_lines))
+                    open_bild_lines = []
+                continue
+
+            if re.match(r"^<Bild\b", raw_stripped, re.IGNORECASE) and not re.search(
+                r"</Bild>\s*$", raw_stripped, re.IGNORECASE
+            ):
+                open_bild_lines = [raw_stripped]
                 continue
 
             style_name = (p.style.name if p.style else "").lower()
             heading_level = _docx_heading_level(style_name)
+            text = _extract_paragraph_markdown(p, is_heading=bool(heading_level))
 
             if heading_level:
                 text = f"{'#' * heading_level} {text}" if not text.startswith("#") else text
@@ -601,13 +701,16 @@ def extract_markdown_from_docx(docx_source: str) -> str:
             else:
                 level = _docx_list_level(p, style_name)
                 if level:
-                    if not fc.DOCX_LIST_MARKER_RE.match(text) and not text.startswith("\\to"):
+                    if not fc.DOCX_LIST_MARKER_RE.match(raw_stripped) and not raw_stripped.startswith("\\to"):
                         text = f"-\t{text}"
                     text = "  " * (level - 1) + text
 
             extracted_elements.append(text)
 
         elif element.tag.endswith("tbl"):
+            if open_bild_lines:
+                extracted_elements.append("\n".join(open_bild_lines))
+                open_bild_lines = []
             table = Table(element, doc)
             table_rows = []
             for row in table.rows:
@@ -619,6 +722,9 @@ def extract_markdown_from_docx(docx_source: str) -> str:
                 sep_row = "| " + " | ".join(["---"] * header_cols) + " |"
                 md_table = [table_rows[0], sep_row] + table_rows[1:]
                 extracted_elements.append("\n".join(md_table))
+
+    if open_bild_lines:
+        extracted_elements.append("\n".join(open_bild_lines))
 
     result_md = "\n\n".join(extracted_elements)
     logger.info("Extracted %d blocks from DOCX: %s", len(extracted_elements), docx_source)

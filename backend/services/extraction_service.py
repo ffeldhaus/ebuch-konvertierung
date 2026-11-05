@@ -566,6 +566,17 @@ def insert_page_numbers_from_metadata(
     Also leverages detected directory information (TOC, figures, tables, pictures)
     to ensure accurate printed page numbers.
     """
+    if markdown_content:
+        try:
+            from backend.services.fibs_postprocess import (
+                deduplicate_page_numbers,
+                normalize_heading_page_markers,
+            )
+
+            markdown_content = deduplicate_page_numbers(normalize_heading_page_markers(markdown_content))
+        except Exception:
+            pass
+
     try:
         with open(json_path, encoding="utf-8") as f:
             blocks = json.load(f)
@@ -905,12 +916,30 @@ def insert_page_numbers_from_metadata(
                 offset += len(marker)
                 inserted_pages.add(phys_num)
 
+    try:
+        from backend.services.fibs_postprocess import deduplicate_page_numbers
+        modified_markdown = deduplicate_page_numbers(modified_markdown)
+    except Exception as ex:
+        logger.warning(f"Error deduplicating page numbers: {ex}")
+
     if directory_info and directory_info.get("has_any_directory"):
         try:
             from backend.services.directory_service import apply_directory_page_numbers
-            modified_markdown = apply_directory_page_numbers(modified_markdown, directory_info)
+            modified_markdown = apply_directory_page_numbers(
+                modified_markdown,
+                directory_info,
+                max_pages=len(sorted_pages),
+            )
         except Exception as ex:
             logger.warning(f"Error applying directory page numbers: {ex}")
+
+    if sorted_pages and all(str(p).isdigit() for p in sorted_pages):
+        max_sorted_pg = max(int(p) for p in sorted_pages)
+        modified_markdown = re.sub(
+            r"(?m)^([ \t]*)\(\((\d+)\)\)([ \t]*)$",
+            lambda m: f"{m.group(1)}(({min(int(m.group(2)), max_sorted_pg)})){m.group(3)}",
+            modified_markdown,
+        )
 
     try:
         from backend.services.fibs_postprocess import deduplicate_page_numbers

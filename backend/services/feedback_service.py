@@ -142,18 +142,255 @@ def _shorten(text: str, max_chars: int) -> str:
     return clean[:max_chars].rstrip() + "…"
 
 
+def _select_representative_hunks(all_hunks: list[DiffHunk], max_hunks: int) -> list[DiffHunk]:
+    """Select a stratified, representative subset of diff hunks in document order.
+
+    Combines:
+      1. Largest anomalous hunks by line delta (``removed_line_count + added_line_count``),
+      2. At least one hunk per distinct category,
+      3. Evenly spaced hunks across the entire document from start to end.
+
+    Args:
+        all_hunks: Complete list of non-empty ``DiffHunk`` instances in document order.
+        max_hunks: Maximum number of hunks to return.
+
+    Returns:
+        Subset of at most ``max_hunks`` hunks sorted by ascending ``original_line``.
+    """
+    if max_hunks <= 0:
+        return []
+    if len(all_hunks) <= max_hunks:
+        return all_hunks
+
+    selected: set[int] = set()
+    top_k = min(15, max(1, max_hunks // 3))
+    by_size = sorted(
+        range(len(all_hunks)),
+        key=lambda idx: (-(all_hunks[idx].removed_line_count + all_hunks[idx].added_line_count), idx),
+    )
+    for idx in by_size[:top_k]:
+        selected.add(idx)
+
+    seen_cats: set[str] = {c for idx in selected for c in all_hunks[idx].categories}
+    for idx in by_size:
+        if len(selected) >= max_hunks:
+            break
+        new_cats = set(all_hunks[idx].categories) - seen_cats
+        if new_cats:
+            selected.add(idx)
+            seen_cats.update(new_cats)
+
+    remaining = [idx for idx in range(len(all_hunks)) if idx not in selected]
+    needed = max_hunks - len(selected)
+    if needed > 0 and remaining:
+        if needed >= len(remaining):
+            selected.update(remaining)
+        elif needed == 1:
+            selected.add(remaining[len(remaining) // 2])
+        else:
+            for step in range(needed):
+                pos = int(round(step * (len(remaining) - 1) / (needed - 1)))
+                selected.add(remaining[pos])
+            if len(selected) < max_hunks:
+                for idx in remaining:
+                    if idx not in selected:
+                        selected.add(idx)
+                        if len(selected) >= max_hunks:
+                            break
+
+    return [all_hunks[idx] for idx in sorted(selected)[:max_hunks]]
+
+
+def _compute_structural_anomalies(original: str, revised: str) -> tuple[list[str], dict[str, Any]]:
+    """Compute full-document structural anomalies and element count deltas between transfers.
+
+    Audits page markers (including heading-merged ``#### ((n))``, duplicates, and out-of-range
+    pages), degenerate OCR/VLM repetition loops, heading hierarchy distributions, bullet
+    subheadings, table resolutions, ``<Bild>`` blocks (including ``n. ü.``), and LaTeX math.
+
+    Args:
+        original: Automatic E-Buch transfer Markdown (``ALT``).
+        revised: Human reference transfer Markdown (``NEU``).
+
+    Returns:
+        Tuple ``(structural_anomalies, page_summary)``.
+    """
+    anomalies: list[str] = []
+
+    heading_merged_pages = [
+        m.group(1).strip()
+        for m in re.finditer(r"(?m)^[ \t]*#{1,6}[ \t]+\(\(([^)\n]+)\)\)", original)
+    ]
+    if heading_merged_pages:
+        anomalies.append(
+            f"Seitenmarker als Überschrift formatiert in ALT ({len(heading_merged_pages)}×, "
+            f"z. B. `#### (({heading_merged_pages[0]}))`): Seitenmarker müssen freistehend als `((n))` ohne `#` stehen."
+        )
+
+    orig_pages = [m.strip() for m in re.findall(r"\(\(\s*(\d+|[IVXLCDMivxlcdm]+)\s*\)\)", original)]
+    rev_pages = [m.strip() for m in re.findall(r"\(\(\s*(\d+|[IVXLCDMivxlcdm]+)\s*\)\)", revised)]
+    orig_pg_counts = Counter(orig_pages)
+    rev_pg_counts = Counter(rev_pages)
+
+    dup_pages = [
+        f"`(({p}))` ({c}×)"
+        for p, c in orig_pg_counts.items()
+        if c > max(1, rev_pg_counts.get(p, 0))
+    ]
+    if dup_pages:
+        anomalies.append(f"Doppelte Seitenmarker in ALT: {', '.join(dup_pages[:8])}.")
+
+    rev_pg_set = {p.lower() for p in rev_pages}
+    orig_pg_set = {p.lower() for p in orig_pages}
+    extra_pages = list(dict.fromkeys(p for p in orig_pages if p.lower() not in rev_pg_set))
+    if extra_pages and rev_pages:
+        anomalies.append(
+            f"Überzählige Seitenmarker in ALT außerhalb des Zielbereichs von NEU: "
+            f"{', '.join(f'`(({p}))`' for p in extra_pages[:8])} "
+            f"(NEU umfasst `(({rev_pages[0]}))` bis `(({rev_pages[-1]}))`)."
+        )
+    missing_pages = list(dict.fromkeys(p for p in rev_pages if p.lower() not in orig_pg_set))
+    if missing_pages:
+        anomalies.append(
+            f"Fehlende Seitenmarker in ALT (in NEU vorhanden): "
+            f"{', '.join(f'`(({p}))`' for p in missing_pages[:8])}."
+        )
+
+    # Degenerate repetition loop audit (>= 15 consecutive short/repetitive non-empty lines in ALT)
+    current_page = "?"
+    run_items: list[tuple[int, str, str]] = []
+    loops_found: list[tuple[int, int, int, str, str]] = []
+
+    def _flush_run(items: list[tuple[int, str, str]]) -> None:
+        if len(items) >= 15:
+            sample = ", ".join(f"`{x[1]}`" for x in items[:3])
+            loops_found.append((len(items), items[0][0], items[-1][0], items[0][2], sample))
+
+    for ln_no, raw_ln in enumerate(original.splitlines(), 1):
+        stripped = raw_ln.strip()
+        if not stripped:
+            continue
+        m_pg = re.search(r"\(\(\s*(\d+|[IVXLCDMivxlcdm]+)\s*\)\)", stripped)
+        if m_pg:
+            current_page = m_pg.group(1)
+        is_short_candidate = bool(re.match(r"^#{1,6}\s+\S{1,15}$", stripped)) or (
+            len(stripped) <= 12
+            and not re.match(r"^\(\([^)]+\)\)$", stripped)
+            and not re.match(
+                r"^</?(?:Bild|Tabelle|Rahmen|Anmerkung|Lückentext)\b",
+                stripped,
+                re.IGNORECASE,
+            )
+        )
+        if is_short_candidate:
+            run_items.append((ln_no, stripped, current_page))
+        else:
+            _flush_run(run_items)
+            run_items = []
+    _flush_run(run_items)
+
+    for count, start_ln, end_ln, pg, sample in loops_found:
+        anomalies.append(
+            f"Degenerierte Wiederholungsschleife (OCR/VLM-Halluzination) in ALT: "
+            f"{count} aufeinanderfolgende Kurzzeilen/Überschriften in Zeilen {start_ln}–{end_ln} "
+            f"(ab Seite `(({pg}))`, z. B. {sample}), die in NEU nicht existieren."
+        )
+
+    orig_h = {
+        f"H{lvl}": len(re.findall(rf"(?m)^[ \t]*#{{{lvl}}}[ \t]+\S", original))
+        for lvl in range(1, 7)
+    }
+    rev_h = {
+        f"H{lvl}": len(re.findall(rf"(?m)^[ \t]*#{{{lvl}}}[ \t]+\S", revised))
+        for lvl in range(1, 7)
+    }
+    if orig_h != rev_h:
+        orig_h_str = ", ".join(f"{k}={v}" for k, v in orig_h.items() if v) or "keine"
+        rev_h_str = ", ".join(f"{k}={v}" for k, v in rev_h.items() if v) or "keine"
+        anomalies.append(
+            f"Überschriften-Hierarchie (ALT vs. NEU): ALT ({orig_h_str}) vs. NEU ({rev_h_str})."
+        )
+
+    orig_bullets = len(re.findall(r"(?m)^[ \t]*•[ \t]+", original))
+    rev_bullets = len(re.findall(r"(?m)^[ \t]*•[ \t]+", revised))
+    if orig_bullets != rev_bullets and (orig_bullets >= 2 or rev_bullets >= 2):
+        anomalies.append(
+            f"Spitzmarken/Aufzählungen mit `•` (ALT vs. NEU): ALT hat {orig_bullets} Zeilen mit `•`, "
+            f"NEU hat {rev_bullets} (in NEU als Überschriften `####`/`#####` oder `-\\t`-Listen formatiert)."
+        )
+
+    orig_tabs = len(re.findall(r"<Tabelle\b", original, re.IGNORECASE))
+    rev_tabs = len(re.findall(r"<Tabelle\b", revised, re.IGNORECASE))
+    orig_res_tabs = len(re.findall(r"Tabelle wurde aufgelöst", original, re.IGNORECASE))
+    rev_res_tabs = len(re.findall(r"Tabelle wurde aufgelöst", revised, re.IGNORECASE))
+    if (orig_tabs, orig_res_tabs) != (rev_tabs, rev_res_tabs):
+        anomalies.append(
+            f"Tabellen-Bilanz (ALT vs. NEU): ALT hat {orig_tabs} `<Tabelle>`-Blöcke und "
+            f"{orig_res_tabs} aufgelöste Tabellen; NEU hat {rev_tabs} `<Tabelle>`-Blöcke und "
+            f"{rev_res_tabs} aufgelöste Tabellen."
+        )
+
+    orig_bild_blocks = re.findall(r"<Bild\b[^>]*>(.*?)</Bild>", original, re.DOTALL | re.IGNORECASE)
+    rev_bild_blocks = re.findall(r"<Bild\b[^>]*>(.*?)</Bild>", revised, re.DOTALL | re.IGNORECASE)
+    orig_nue = sum(
+        1 for b in orig_bild_blocks if re.search(r"\bn\.\s*ü\.|\bnicht übertragen\b", b, re.IGNORECASE)
+    )
+    rev_nue = sum(
+        1 for b in rev_bild_blocks if re.search(r"\bn\.\s*ü\.|\bnicht übertragen\b", b, re.IGNORECASE)
+    )
+    if (len(orig_bild_blocks), orig_nue) != (len(rev_bild_blocks), rev_nue):
+        anomalies.append(
+            f"Bildblöcke `<Bild>` (ALT vs. NEU): ALT hat {len(orig_bild_blocks)} `<Bild>`-Blöcke "
+            f"(davon {orig_nue}× `n. ü.`); NEU hat {len(rev_bild_blocks)} `<Bild>`-Blöcke "
+            f"(davon {rev_nue}× `n. ü.`)."
+        )
+
+    orig_latex = len(re.findall(r"\$+[^$\n]+\$+", original))
+    rev_latex = len(re.findall(r"\$+[^$\n]+\$+", revised))
+    if orig_latex != rev_latex and abs(orig_latex - rev_latex) >= 2:
+        anomalies.append(
+            f"Formel-Notation (ALT vs. NEU): ALT nutzt {orig_latex}× LaTeX `$...$`, "
+            f"NEU nutzt {rev_latex}× LaTeX `$...$` (NEU bevorzugt direkte FIBS-Inline-Schreibweise "
+            f"wie `^`, `_`, `\\to`, `\\xra` ohne `$`)."
+        )
+
+    page_summary: dict[str, Any] = {
+        "pages_original": orig_pages,
+        "pages_revised": rev_pages,
+        "heading_merged_pages_original": heading_merged_pages,
+        "extra_pages_original": extra_pages,
+        "missing_pages_original": missing_pages,
+        "headings_original": {k: v for k, v in orig_h.items() if v},
+        "headings_revised": {k: v for k, v in rev_h.items() if v},
+        "tables_original": orig_tabs,
+        "tables_revised": rev_tabs,
+        "resolved_tables_original": orig_res_tabs,
+        "resolved_tables_revised": rev_res_tabs,
+        "images_original": len(orig_bild_blocks),
+        "images_revised": len(rev_bild_blocks),
+        "images_nue_original": orig_nue,
+        "images_nue_revised": rev_nue,
+        "latex_blocks_original": orig_latex,
+        "latex_blocks_revised": rev_latex,
+    }
+    return anomalies, page_summary
+
+
 def compute_change_summary(
     original: str,
     revised: str,
-    max_hunks: int = 40,
-    snippet_chars: int = 80,
-    max_lines_per_side: int = 3,
+    max_hunks: int = 60,
+    snippet_chars: int = 100,
+    max_lines_per_side: int = 4,
 ) -> dict[str, Any]:
     """Compute a line-based diff summary between original and revised transfers.
 
     Only very short snippets (``snippet_chars``) and at most ``max_lines_per_side``
     lines per hunk side are retained so that the result can be sent to the LLM
     and shown in the report without reproducing protected textbook passages.
+    When more than ``max_hunks`` hunks exist, a stratified representative sample
+    covering the largest line-delta anomalies, all categories, and the full
+    document span is selected.
 
     Args:
         original: Automatic E-Buch transfer Markdown.
@@ -163,13 +400,14 @@ def compute_change_summary(
         max_lines_per_side: Maximum lines per hunk side.
 
     Returns:
-        Dictionary with similarity ratio, hunk counts, categorized hunks, and line deltas.
+        Dictionary with similarity ratio, hunk counts, categorized hunks, line deltas,
+        ``structural_anomalies``, and ``page_summary``.
     """
     orig_lines = original.splitlines()
     rev_lines = revised.splitlines()
     matcher = difflib.SequenceMatcher(None, orig_lines, rev_lines, autojunk=False)
 
-    hunks: list[DiffHunk] = []
+    all_hunks: list[DiffHunk] = []
     category_counts: Counter[str] = Counter()
     transitions: Counter[str] = Counter()
     lines_added = lines_removed = 0
@@ -195,19 +433,21 @@ def compute_change_summary(
         if cats_removed and cats_added and cats_removed != cats_added:
             transitions[f"{'+'.join(cats_removed)} → {'+'.join(cats_added)}"] += 1
 
-        if len(hunks) < max_hunks:
-            hunks.append(
-                DiffHunk(
-                    op=tag,
-                    original_line=i1 + 1,
-                    revised_line=j1 + 1,
-                    removed=[_shorten(ln, snippet_chars) for ln in removed[:max_lines_per_side] if ln.strip()],
-                    added=[_shorten(ln, snippet_chars) for ln in added[:max_lines_per_side] if ln.strip()],
-                    removed_line_count=len(removed),
-                    added_line_count=len(added),
-                    categories=categories,
-                )
+        all_hunks.append(
+            DiffHunk(
+                op=tag,
+                original_line=i1 + 1,
+                revised_line=j1 + 1,
+                removed=[_shorten(ln, snippet_chars) for ln in removed[:max_lines_per_side] if ln.strip()],
+                added=[_shorten(ln, snippet_chars) for ln in added[:max_lines_per_side] if ln.strip()],
+                removed_line_count=len(removed),
+                added_line_count=len(added),
+                categories=categories,
             )
+        )
+
+    hunks = _select_representative_hunks(all_hunks, max_hunks)
+    structural_anomalies, page_summary = _compute_structural_anomalies(original, revised)
 
     return {
         "similarity": round(matcher.ratio(), 4),
@@ -220,6 +460,8 @@ def compute_change_summary(
         "category_transitions": dict(transitions.most_common(15)),
         "original_line_count": len(orig_lines),
         "revised_line_count": len(rev_lines),
+        "structural_anomalies": structural_anomalies,
+        "page_summary": page_summary,
     }
 
 
@@ -366,6 +608,11 @@ def build_statistics_appendix(
             "(`rule_based_fallback`, ohne Gemma-Standardisierung). Viele Abweichungen sind darauf zurückzuführen, "
             "dass der LLM-Server während der Übertragung nicht verfügbar war.\n"
         )
+    anomalies = change_summary.get("structural_anomalies") or []
+    anomalies_block = ""
+    if anomalies:
+        bullet_lines = "\n".join(f"- {a}" for a in anomalies)
+        anomalies_block = f"\n### Automatisch erkannte Struktur-Anomalien & Mengenvergleiche\n{bullet_lines}\n"
     return f"""
 ---
 
@@ -383,7 +630,7 @@ def build_statistics_appendix(
 | Linter-Score Original → Korrektur | {lint_comparison['score_original']} → {lint_comparison['score_revised']} |
 | Durch Korrektur behobene Linter-Regeln | {fixed} |
 | In Korrektur neu auftretende Linter-Regeln | {introduced} |
-
+{anomalies_block}
 | Kategorie | Änderungen |
 | :--- | :--- |
 {rows}

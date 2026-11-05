@@ -1,8 +1,10 @@
+"""Unit tests for mathematical and chemical formula standardisation."""
+
 from backend.services.formula_service import standardize_formulas, strip_l_tags
 
 
 def test_standardize_raw_dollar_delimiters():
-    # Formulas are cleaned and kept as standard LaTeX without <L>
+    """Verifies that inline and display dollar delimiters are preserved without <L> tags."""
     raw = "Hier ist eine Formel: $a^2 + b^2 = c^2$ und noch eine:\n$$\\frac{1}{2} \\cdot g \\cdot t^2$$"
     standardised = standardize_formulas(raw)
     assert "$a^2 + b^2 = c^2$" in standardised
@@ -11,6 +13,7 @@ def test_standardize_raw_dollar_delimiters():
 
 
 def test_strip_l_tags():
+    """Verifies stripping of legacy <L> tags."""
     raw = r"<L> c = 299.792 \, \text{km/s} </L> und <L> n </L>"
     stripped = strip_l_tags(raw)
     assert "<L>" not in stripped and "</L>" not in stripped
@@ -18,6 +21,7 @@ def test_strip_l_tags():
 
 
 def test_standardize_fractions_and_roots():
+    r"""Verifies normalization of \dfrac to \frac and preservation of roots."""
     raw = r"<L>\dfrac{a + b}{c - d}</L> und <L>\sqrt[3]{x^3 + y^3}</L>"
     standardised = standardize_formulas(raw)
     assert "<L>" not in standardised and "</L>" not in standardised
@@ -27,6 +31,7 @@ def test_standardize_fractions_and_roots():
 
 
 def test_standardize_chemistry():
+    """Verifies preservation of chemical reaction equations inside LaTeX math."""
     raw = r"Bei der Verbrennung: $2 \text{H}_2 + \text{O}_2 \rightarrow 2 \text{H}_2\text{O}$ entsteht Wasser."
     standardised = standardize_formulas(raw)
     assert "<L>" not in standardised
@@ -34,6 +39,7 @@ def test_standardize_chemistry():
 
 
 def test_standardize_aligned_environments():
+    """Verifies stripping of aligned environments into flat equation lines."""
     raw = """<L>\\begin{aligned}
 2x + 3y &= 7 \\\\
 4x - y &= 5
@@ -47,6 +53,7 @@ def test_standardize_aligned_environments():
 
 
 def test_generic_si_units_and_multiletter_subscripts():
+    r"""Verifies SI unit wrapping and multi-letter subscript \text{...} conversion."""
     raw = (
         "Die Phasengeschwindigkeit beträgt $v = 1.450$ m/s bzw. $2.9979 \\times 10^8$ m/s.\n"
         "Der Index $n_{Wasser}$ und die Energie $E_{Photon} = h \\cdot f$ werden bestimmt."
@@ -59,6 +66,7 @@ def test_generic_si_units_and_multiletter_subscripts():
 
 
 def test_generic_unicode_equations_and_limits():
+    """Verifies Unicode math equation and integral conversion to LaTeX."""
     from backend.services.formula_service import convert_pdf_formula_bbox_text_to_latex
 
     raw = (
@@ -76,7 +84,9 @@ def test_generic_unicode_equations_and_limits():
 
 
 def test_no_hardcoded_test_document_phrases_in_formula_service():
+    """Verifies that formula_service.py contains no hardcoded test-document phrases."""
     import inspect
+
     import backend.services.formula_service as fs
 
     src = inspect.getsource(fs)
@@ -99,6 +109,7 @@ def test_no_hardcoded_test_document_phrases_in_formula_service():
 
 
 def test_coalesce_split_equations_reactions_and_html_entities():
+    """Verifies coalescing of split math fragments, HTML entities, and empirical formulas."""
     raw = (
         "Schwellenwerte (d &lt; 15 cm, d &lt; 25 cm) und ($d_{\\text{rechts}}$ &gt; $d_{\\text{links}}$).\n"
         "Geradeaus fahren (v = 50 %) und 90° drehen bei (80 °C).\n"
@@ -123,6 +134,17 @@ def test_coalesce_split_equations_reactions_and_html_entities():
     assert "$f_G = \\frac{W_A}{h}$" in res
     assert "$p = \\frac{E}{c} = \\frac{h}{\\lambda}$" in res
     assert "$C_{0.142}H_{0.284}$" in res
+
+
+def test_strip_hallucinated_ocr_pseudo_formulas():
+    """Verifies 5a: hallucinated OCR pseudo-formulas with invalid uppercase/subscript mixes are stripped."""
+    raw = "Im Diagramm steht $CCN_1C_2C$ sowie $XYZ_1A_2$ neben der Formel $H_2SO_4$ und $CH_3COOH$."
+    res = standardize_formulas(raw)
+    assert "CCN_1C_2C" not in res
+    assert "XYZ_1A_2" not in res
+    assert "$H_2SO_4$" in res
+    assert "$CH_3COOH$" in res
+
 
 
 

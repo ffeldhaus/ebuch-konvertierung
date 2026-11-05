@@ -431,6 +431,7 @@ def infer_heading_hierarchy(
     markdown_content: str,
     raw_markdown: str | None = None,
     directory_info: dict[str, Any] | None = None,
+    custom_rules: str | None = None,
 ) -> str:
     """Infers and restores hierarchical Markdown heading levels (``#`` to ``####``).
 
@@ -442,6 +443,7 @@ def infer_heading_hierarchy(
         markdown_content: Standardised or partially processed Markdown text.
         raw_markdown: Optional Stage 1 raw extracted Markdown for heading recovery.
         directory_info: Optional detected TOC/directory metadata dictionary.
+        custom_rules: Optional book-specific rules string.
 
     Returns:
         Markdown string with normalized heading levels.
@@ -451,7 +453,13 @@ def infer_heading_hierarchy(
 
     raw_heading_map: dict[str, int] = {}
     if raw_markdown:
-        for m in re.finditer(r"^(#{1,6})\s+(.+)$", raw_markdown, re.MULTILINE):
+        raw_outside_blocks = re.sub(
+            r"<(?:Bild|Tabelle)\b[^>]*>[\s\S]*?</(?:Bild|Tabelle)>",
+            "",
+            raw_markdown,
+            flags=re.IGNORECASE,
+        )
+        for m in re.finditer(r"^(#{1,6})\s+(.+)$", raw_outside_blocks, re.MULTILINE):
             lvl = len(m.group(1))
             clean_t = re.sub(r"[\*_#]+", "", m.group(2)).strip()
             if len(clean_t) >= 3:
@@ -459,8 +467,32 @@ def infer_heading_hierarchy(
 
     lines = markdown_content.split("\n")
     processed_lines: list[str] = []
+    in_bild = False
+    in_tabelle = False
     for line in lines:
         stripped = line.strip()
+        if in_bild:
+            if re.search(r"</Bild>", stripped, re.IGNORECASE):
+                in_bild = False
+            processed_lines.append(re.sub(r"^(\s*)#{1,6}\s+", r"\1", line))
+            continue
+        if re.match(r"^<Bild\b", stripped, re.IGNORECASE):
+            if not re.search(r"</Bild>", stripped, re.IGNORECASE):
+                in_bild = True
+            processed_lines.append(line)
+            continue
+
+        if in_tabelle:
+            if re.search(r"</Tabelle>", stripped, re.IGNORECASE):
+                in_tabelle = False
+            processed_lines.append(line)
+            continue
+        if re.match(r"^<Tabelle\b", stripped, re.IGNORECASE):
+            if not re.search(r"</Tabelle>", stripped, re.IGNORECASE):
+                in_tabelle = True
+            processed_lines.append(line)
+            continue
+
         if not stripped:
             processed_lines.append(line)
             continue
@@ -535,7 +567,25 @@ def infer_heading_hierarchy(
                 continue
 
             if re.match(r"^\d+\.\s+", title_text):
-                processed_lines.append(f"# {title_text}")
+                if (
+                    not custom_rules
+                    and len(current_hashes) <= 2
+                    and len(title_text.split()) <= 8
+                    and not title_text.endswith(".")
+                ):
+                    processed_lines.append(f"# {title_text}")
+                elif custom_rules and len(current_hashes) == 1:
+                    processed_lines.append(f"#### {title_text}")
+                else:
+                    processed_lines.append(f"{current_hashes} {title_text}")
+                continue
+
+            if len(current_hashes) == 1 and re.match(
+                r"^\d+\s+(?!Kapitel\b|Chapter\b|Teil\b|Part\b|Band\b|Lektion\b)\S",
+                title_text,
+                re.IGNORECASE,
+            ):
+                processed_lines.append(f"#### {title_text}")
                 continue
 
             if re.match(r"^(?:Kapitel|Chapter|Teil|Part)\b", title_text, re.IGNORECASE):
@@ -561,23 +611,29 @@ def infer_heading_hierarchy(
     heading_indices = [
         idx for idx, ln in enumerate(processed_lines) if re.match(r"^#{1,6}\s+", ln.strip())
     ]
-    for k in range(len(heading_indices) - 1):
-        i1 = heading_indices[k]
-        i2 = heading_indices[k + 1]
-        between = [
-            processed_lines[b].strip()
-            for b in range(i1 + 1, i2)
-            if processed_lines[b].strip()
-            and not re.match(
-                r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?$",
-                processed_lines[b].strip(),
-            )
-        ]
-        if not between:
-            h1_match = re.match(r"^(#+)\s+(.*)$", processed_lines[i1].strip())
-            h2_match = re.match(r"^(#+)\s+(.*)$", processed_lines[i2].strip())
-            if h1_match and h2_match and len(h1_match.group(1)) == 2 and len(h2_match.group(1)) == 2:
-                processed_lines[i1] = f"# {h1_match.group(2)}"
+    if not custom_rules:
+        for k in range(len(heading_indices) - 1):
+            i1 = heading_indices[k]
+            i2 = heading_indices[k + 1]
+            between = [
+                processed_lines[b].strip()
+                for b in range(i1 + 1, i2)
+                if processed_lines[b].strip()
+                and not re.match(
+                    r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?$",
+                    processed_lines[b].strip(),
+                )
+            ]
+            if not between:
+                h1_match = re.match(r"^(#+)\s+(.*)$", processed_lines[i1].strip())
+                h2_match = re.match(r"^(#+)\s+(.*)$", processed_lines[i2].strip())
+                if (
+                    h1_match
+                    and h2_match
+                    and len(h1_match.group(1)) == 2
+                    and len(h2_match.group(1)) == 2
+                ):
+                    processed_lines[i1] = f"# {h1_match.group(2)}"
 
     has_existing_h3 = any(ln.strip().startswith("### ") for ln in processed_lines)
     if not has_existing_h3:
@@ -647,6 +703,49 @@ def infer_heading_hierarchy(
     return result
 
 
+def _is_placeholder_only_table(data_rows: list[list[str]]) -> bool:
+    """Returns True if a table is a single-row axis fragment or has <= 4 rows of placeholder cells."""
+    if len(data_rows) == 1:
+        return len(data_rows[0]) >= 2 and not any(
+            ch.isdigit() for cell in data_rows[0] for ch in cell
+        )
+    if not (2 <= len(data_rows) <= 4):
+        return False
+    total_cells = 0
+    placeholder_cells = 0
+    has_digit = False
+    for row in data_rows[1:]:
+        for cell in row:
+            total_cells += 1
+            if any(ch.isdigit() for ch in cell):
+                has_digit = True
+            cleaned = re.sub(r"[\s_\*\.…\-–—]+", "", cell)
+            if len(cleaned) <= 1 and not (len(cleaned) == 1 and cleaned.isdigit()):
+                placeholder_cells += 1
+    if total_cells == 0:
+        return False
+    if placeholder_cells == total_cells:
+        return True
+    return not has_digit and placeholder_cells * 2 >= total_cells
+
+
+def _parse_tabelle_data_rows(raw_text: str) -> list[list[str]]:
+    """Extracts data rows from pipe-separated or tab-separated ``<Tabelle>`` inner content."""
+    rows: list[list[str]] = []
+    for r in raw_text.splitlines():
+        rs = r.strip()
+        if not rs or re.match(r"^</?Tabelle\b", rs, re.IGNORECASE):
+            continue
+        if "|" in rs:
+            inner = rs.strip("|").strip()
+            if re.match(r"^[\s\|:\-]+$", inner):
+                continue
+            rows.append([c.strip() for c in rs.strip("|").split("|")])
+        elif "\t" in rs:
+            rows.append([c.strip() for c in rs.split("\t")])
+    return rows
+
+
 def _unroll_subtask_tables_and_convert_md_tables(text: str) -> str:
     """Unrolls multi-column subtask tables into linear lists and wraps data tables in ``<Tabelle>``.
 
@@ -677,6 +776,9 @@ def _unroll_subtask_tables_and_convert_md_tables(text: str) -> str:
 
         if not data_rows:
             return block
+
+        if _is_placeholder_only_table(data_rows):
+            return ""
 
         subtask_cells = [c for c in all_cells if subtask_cell_re.match(c)]
         if len(subtask_cells) >= 2 and len(subtask_cells) >= 0.6 * len(all_cells):
@@ -710,13 +812,18 @@ def _unroll_subtask_tables_and_convert_md_tables(text: str) -> str:
         return f"<Tabelle>\n\n{table_md}\n\n</Tabelle>\n"
 
     parts = re.split(r"(<Tabelle\b[^>]*>.*?</Tabelle>)", text, flags=re.DOTALL | re.IGNORECASE)
-    for idx in range(0, len(parts), 2):
-        parts[idx] = re.sub(
-            r"(?:^[ \t]*\|.+?\|[ \t]*(?:\n|$)){2,}",
-            process_pipe_table,
-            parts[idx],
-            flags=re.MULTILINE,
-        )
+    for idx in range(len(parts)):
+        if idx % 2 == 0:
+            parts[idx] = re.sub(
+                r"(?:^[ \t]*\|.+?\|[ \t]*(?:\n|$)){2,}",
+                process_pipe_table,
+                parts[idx],
+                flags=re.MULTILINE,
+            )
+        else:
+            t_rows = _parse_tabelle_data_rows(parts[idx])
+            if _is_placeholder_only_table(t_rows):
+                parts[idx] = ""
     text = "".join(parts)
 
     lines = text.splitlines()
@@ -1164,6 +1271,40 @@ def _recover_dropped_rahmen_blocks(processed: str, raw_markdown: str) -> str:
     return "".join(s.text for s in proc_segs)
 
 
+def normalize_heading_page_markers(markdown_content: str) -> str:
+    r"""Normalizes heading-prefixed page markers and strips dangling empty headings.
+
+    Splits inline heading+marker lines such as ``### ((294)) Abschnitt`` into a
+    standalone ``((294))`` line followed by ``### Abschnitt``, strips heading
+    prefixes from standalone ``#### ((294))`` lines, and removes empty ATX
+    heading lines (``^[ \t]*#{1,6}[ \t]*$``).
+
+    Args:
+        markdown_content: Input Markdown text.
+
+    Returns:
+        Normalized Markdown text with clean standalone ``((n))`` markers.
+    """
+    if not markdown_content:
+        return markdown_content
+
+    def _split_heading_marker(match: re.Match[str]) -> str:
+        hashes = match.group(1)
+        marker = match.group(2).strip()
+        trailing = (match.group(3) or "").strip()
+        if trailing:
+            return f"{marker}\n\n{hashes} {trailing}"
+        return marker
+
+    normalized = re.sub(
+        r"(?m)^[ \t]*(#{1,6})[ \t]*(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:[ \t]*/[ \t]*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)[ \t]*(.*)$",
+        _split_heading_marker,
+        markdown_content,
+    )
+    normalized = re.sub(r"(?m)^[ \t]*#{1,6}[ \t]*(?:\r?\n|$)", "", normalized)
+    return normalized
+
+
 def deduplicate_page_numbers(markdown_content: str) -> str:
     r"""Removes duplicate consecutive or in-page ``((n))`` page boundary markers.
 
@@ -1177,6 +1318,8 @@ def deduplicate_page_numbers(markdown_content: str) -> str:
     """
     if not markdown_content:
         return markdown_content
+
+    markdown_content = normalize_heading_page_markers(markdown_content)
 
     def replace_consecutive_same_page(match: re.Match[str]) -> str:
         prefix = match.group(1) or ""
@@ -1221,6 +1364,543 @@ def deduplicate_page_numbers(markdown_content: str) -> str:
     return result.strip()
 
 
+def _split_run_in_bullet_subheadings(text: str) -> str:
+    """Normalizes bullet separators in headings and splits run-in bullet subheadings outside blocks."""
+    if not text or "•" not in text:
+        return text
+    parts = re.split(
+        r"(<(?:Bild|Tabelle)\b[^>]*>[\s\S]*?</(?:Bild|Tabelle)>)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    for idx in range(0, len(parts), 2):
+        seg = parts[idx]
+        seg = re.sub(r"(?m)^#{1,6}\s+([^\n•]+?)[ \t]*•[ \t]*$", r"#### \1", seg)
+        seg = re.sub(r"(?m)^(#{1,6}\s+[^\n•]+?)[ \t]+•[ \t]+([^\n]+)$", r"\1: \2", seg)
+        seg = re.sub(
+            r"(?m)^[ \t]*(?:\*\*|_)?([A-ZÄÖÜ][A-Za-zäöüÄÖÜß0-9\s,\-\(\)/]{2,55}?)(?:\*\*|_)?[ \t]+•[ \t]+([A-ZÄÖÜ][^\n]+)$",
+            r"#### \1\n\n\2",
+            seg,
+        )
+        parts[idx] = seg
+    return "".join(parts)
+
+
+_TASK_OPERATOR_VERB_RE = re.compile(
+    r"^(?:Erklären|Erläutern|Beschreiben|Nennen|Vergleichen|Begründen|Stellen|Zeichnen|"
+    r"Berechnen|Entwickeln|Formulieren|Ordnen|Werten|Überprüfen|Skizzieren|Diskutieren|"
+    r"Analysieren|Leiten|Geben|Fassen|Ermitteln|Prüfen|Untersuchen|Benennen|Deuten|"
+    r"Interpretieren|ermitteln|erklären|erläutern|beschreiben)\b"
+)
+
+
+def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
+    """Applies generic Buchkonferenz structural and formatting directives from ``custom_rules``.
+
+    Args:
+        text: Post-processed Markdown text.
+        custom_rules: Optional book-specific rules string from ``custom_ruleset.txt``.
+
+    Returns:
+        Markdown text transformed according to the detected Buchkonferenz directives.
+    """
+    if not text:
+        return text
+
+    text = _split_run_in_bullet_subheadings(text)
+
+    # Strip any residual '#' heading prefixes inside <Bild>...</Bild> blocks
+    def _clean_bild_inner_headings(m: re.Match[str]) -> str:
+        block = m.group(0)
+        b_lines = block.splitlines()
+        cleaned_b = [
+            b_lines[0],
+            *[re.sub(r"^(\s*)#{1,6}\s+", r"\1", ln) for ln in b_lines[1:-1]],
+            *(b_lines[-1:] if len(b_lines) > 1 else []),
+        ]
+        return "\n".join(cleaned_b)
+
+    text = re.sub(
+        r"<Bild\b[^>]*>[\s\S]*?</Bild>",
+        _clean_bild_inner_headings,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not custom_rules or not custom_rules.strip():
+        return text
+
+    # 1. Resolve <Tabelle> blocks up to 30 cells (2c) and drop placeholder tables (2a)
+    def _resolve_custom_tabelle(m: re.Match[str]) -> str:
+        data_rows = _parse_tabelle_data_rows(m.group(1))
+        if not data_rows:
+            return m.group(0)
+        if _is_placeholder_only_table(data_rows):
+            return ""
+        total_cells = sum(len(r) for r in data_rows)
+        if len(data_rows) >= 2 and total_cells <= 30:
+            headers = [
+                re.sub(r"^(?:\*\*|_)+|(?:\*\*|_)+$", "", h.strip()).strip()
+                for h in data_rows[0]
+            ]
+            para_rows: list[str] = []
+            for row in data_rows[1:]:
+                pairs: list[str] = []
+                for col_idx, cell_val in enumerate(row):
+                    c_clean = cell_val.strip()
+                    if not c_clean:
+                        continue
+                    hdr = headers[col_idx] if col_idx < len(headers) else ""
+                    if hdr:
+                        pairs.append(f"_{hdr}_: {c_clean}")
+                    else:
+                        pairs.append(c_clean)
+                if pairs:
+                    para_rows.append("; ".join(pairs))
+            if para_rows:
+                return (
+                    "<Anmerkung>\nDie folgende Tabelle wurde aufgelöst.\n</Anmerkung>\n\n"
+                    + "\n\n".join(para_rows)
+                )
+        return m.group(0)
+
+    text = re.sub(
+        r"<Tabelle\b[^>]*>\s*([\s\S]*?)\s*</Tabelle>",
+        _resolve_custom_tabelle,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # 2. Figure Caption M-Prefix & Placement Before <Bild> (3b)
+    use_m_prefix = bool(
+        re.search(
+            r"Abbildungsnummern\s+ein\s+M\s+vorangestellt|\bM\s+vorangestellt",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    caption_h4 = use_m_prefix or bool(
+        re.search(
+            r"Überschrift\s*4[^\n]*Abbildungsunterschriften|Abbildungsunterschriften[^\n]*Überschrift\s*4",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    if caption_h4 and "<Bild" in text:
+        m_pfx = "M" if use_m_prefix else ""
+        fig_cap_re = re.compile(
+            r"^(?:#{1,6}\s+)?(?:\*\*|_)?(?:Abb(?:ildung)?\.?\s*|M\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n]{3,180}?)(?:\*\*|_)?$"
+        )
+        bild_segs = re.split(
+            r"(<Bild\b[^>]*>[\s\S]*?</Bild>)", text, flags=re.IGNORECASE
+        )
+        for b_i in range(1, len(bild_segs), 2):
+            pre_lines = bild_segs[b_i - 1].splitlines()
+            post_lines = bild_segs[b_i + 1].splitlines()
+            bild_box = bild_segs[b_i]
+
+            last_ne = -1
+            for idx_p in range(len(pre_lines) - 1, -1, -1):
+                if pre_lines[idx_p].strip():
+                    last_ne = idx_p
+                    break
+
+            has_pre_cap = False
+            cap_text_lower = ""
+            if last_ne >= 0:
+                m_pre = fig_cap_re.match(pre_lines[last_ne].strip())
+                if m_pre and not _TASK_OPERATOR_VERB_RE.match(m_pre.group(2).strip()):
+                    c_num, c_body = m_pre.group(1), m_pre.group(2).strip()
+                    pre_lines[last_ne] = f"#### {m_pfx}{c_num} {c_body}"
+                    has_pre_cap = True
+                    cap_text_lower = c_body.lower()
+
+            # Inspect first few non-empty lines after </Bild> for trailing caption or orphan axis fragments
+            ne_indices: list[int] = []
+            for idx_a, a_ln in enumerate(post_lines):
+                a_s = a_ln.strip()
+                if not a_s:
+                    continue
+                if re.match(r"^\(\(\d+\)\)", a_s) or a_s.startswith(
+                    ("<Bild", "<Tabelle", "<Rahmen", "<Anmerkung", "#####")
+                ):
+                    break
+                ne_indices.append(idx_a)
+                if len(ne_indices) >= 4:
+                    break
+
+            matched_post_idx = -1
+            post_cap_heading = ""
+            for k_pos, idx_a in enumerate(ne_indices):
+                cand = post_lines[idx_a].strip()
+                m_post = fig_cap_re.match(cand)
+                if m_post and not _TASK_OPERATOR_VERB_RE.match(m_post.group(2).strip()):
+                    # Ensure any preceding lines before idx_a are short orphan diagram labels
+                    intervening_ok = all(
+                        len(post_lines[prev_a].strip()) <= 50
+                        and not post_lines[prev_a].strip().endswith((".", "!", "?"))
+                        and not post_lines[prev_a].strip().startswith("#")
+                        for prev_a in ne_indices[:k_pos]
+                    )
+                    if intervening_ok:
+                        matched_post_idx = idx_a
+                        c_num, c_body = m_post.group(1), m_post.group(2).strip()
+                        post_cap_heading = f"#### {m_pfx}{c_num} {c_body}"
+                        cap_text_lower = cap_text_lower or c_body.lower()
+                        break
+
+            if matched_post_idx >= 0:
+                post_lines = post_lines[matched_post_idx + 1 :]
+                if not has_pre_cap:
+                    while pre_lines and not pre_lines[-1].strip():
+                        pre_lines.pop()
+                    pre_lines.append("")
+                    pre_lines.append(post_cap_heading)
+                    pre_lines.append("")
+                    has_pre_cap = True
+
+            # Strip trailing duplicate caption line or VLM-repeated axis label immediately after </Bild>
+            while post_lines:
+                first_ne = -1
+                for idx_a, a_ln in enumerate(post_lines):
+                    if a_ln.strip():
+                        first_ne = idx_a
+                        break
+                if first_ne < 0:
+                    break
+                cand_s = post_lines[first_ne].strip()
+                cand_clean = re.sub(r"^(?:#{1,6}\s+)?(?:M?\d+\s+)?", "", cand_s).strip().lower()
+                if (cap_text_lower and cand_clean == cap_text_lower) or (
+                    len(cand_s) <= 45
+                    and not cand_s.startswith(("#", "-", "*", "(("))
+                    and not cand_s.endswith((".", "!", "?", ":"))
+                    and cand_s in bild_box
+                ):
+                    post_lines.pop(first_ne)
+                else:
+                    break
+
+            bild_segs[b_i - 1] = "\n".join(pre_lines)
+            if not bild_segs[b_i - 1].endswith("\n"):
+                bild_segs[b_i - 1] += "\n\n"
+            bild_segs[b_i + 1] = "\n" + "\n".join(post_lines).lstrip("\n")
+
+        text = "".join(bild_segs)
+
+    # 3. Task Formatting: ##### Aufgaben + ##### <Nr> + Paragraph (4a)
+    tasks_h5 = bool(
+        re.search(r"Überschrift\s*5[\s\S]{0,120}Aufgaben", custom_rules, re.IGNORECASE)
+    )
+    if tasks_h5:
+        t_lines = text.splitlines()
+        out_t_lines: list[str] = []
+        in_bild = False
+        in_tabelle = False
+        in_aufgaben = False
+
+        for ln in t_lines:
+            s = ln.strip()
+            if in_bild:
+                if re.search(r"</Bild>", s, re.IGNORECASE):
+                    in_bild = False
+                out_t_lines.append(ln)
+                continue
+            if re.match(r"^<Bild\b", s, re.IGNORECASE):
+                if not re.search(r"</Bild>", s, re.IGNORECASE):
+                    in_bild = True
+                out_t_lines.append(ln)
+                continue
+            if in_tabelle:
+                if re.search(r"</Tabelle>", s, re.IGNORECASE):
+                    in_tabelle = False
+                out_t_lines.append(ln)
+                continue
+            if re.match(r"^<Tabelle\b", s, re.IGNORECASE):
+                if not re.search(r"</Tabelle>", s, re.IGNORECASE):
+                    in_tabelle = True
+                out_t_lines.append(ln)
+                continue
+
+            if re.match(r"^\(\(\d+\)\)", s):
+                out_t_lines.append(ln)
+                continue
+
+            # Standalone "Aufgaben" or "Aufgaben:"
+            if re.match(
+                r"^(?:#{1,6}\s+)?(?:\*\*|_)?Aufgaben:?(?:\*\*|_)?\s*$",
+                s,
+                re.IGNORECASE,
+            ):
+                out_t_lines.append("##### Aufgaben")
+                in_aufgaben = True
+                continue
+
+            # Inline or standalone "Aufgaben: A1 ..." / "#### Aufgaben: A1"
+            m_inline_aufg = re.match(
+                r"^(?:#{1,6}\s+)?(?:\*\*|_)?Aufgaben:?(?:\*\*|_)?\s+([A-LN-Z]?\d+)[.:]?(?:\s+(.+))?$",
+                s,
+                re.IGNORECASE,
+            )
+            if m_inline_aufg:
+                if not in_aufgaben:
+                    out_t_lines.append("##### Aufgaben")
+                    out_t_lines.append("")
+                out_t_lines.append(f"##### {m_inline_aufg.group(1)}")
+                if m_inline_aufg.group(2) and m_inline_aufg.group(2).strip():
+                    out_t_lines.append("")
+                    out_t_lines.append(m_inline_aufg.group(2).strip())
+                in_aufgaben = True
+                continue
+
+            # Standalone "##### <Nr>" or "### Aufgabe 1:"
+            m_h5_only = re.match(
+                r"^(#{1,6})\s+(?:(?:\*\*|_)?(Aufgaben?)\s+)?([A-LN-Z]?\d+)[.:]?\s*$",
+                s,
+                re.IGNORECASE,
+            )
+            if m_h5_only and (len(m_h5_only.group(1)) == 5 or m_h5_only.group(2)):
+                if not in_aufgaben:
+                    out_t_lines.append("##### Aufgaben")
+                    out_t_lines.append("")
+                    in_aufgaben = True
+                out_t_lines.append(f"##### {m_h5_only.group(3)}")
+                continue
+
+            # Heading with task number + sentence: ### 1 Erklären Sie... or #### A1 Erläutern Sie... or ### Aufgabe 1: ...
+            m_h_task = re.match(
+                r"^(#{1,6})\s+(?:(?:\*\*|_)?Aufgabe\s+)?([A-LN-Z]?\d+)(?:\s*\[[^\]]+\])?[.:]?\s+([A-ZÄÖÜ].+)$",
+                s,
+            )
+            if m_h_task:
+                hashes_t, t_num, t_body = (
+                    m_h_task.group(1),
+                    m_h_task.group(2),
+                    m_h_task.group(3).strip(),
+                )
+                is_task_h = (
+                    "aufgabe" in s.lower()
+                    or len(hashes_t) == 5
+                    or bool(re.match(r"^[A-LN-Z]\d+$", t_num))
+                    or bool(_TASK_OPERATOR_VERB_RE.match(t_body))
+                    or t_body.endswith("?")
+                )
+                if is_task_h:
+                    if not in_aufgaben:
+                        out_t_lines.append("##### Aufgaben")
+                        out_t_lines.append("")
+                        in_aufgaben = True
+                    out_t_lines.append(f"##### {t_num}")
+                    out_t_lines.append("")
+                    out_t_lines.append(t_body)
+                    continue
+
+            # Reset in_aufgaben on non-task H1..H4 headings
+            if re.match(r"^#{1,4}\s+", s):
+                in_aufgaben = False
+                out_t_lines.append(ln)
+                continue
+
+            # Plain-text or list-formatted task line: "1 Erklären Sie...", "Ü. 1 Erläutern Sie...", "A2 Beschreiben Sie..."
+            m_plain_task = re.match(
+                r"^(?:(\d+)\.\t|(?:Ü\.?\s+)?(?:\*\*|_)?([A-LN-Z]\d+|\d+)(?:\*\*|_)?[.:]?\s+)([A-ZÄÖÜ].+)$",
+                s,
+            )
+            if m_plain_task:
+                t_num = m_plain_task.group(1) or m_plain_task.group(2)
+                t_body = m_plain_task.group(3).strip()
+                if (
+                    bool(_TASK_OPERATOR_VERB_RE.match(t_body))
+                    or (in_aufgaben and bool(re.match(r"^[A-LN-Z]?\d+$", t_num)))
+                ):
+                    if not in_aufgaben:
+                        out_t_lines.append("##### Aufgaben")
+                        out_t_lines.append("")
+                        in_aufgaben = True
+                    out_t_lines.append(f"##### {t_num}")
+                    out_t_lines.append("")
+                    out_t_lines.append(t_body)
+                    continue
+
+            out_t_lines.append(ln)
+
+        text = "\n".join(out_t_lines)
+
+    # 4. Heading Hierarchy Normalization (H2..H5) when custom_rules is active (1c)
+    has_buchkonferenz_hierarchy = bool(
+        re.search(
+            r"Überschrift\s*1\s*:\s*Hauptthema|Überschrift\s*3\s*:[^\n]*(?:Material|IM\s+BLICKPUNKT)|Überschrift\s*4\s*:[^\n]*Kapitelinterne",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    if has_buchkonferenz_hierarchy:
+        h_lines = text.splitlines()
+        out_h_lines: list[str] = []
+        in_bild = False
+        in_tabelle = False
+        seen_chapter_or_h3 = False
+        after_m1_caption = False
+        for ln in h_lines:
+            s = ln.strip()
+            if in_bild:
+                if re.search(r"</Bild>", s, re.IGNORECASE):
+                    in_bild = False
+                out_h_lines.append(ln)
+                continue
+            if re.match(r"^<Bild\b", s, re.IGNORECASE):
+                if not re.search(r"</Bild>", s, re.IGNORECASE):
+                    in_bild = True
+                out_h_lines.append(ln)
+                continue
+            if in_tabelle:
+                if re.search(r"</Tabelle>", s, re.IGNORECASE):
+                    in_tabelle = False
+                out_h_lines.append(ln)
+                continue
+            if re.match(r"^<Tabelle\b", s, re.IGNORECASE):
+                if not re.search(r"</Tabelle>", s, re.IGNORECASE):
+                    in_tabelle = True
+                out_h_lines.append(ln)
+                continue
+
+            if re.match(r"^####\s+M1\b", s):
+                after_m1_caption = True
+                out_h_lines.append(ln)
+                continue
+
+            # Standalone Worterklärung: or Material A...
+            m_worterkl = re.match(
+                r"^(?:#{1,6}\s+)?(?:\*\*|_)?(Worterklärung:?)(?:\*\*|_)?\s*$",
+                s,
+                re.IGNORECASE,
+            )
+            if m_worterkl:
+                lbl = m_worterkl.group(1)
+                if not lbl.endswith(":"):
+                    lbl += ":"
+                out_h_lines.append(f"#### {lbl}")
+                continue
+
+            m_mat_sub = re.match(
+                r"^(?:#{1,6}\s+)?(?:\*\*|_)?(Material\s+[A-Z]\b[^\n]*?)(?:\*\*|_)?$",
+                s,
+            )
+            if m_mat_sub:
+                mat_title = re.sub(r"\s*•\s*", ": ", m_mat_sub.group(1).strip())
+                out_h_lines.append(f"#### {mat_title}")
+                continue
+
+            m_special_h3 = re.match(
+                r"^(?:#{1,6}\s+)?(?:\*\*|_)?(IM\s+BLICKPUNKT\b[^\n]*|Material(?:ien)?|ÜBERBLICK\b[^\n]*)(?:\*\*|_)?$",
+                s,
+                re.IGNORECASE,
+            )
+            if m_special_h3:
+                sp_title = m_special_h3.group(1).strip()
+                sp_title = re.sub(
+                    r"^im\s+blickpunkt\b",
+                    "IM BLICKPUNKT",
+                    sp_title,
+                    flags=re.IGNORECASE,
+                )
+                sp_title = re.sub(
+                    r"^überblick\b", "ÜBERBLICK", sp_title, flags=re.IGNORECASE
+                )
+                sp_title = re.sub(r"\s*•\s*", ": ", sp_title)
+                out_h_lines.append(f"### {sp_title}")
+                seen_chapter_or_h3 = True
+                after_m1_caption = False
+                continue
+
+            # Numbered figure/table caption heading: e.g. "## 3 Ionenkonzentrationen..." -> "#### M3 ..."
+            if caption_h4:
+                m_num_cap = re.match(
+                    r"^#{1,4}\s+(?:M\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n]{3,180})$",
+                    s,
+                )
+                if m_num_cap and not _TASK_OPERATOR_VERB_RE.match(m_num_cap.group(2).strip()):
+                    m_pfx_c = "M" if use_m_prefix else ""
+                    c_num = m_num_cap.group(1)
+                    c_body = m_num_cap.group(2).strip()
+                    out_h_lines.append(f"#### {m_pfx_c}{c_num} {c_body}")
+                    if c_num == "1":
+                        after_m1_caption = True
+                    continue
+
+            m_any_h = re.match(r"^(#{1,6})\s+(.+)$", s)
+            if m_any_h:
+                h_lvl = len(m_any_h.group(1))
+                h_title = m_any_h.group(2).strip()
+                if h_lvl == 3:
+                    seen_chapter_or_h3 = True
+                    after_m1_caption = False
+                elif h_lvl in (1, 2):
+                    if re.match(r"^\d+\.\d+\b", h_title):
+                        out_h_lines.append(f"## {h_title}")
+                        seen_chapter_or_h3 = True
+                        after_m1_caption = False
+                        continue
+                    target_hashes = (
+                        "###"
+                        if (not seen_chapter_or_h3 or after_m1_caption)
+                        else "####"
+                    )
+                    out_h_lines.append(f"{target_hashes} {h_title}")
+                    seen_chapter_or_h3 = True
+                    after_m1_caption = False
+                    continue
+
+            out_h_lines.append(ln)
+
+        text = "\n".join(out_h_lines)
+
+    # 5. Formula & Ion Notation Refinements when custom_rules is active (5b)
+    def _unwrap_simple_chem_ion(m: re.Match[str]) -> str:
+        inner = m.group(1)
+        els = re.findall(r"[A-Z][a-z]?", inner)
+        if els and all(el in fc.VALID_CHEMICAL_ELEMENTS for el in els):
+            return inner
+        return m.group(0)
+
+    text = re.sub(
+        r"(?<!\$)\$((?:[A-Z][a-z]?(?:\^\{?\d*[+-]\}?|_\d+|_\{\d+\})?)*[A-Z][a-z]?(?:\^\{?\d*[+-]\}?|_\d+|_\{\d+\})+(?:[A-Z][a-z]?(?:\^\{?\d*[+-]\}?|_\d+|_\{\d+\})?)*)\$(?!\$)",
+        _unwrap_simple_chem_ion,
+        text,
+    )
+    text = re.sub(
+        r"\\xrightarrow\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
+        lambda m: "\\xra{"
+        + re.sub(r"\\text\s*\{([^}]*)\}", r"\1", m.group(1)).strip()
+        + "}",
+        text,
+    )
+    text = re.sub(
+        r"(?<!\$)\$(\d+(?:[.,]\d+|\{,\}\d+)?)\s*(?:\\,)?\s*\\mu\s*(?:\\text\{([a-zA-Z]+)\}|([a-zA-Z]+))\$(?!\$)",
+        lambda m: f"{m.group(1).replace('{,}', ',')} ~m{m.group(2) or m.group(3)}",
+        text,
+    )
+    text = re.sub(
+        r"\b(\d+(?:,\d+)?)\s*[µμ](g|l|L|m|s|mol)\b",
+        r"\1 ~m\2",
+        text,
+    )
+
+    # 6. Book Frontmatter & <Anmerkung> from custom_rules (6b)
+    for m_anm in re.finditer(
+        r"<Anmerkung>\s*([\s\S]*?)\s*</Anmerkung>", custom_rules, re.IGNORECASE
+    ):
+        anm_body = m_anm.group(1).strip()
+        if not anm_body or "Die folgende Tabelle wurde aufgelöst" in anm_body:
+            continue
+        first_marker = fc.PAGE_MARKER_START_RE.search(text)
+        prefix_slice = text[: first_marker.start()] if first_marker else text[:400]
+        if anm_body not in prefix_slice and "<Anmerkung>" not in prefix_slice:
+            text = f"<Anmerkung>\n{anm_body}\n</Anmerkung>\n\n{text.lstrip()}"
+        break
+
+    return text
+
+
 def post_process_structure(
     markdown_content: str,
     raw_markdown: str | None = None,
@@ -1245,6 +1925,14 @@ def post_process_structure(
     """
     if not markdown_content:
         return markdown_content
+
+    from backend.services.extraction_postprocess import clean_vlm_repetition_loops
+
+    markdown_content, _ = clean_vlm_repetition_loops(markdown_content)
+    markdown_content = normalize_heading_page_markers(markdown_content)
+    if raw_markdown:
+        raw_markdown, _ = clean_vlm_repetition_loops(raw_markdown)
+        raw_markdown = normalize_heading_page_markers(raw_markdown)
 
     hyphen_pattern = (
         r"(\w+)-[ \t]*\n+(?:(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)[ \t]*\n+)?"
@@ -1337,8 +2025,12 @@ def post_process_structure(
             flags=re.IGNORECASE,
         )
 
+    processed = _split_run_in_bullet_subheadings(processed)
     processed = infer_heading_hierarchy(
-        processed, raw_markdown=raw_markdown, directory_info=directory_info
+        processed,
+        raw_markdown=raw_markdown,
+        directory_info=directory_info,
+        custom_rules=custom_rules,
     )
     processed = _unroll_subtask_tables_and_convert_md_tables(processed)
 
@@ -1453,6 +2145,7 @@ def post_process_structure(
     )
 
     processed = normalize_bild_tags(processed)
+    processed = _apply_buchkonferenz_rules(processed, custom_rules)
 
     if raw_markdown is not None and "<Bild" not in raw_markdown and "![" not in raw_markdown:
         processed = re.sub(
@@ -1469,6 +2162,8 @@ def post_process_structure(
 
     if raw_markdown:
         processed = _recover_dropped_rahmen_blocks(processed, raw_markdown)
+
+    processed = deduplicate_page_numbers(processed)
 
     if directory_info and directory_info.get("has_any_directory"):
         try:

@@ -2504,12 +2504,26 @@ async def analyze_feedback(
     with open(os.path.join(work_dir, "feedback.txt"), "w", encoding="utf-8") as f:
         f.write(combined_feedback)
 
+    custom_ruleset_content = ""
+    custom_ruleset_name = None
+    if hasattr(task, "resolve_custom_ruleset"):
+        custom_ruleset_content, custom_ruleset_name = task.resolve_custom_ruleset(
+            output_dir=OUTPUT_DIR,
+            sibling_tasks=list(task_manager._tasks.values()),
+        )
+    else:
+        ruleset_path = os.path.join(OUTPUT_DIR, task.task_id, "custom_ruleset.txt")
+        if os.path.isfile(ruleset_path):
+            with open(ruleset_path, encoding="utf-8", errors="ignore") as rf:
+                custom_ruleset_content = rf.read().strip()
+
     task_meta = {
         "Quelldokument": task.original_name,
         "Engine": task.engine,
         "Standardisierungs-Backend": getattr(task, "standardisation_backend", None) or "unbekannt",
         "Seitenauswahl": task.pages,
         "Regelsatz": "Übertragungsregeln FIBS (September 2025)",
+        "Dateispezifische Zusatzregeln": custom_ruleset_name or ("custom_ruleset.txt" if custom_ruleset_content else None),
     }
 
     async def analysis_stream():
@@ -2525,7 +2539,12 @@ async def analyze_feedback(
             from backend.services.prompts import build_analysis_prompt
 
             final_prompt = build_analysis_prompt(
-                change_summary, lint_cmp, combined_feedback, task_meta, len(region_entries)
+                change_summary,
+                lint_cmp,
+                combined_feedback,
+                task_meta,
+                len(region_entries),
+                custom_ruleset=custom_ruleset_content or "",
             )
             yield ev(status="progress", percent=15, phase="Lade Gemma 4 (lokal)…")
 

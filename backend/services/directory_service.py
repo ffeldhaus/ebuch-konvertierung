@@ -1347,13 +1347,29 @@ def apply_directory_heading_levels(
 def apply_directory_page_numbers(
     markdown_content: str,
     directory_info: dict[str, Any] | None = None,
+    max_pages: int | None = None,
 ) -> str:
     """Uses the detected directories (`toc_entries`, `figure_entries`, `table_entries`,
     `picture_entries`, and `page_numbers`) to verify and repair `((num))` page markers
     in `markdown_content`.
+
+    Args:
+        markdown_content: Input Markdown text containing ``((num))`` markers.
+        directory_info: Optional detected directory metadata dictionary.
+        max_pages: Optional upper bound on the number of extracted PDF pages.
+
+    Returns:
+        Markdown text with normalized, deduplicated, and verified ``((num))`` markers.
     """
     if not markdown_content:
         return markdown_content
+
+    from backend.services.fibs_postprocess import (
+        deduplicate_page_numbers,
+        normalize_heading_page_markers,
+    )
+
+    markdown_content = deduplicate_page_numbers(normalize_heading_page_markers(markdown_content))
 
     if not directory_info or not directory_info.get("has_any_directory"):
         directory_info = extract_directories_from_markdown(markdown_content)
@@ -1382,11 +1398,25 @@ def apply_directory_page_numbers(
             return f"(({start_pg}))\n\n{markdown_content}"
         return markdown_content
 
-    marker_indices = [
+    raw_marker_indices = [
         i
         for i, p in enumerate(parts)
         if re.match(r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)$", p)
     ]
+    if not raw_marker_indices:
+        return markdown_content
+
+    # Deduplicate consecutive identical ((num)) tokens before counting or renumbering
+    marker_indices: list[int] = []
+    prev_tok_norm: str | None = None
+    for m_idx in raw_marker_indices:
+        tok_norm = parts[m_idx][2:-2].strip().lower()
+        if prev_tok_norm is not None and tok_norm == prev_tok_norm:
+            parts[m_idx] = ""
+            continue
+        marker_indices.append(m_idx)
+        prev_tok_norm = tok_norm
+
     if not marker_indices:
         return markdown_content
 
@@ -1439,6 +1469,17 @@ def apply_directory_page_numbers(
                     offset = target_pg - seg_pos
                     offset_votes[offset] = offset_votes.get(offset, 0) + w
 
+    effective_max_pages = max_pages or directory_info.get("extracted_page_count") or directory_info.get("page_count")
+    max_known_page = max((int(p) for p in known_pages if str(p).isdigit()), default=None)
+
+    def _bound_arabic(val: int, start_val: int) -> int:
+        upper = None
+        if effective_max_pages and int(effective_max_pages) > 0:
+            upper = max(1, start_val) + int(effective_max_pages) - 1
+        if max_known_page is not None and start_val <= max_known_page:
+            upper = min(upper, max_known_page) if upper is not None else max_known_page
+        return min(val, upper) if upper is not None else val
+
     if offset_votes:
         best_offset = max(offset_votes.items(), key=lambda kv: (kv[1], -abs(kv[0])))[0]
         if best_offset <= 0:
@@ -1450,12 +1491,13 @@ def apply_directory_page_numbers(
                     else int_to_roman(i + 1, uppercase=True)
                 )
                 if i < r_len
-                else str(best_offset + i)
+                else str(_bound_arabic(best_offset + i, 1))
                 for i in range(len(marker_indices))
             ]
         else:
             inferred_marker_labels = [
-                str(max(1, best_offset + i)) for i in range(len(marker_indices))
+                str(_bound_arabic(max(1, best_offset + i), max(1, best_offset)))
+                for i in range(len(marker_indices))
             ]
     elif (
         has_frontmatter_in_slice
@@ -1468,17 +1510,23 @@ def apply_directory_page_numbers(
         inferred_marker_labels = [str(lbl) for lbl in known_labels]
     elif known_pages:
         start_pg = int(known_pages[0])
-        inferred_marker_labels = [str(max(1, start_pg + i)) for i in range(len(marker_indices))]
+        inferred_marker_labels = [
+            str(_bound_arabic(max(1, start_pg + i), max(1, start_pg)))
+            for i in range(len(marker_indices))
+        ]
     else:
         start_pg = int(directory_info.get("physical_start_page") or 1)
-        inferred_marker_labels = [str(max(1, start_pg + i)) for i in range(len(marker_indices))]
+        inferred_marker_labels = [
+            str(_bound_arabic(max(1, start_pg + i), max(1, start_pg)))
+            for i in range(len(marker_indices))
+        ]
 
     for seg_pos, m_idx in enumerate(marker_indices):
         new_lbl = inferred_marker_labels[seg_pos]
         if new_lbl is not None:
             parts[m_idx] = f"(({new_lbl}))"
 
-    return "".join(parts)
+    return deduplicate_page_numbers("".join(parts))
 
 
 

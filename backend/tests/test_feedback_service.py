@@ -586,3 +586,122 @@ def test_api_answer_open_questions(client):
     finally:
         client.delete(f"/api/tasks/{task_id}")
         shutil.rmtree(os.path.join(FEEDBACK_DIR, task_id), ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: 1a–1c Representative hunk sampling, structural anomalies & custom_ruleset
+# ---------------------------------------------------------------------------
+
+
+def test_stratified_hunk_sampling_includes_late_large_anomalies_and_line_counts():
+    """Verify 1a: when hunks exceed max_hunks, stratified sampling retains late massive hunks and shows line counts."""
+    orig_blocks = []
+    rev_blocks = []
+    for idx in range(1, 80):
+        orig_blocks.append(f"Absatz {idx}: Alter Fließtext.\nGleichbleibende Zeile {idx}.")
+        rev_blocks.append(f"Absatz {idx}: Neuer Fließtext.\nGleichbleibende Zeile {idx}.")
+
+    # Massive 50-line deletion at hunk 70 (near the end of the document, well past max_hunks=15)
+    loop_lines = "\n".join(f"#### K{k}" for k in range(1, 51))
+    orig_blocks[70] = f"{loop_lines}\nGleichbleibende Zeile 71."
+    rev_blocks[70] = "#### Korrekte Teilüberschrift\nGleichbleibende Zeile 71."
+
+    summary = fs.compute_change_summary("\n\n".join(orig_blocks), "\n\n".join(rev_blocks), max_hunks=15)
+    assert len(summary["hunks"]) == 15
+    assert summary["truncated"] is True
+    # Hunks remain in ascending original_line order
+    orig_lines_selected = [h.original_line for h in summary["hunks"]]
+    assert orig_lines_selected == sorted(orig_lines_selected)
+    # The massive 50-line hunk at index 70 is guaranteed to be included
+    assert any(h.removed_line_count >= 50 for h in summary["hunks"])
+    # The end of the document is also represented
+    assert max(orig_lines_selected) > 150
+
+    lint_cmp = fs.compare_lint_reports("\n\n".join(orig_blocks), "\n\n".join(rev_blocks))
+    prompt = build_analysis_prompt(summary, lint_cmp, "", {"Engine": "lightonocr"}, 0)
+    assert "-50/+1 Zeilen" in prompt
+    assert "weitere ALT-Zeilen" in prompt
+
+
+def test_structural_anomalies_detects_page_loop_heading_table_image_math_deltas():
+    """Verify 1b: programmatic structural anomaly detector flags all full-document blind spots."""
+    loop_part = "\n\n".join(f"#### S{i}" for i in range(1, 20))
+    orig = f"""((10))
+
+#### ((11))
+
+((11))
+
+((13))
+
+# Kapitel 1
+
+• Punkt A: Erster Hinweis
+• Punkt B: Zweiter Hinweis
+
+{loop_part}
+
+<Tabelle>
+| Größe | Einheit |
+| --- | --- |
+| Weg | m |
+</Tabelle>
+
+<Bild> Grafik:
+Beschreibung mit Bildtext: Schematischer Aufbau.
+</Bild>
+
+Reaktion: $A + B \\rightarrow C$ und $x^2 + y^2 = z^2$ sowie $E = m c^2$.
+"""
+    rev = """((10))
+
+((11))
+
+((12))
+
+## Kapitel 1
+
+#### Punkt A: Erster Hinweis
+
+#### Punkt B: Zweiter Hinweis
+
+<Anmerkung>
+Die folgende Tabelle wurde aufgelöst.
+</Anmerkung>
+
+Größe: Weg; Einheit: m
+
+<Bild> Grafik: n. ü. </Bild>
+
+Reaktion: A + B \\to C und x^2 + y^2 = z^2 sowie E = m c^2.
+"""
+    summary = fs.compute_change_summary(orig, rev)
+    anomalies = "\n".join(summary["structural_anomalies"])
+    assert "Seitenmarker als Überschrift formatiert in ALT" in anomalies
+    assert "Doppelte Seitenmarker in ALT" in anomalies
+    assert "Überzählige Seitenmarker in ALT" in anomalies and "((13))" in anomalies
+    assert "Fehlende Seitenmarker in ALT" in anomalies and "((12))" in anomalies
+    assert "Degenerierte Wiederholungsschleife" in anomalies
+    assert "Überschriften-Hierarchie" in anomalies
+    assert "Spitzmarken/Aufzählungen mit `•`" in anomalies
+    assert "Tabellen-Bilanz" in anomalies
+    assert "Bildblöcke `<Bild>`" in anomalies and "n. ü." in anomalies
+    assert "Formel-Notation" in anomalies
+
+    lint_cmp = fs.compare_lint_reports(orig, rev)
+    prompt = build_analysis_prompt(
+        summary,
+        lint_cmp,
+        "",
+        {"Engine": "infinity_parser2_flash"},
+        0,
+        custom_ruleset="Randspalten-Aufgaben als ##### Überschrift 5 übertragen.",
+    )
+    assert "## Automatisch erkannte Struktur-Anomalien & Mengenvergleiche" in prompt
+    assert "## Dateispezifische Zusatzregeln (Buchkonferenz / custom_ruleset.txt)" in prompt
+    assert "Randspalten-Aufgaben als ##### Überschrift 5 übertragen." in prompt
+    assert "Beschreibung mit Bildtext:" in prompt
+
+    appendix = fs.build_statistics_appendix(summary, lint_cmp, {"Engine": "infinity_parser2_flash"})
+    assert "### Automatisch erkannte Struktur-Anomalien & Mengenvergleiche" in appendix
+    assert "Degenerierte Wiederholungsschleife" in appendix

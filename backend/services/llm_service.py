@@ -1565,6 +1565,7 @@ async def standardise_markdown_async(
             table_max_cells=table_max_cells,
             allow_fallback=allow_fallback,
             directory_info=directory_info,
+            custom_rules=custom_rules,
         )
         if inspect.isawaitable(res):
             res = await res

@@ -1,3 +1,5 @@
+"""Unit tests for engine-neutral extraction post-processing and hybrid Docling fusion."""
+
 import json
 import os
 import tempfile
@@ -18,6 +20,7 @@ from backend.services.extraction_postprocess import (
 
 
 def test_recover_text_truncation_dehyphenates():
+    """Verifies de-hyphenation across line and page boundaries."""
     # Split across line
     raw = "Das ist ein Brechungs-\ngesetz der Optik."
     res = recover_text_truncation(raw)
@@ -39,12 +42,14 @@ def test_recover_text_truncation_dehyphenates():
 
 
 def test_recover_text_truncation_joins_soft_wraps():
+    """Verifies soft line-wrap joining within paragraphs."""
     raw = "Hier ist ein langer Satz,\nder auf der nächsten Zeile weitergeht."
     res = recover_text_truncation(raw)
     assert "Hier ist ein langer Satz, der auf der nächsten Zeile weitergeht." in res
 
 
 def test_sanitize_runaway_repetitions_preserves_tables_and_blanks():
+    """Verifies runaway repetition stripping while preserving table separators and blanks."""
     # Padded markdown table separator and worksheet blanks must NEVER be deleted
     table_and_blanks = (
         "| Material            | Brechungsindex n   |\n"
@@ -64,6 +69,7 @@ def test_sanitize_runaway_repetitions_preserves_tables_and_blanks():
 
 
 def test_reconstruct_title_hierarchy_numbering():
+    """Verifies ISO/DIN decimal heading hierarchy reconstruction."""
     raw = (
         "# 1. Einleitung\n\n"
         "Text.\n\n"
@@ -82,6 +88,7 @@ def test_reconstruct_title_hierarchy_numbering():
 
 
 def test_reconstruct_title_hierarchy_keywords():
+    """Verifies keyword-based heading hierarchy reconstruction."""
     raw = (
         "# Kapitel 3: Mechanik\n\n"
         "# Versuch: Pendelbewegung\n\n"
@@ -96,6 +103,7 @@ def test_reconstruct_title_hierarchy_keywords():
 
 
 def test_reconstruct_title_hierarchy_bbox_clustering():
+    """Verifies bounding-box font-height clustering for heading levels."""
     raw = (
         "# Hauptkapitel\n\n"
         "Text.\n\n"
@@ -120,6 +128,7 @@ def test_reconstruct_title_hierarchy_bbox_clustering():
 
 
 def test_recover_table_truncation_html():
+    """Verifies merging of HTML tables split across page boundaries."""
     raw = (
         "<table><tr><td>Zeile 1</td></tr></table>\n\n"
         "((45))\n\n"
@@ -132,6 +141,7 @@ def test_recover_table_truncation_html():
 
 
 def test_convert_html_tables_to_markdown():
+    """Verifies conversion of HTML tables to GFM pipe tables."""
     html_md = (
         "Text davor.\n\n"
         "<table>\n"
@@ -153,6 +163,7 @@ def test_convert_html_tables_to_markdown():
 
 
 def test_associate_image_captions_both_orders():
+    """Verifies association of image links with captions before and after the image."""
     # Order 1: Image followed by caption
     raw1 = (
         "![](images/prism.png)\n\n"
@@ -175,6 +186,7 @@ def test_associate_image_captions_both_orders():
 
 
 def test_apply_extraction_postprocess_full_pipeline():
+    """Verifies the end-to-end extraction post-processing pipeline."""
     raw = (
         "# Kapitel 4: Optik\n\n"
         "Das Brechungs-\ngesetz erklärt Lichtbrechung.\n\n"
@@ -192,6 +204,7 @@ def test_apply_extraction_postprocess_full_pipeline():
 
 
 def test_clean_running_headers_and_footers():
+    """Verifies removal of recurring running headers across pages."""
     raw = (
         "((1))\n\n"
         "FAUST I - TEXTANALYSE\n\n"
@@ -209,6 +222,7 @@ def test_clean_running_headers_and_footers():
 
 
 def test_clean_running_headers_alternating_numbered_section_headers():
+    """Verifies removal of alternating even/odd running chapter and section headers."""
     # Alternating even/odd numbered running headers (e.g. Kapitel 11 on even pages, 11.6. on odd pages)
     raw = (
         "((500))\n\n"
@@ -233,6 +247,7 @@ def test_clean_running_headers_alternating_numbered_section_headers():
 
 
 def test_fix_escaped_dollars_and_midpage_fences():
+    """Verifies unescaping of inline dollar math and removal of code fences."""
     raw = "Die Geschwindigkeit beträgt \\$c_0 = 3 \\cdot 10^8\\$ m/s.\n\n```markdown\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```"
     cleaned = clean_markdown_fences(fix_escaped_dollars(raw))
     assert "$c_0 = 3 \\cdot 10^8$" in cleaned
@@ -241,6 +256,7 @@ def test_fix_escaped_dollars_and_midpage_fences():
 
 
 def test_insert_page_numbers_skips_furniture_anchors_and_detects_scanned_page_numbers(tmp_path):
+    """Verifies page number insertion from metadata while skipping furniture anchors."""
     from backend.services.extraction_service import insert_page_numbers_from_metadata
 
     blocks = [
@@ -262,6 +278,7 @@ def test_insert_page_numbers_skips_furniture_anchors_and_detects_scanned_page_nu
 
 
 def test_standardize_formulas_ocr_scanned_variables():
+    """Verifies STEM formula standardization on OCR-scanned variables."""
     from backend.services.formula_service import standardize_formulas
 
     scanned_md = (
@@ -284,6 +301,7 @@ def test_standardize_formulas_ocr_scanned_variables():
 
 
 def test_reconstruct_title_hierarchy_splits_merged_chapter_and_section_headings():
+    """Verifies splitting of merged chapter and section headings on the same line."""
     raw = (
         "((112))\n\n"
         "# Kapitel 4: Erzähltexte untersuchen 4.1 Spannung aufbauen\n\n"
@@ -300,6 +318,7 @@ def test_reconstruct_title_hierarchy_splits_merged_chapter_and_section_headings(
 
 
 def test_reconstruct_title_hierarchy_formats_callout_boxes_as_bold_not_headings():
+    """Verifies callout box headers are formatted as bold text rather than headings."""
     raw = (
         "# Kapitel 2: Oberrheingraben\n\n"
         "## 2.1 Tektonik und Klima\n\n"
@@ -315,6 +334,7 @@ def test_reconstruct_title_hierarchy_formats_callout_boxes_as_bold_not_headings(
 
 
 def test_unroll_false_positive_directory_pipe_table():
+    """Verifies unrolling of TOC/directory blocks falsely extracted as pipe tables."""
     raw = (
         "((44))\n\n"
         "# Inhaltsverzeichnis\n\n"
@@ -330,6 +350,7 @@ def test_unroll_false_positive_directory_pipe_table():
 
 
 def test_insert_page_numbers_does_not_match_inside_directory_page(tmp_path):
+    """Verifies page-number matching does not anchor inside TOC directory lines."""
     from backend.services.extraction_service import insert_page_numbers_from_metadata
 
     blocks = [
@@ -353,6 +374,7 @@ def test_insert_page_numbers_does_not_match_inside_directory_page(tmp_path):
 
 
 def test_strip_indesign_slug_and_soft_hyphens():
+    """Verifies removal of InDesign production slugs and soft hyphens."""
     raw = (
         "((18))\n\n"
         "Ein Mikro\u00adcontroller verarbeitet Sensor\ufffedaten in Echtzeit.\n\n"
@@ -368,6 +390,7 @@ def test_strip_indesign_slug_and_soft_hyphens():
 
 
 def test_rejoin_two_column_displaced_continuation_and_merge_continuation_tables():
+    """Verifies rejoining of displaced two-column continuations and cross-page tables."""
     raw = (
         "((412))\n\n"
         "## 6.1 Abhängigkeit der Reaktionsgeschwindigkeit\n\n"
@@ -391,7 +414,9 @@ def test_rejoin_two_column_displaced_continuation_and_merge_continuation_tables(
 
 
 def test_no_test_data_leakage_across_backend_services():
+    """Verifies zero hardcoded test-document phrases across backend service modules."""
     import inspect
+
     from backend.services import (
         docling_extractor,
         extraction_postprocess,
@@ -419,8 +444,10 @@ def test_no_test_data_leakage_across_backend_services():
 
 
 def test_docx_spread_page_bookmark(tmp_path):
-    from backend.services.docx_service import convert_markdown_to_docx
+    """Verifies OpenXML bookmark generation for double-page spread markers."""
     from docx import Document
+
+    from backend.services.docx_service import convert_markdown_to_docx
 
     md = "((18)) / ((19))\n\n# Kapitel 3: Der geheime Kompass\n\nText auf der Doppelseite."
     out_docx = str(tmp_path / "spread_test.docx")
@@ -431,6 +458,7 @@ def test_docx_spread_page_bookmark(tmp_path):
 
 
 def test_one_col_toc_unroll_and_post_process_boxes_and_split_tables():
+    """Verifies 1-column TOC unrolling, didactic box wrapping, and split table merging."""
     from backend.services.fibs_postprocess import post_process_structure
 
     raw_toc = (
@@ -469,6 +497,7 @@ def test_one_col_toc_unroll_and_post_process_boxes_and_split_tables():
 
 
 def test_suspended_hyphen_ergaenzungsstrich_preserved_before_prepositions_and_conjunctions():
+    """Verifies preservation of German suspended hyphens (Ergänzungsstriche)."""
     from backend.services.fibs_postprocess import post_process_structure
 
     page_md = (
@@ -496,6 +525,237 @@ def test_suspended_hyphen_ergaenzungsstrich_preserved_before_prepositions_and_co
     assert "Auf- gegen Abbauprozessen" in stage2
     assert "Vor- wie Nachteile" in stage2
     assert "Zellkompartimenten" in stage2
+
+
+def test_clean_vlm_repetition_loops_and_docling_fallback():
+    """Verifies VLM repetition loop stripping and Docling non-furniture text recovery."""
+    from types import SimpleNamespace
+
+    from backend.services.extraction_postprocess import clean_vlm_repetition_loops
+
+    loop_headings = "\n\n".join(f"#### {chr(65 + (i % 26))}" for i in range(40))
+    raw_vlm = (
+        "## 8.3 Kristallgitter und Festkörperphysik\n\n"
+        "Festkörper besitzen eine regelmäßige Anordnung von Atomen im Raumgitter.\n\n"
+        f"{loop_headings}\n\n"
+        "####"
+    )
+    cleaned, had_loop = clean_vlm_repetition_loops(raw_vlm)
+    assert had_loop is True
+    assert "#### A" not in cleaned
+    assert "#### Z" not in cleaned
+    assert not cleaned.endswith("####")
+    assert "Festkörper besitzen eine regelmäßige Anordnung" in cleaned
+
+    docling_layout = SimpleNamespace(
+        text_blocks=[
+            {"type": "page_header", "text": "KAPITEL 8 FESTKÖRPERPHYSIK 293", "layer": "furniture"},
+            {"type": "section_header", "text": "8.3 Kristallgitter und Festkörperphysik", "layer": "body"},
+            {
+                "type": "text",
+                "text": "Festkörper besitzen eine regelmäßige Anordnung von Atomen im Raumgitter.",
+                "layer": "body",
+            },
+            {
+                "type": "text",
+                "text": "Durch Röntgenbeugung lassen sich die Netzebenenabstände präzise bestimmen.",
+                "layer": "body",
+            },
+            {
+                "type": "text",
+                "text": "Die Bragg-Gleichung beschreibt die Bedingung für konstruktive Interferenz.",
+                "layer": "body",
+            },
+        ]
+    )
+    fused = fuse_vlm_page_with_docling(
+        raw_vlm,
+        page_images=[],
+        phys_num=293,
+        docling_layout=docling_layout,
+    )
+    assert "((293))" in fused
+    assert "#### A" not in fused
+    assert "KAPITEL 8 FESTKÖRPERPHYSIK 293" not in fused
+    assert "Durch Röntgenbeugung lassen sich die Netzebenenabstände präzise bestimmen." in fused
+    assert "Die Bragg-Gleichung beschreibt die Bedingung für konstruktive Interferenz." in fused
+
+
+def test_filter_degenerate_diagram_tables_and_figure_bbox_overlap():
+    """Verifies 2a: rejection of degenerate diagram pipe tables and figure-overlapping TableFormer tables."""
+    from backend.services.extraction_postprocess import _is_degenerate_diagram_table
+
+    # < 2 rows (header only) -> degenerate
+    assert _is_degenerate_diagram_table("| x (ms) | y (mV) |\n| --- | --- |") is True
+    # All data rows have >= 50% empty/placeholder cells -> degenerate
+    assert _is_degenerate_diagram_table(
+        "| Zeit t | Spannung U |\n| --- | --- |\n| 0 | |\n| 5 | - |"
+    ) is True
+    # <= 3 rows with only empty/placeholder data cells -> degenerate
+    assert _is_degenerate_diagram_table(
+        "| Kanal A | Kanal B |\n| --- | --- |\n| ... | _..._ |\n| | – |"
+    ) is True
+    # Valid data table -> not degenerate
+    valid_tbl = "| Medium | Geschwindigkeit (km/s) |\n| --- | --- |\n| Luft | 300000 |\n| Wasser | 225000 |"
+    assert _is_degenerate_diagram_table(valid_tbl) is False
+
+    # Degenerate pipe table in VLM output is stripped, and Docling table overlapping figure bbox >= 35% is skipped
+    raw_vlm = (
+        "## 4.2 Messkurve im Koordinatensystem\n\n"
+        "| Achse X | Achse Y |\n"
+        "| --- | --- |\n"
+        "| | |\n\n"
+        "![](images/picture_0_0_abc.png)\n\n"
+        "Abbildung 4.2: Verlauf der Messgröße."
+    )
+    overlapping_chart_table = (
+        "| t in ms | U in mV |\n"
+        "| --- | --- |\n"
+        "| 1,0 | -70 |\n"
+        "| 2,0 | +30 |"
+    )
+    docling_layout = {
+        "layout_blocks": [
+            {
+                "type": "image",
+                "text": "![](images/picture_0_0_abc.png)",
+                "page_idx": 0,
+                "bbox_1000": [100, 200, 600, 700],
+            },
+            {
+                "type": "table",
+                "text": overlapping_chart_table,
+                "page_idx": 0,
+                "bbox_1000": [150, 250, 550, 650],
+            },
+        ]
+    }
+    fused = fuse_vlm_page_with_docling(
+        raw_vlm,
+        page_images=["picture_0_0_abc.png"],
+        phys_num=42,
+        page_tables=[overlapping_chart_table],
+        docling_layout=docling_layout,
+        page_idx=0,
+    )
+    assert "Achse X" not in fused
+    assert "t in ms" not in fused
+    assert "Abbildung 4.2: Verlauf der Messgröße." in fused
+
+
+def test_prevent_truncated_table_cells_during_vlm_docling_fusion():
+    """Verifies 2b: VLM table with complete cells is not overwritten by a truncated Docling table."""
+    vlm_md = (
+        "## 5.1 Messwerte im Überblick\n\n"
+        "| Probe | Temperatur (°C) | Leitfähigkeit (mS/cm) |\n"
+        "| --- | --- | --- |\n"
+        "| A | 20 | 1,45 |\n"
+        "| B | 40 | 2,10 |\n"
+        "| C | 60 | 2,85 |"
+    )
+    truncated_docling_table = (
+        "| Probe | Temperatur (°C) | Leitfähigkeit (mS/cm) |\n"
+        "| --- | --- | --- |\n"
+        "| A | 20 | 1,45 |\n"
+        "| B | 40 | 2,10 |\n"
+        "| C | 60 | |"
+    )
+    fused = fuse_vlm_page_with_docling(
+        vlm_md,
+        page_images=[],
+        phys_num=51,
+        page_tables=[truncated_docling_table],
+    )
+    assert "| C | 60 | 2,85 |" in fused
+    assert fused.count("| Probe |") == 1
+
+
+def test_suppress_nested_and_tiny_subfigure_crops():
+    """Verifies 3a: nested sub-crops (>= 65% overlap) are dropped and tiny fragments (< 1.2% page area) are merged."""
+    from backend.services.extraction_postprocess import _filter_page_figure_bboxes
+
+    # Page 1000x1000:
+    # Box 0: main composite diagram [100, 100, 600, 500] (area 200,000)
+    # Box 1: nested sub-panel inside Box 0 [120, 120, 350, 480] (100% contained in Box 0 -> dropped)
+    # Box 2: tiny icon/voltmeter symbol [610, 200, 660, 250] (area 2,500 = 0.25% < 1.2%, gap_x=10 < 50 -> merged into Box 0)
+    # Box 3: separate second figure at bottom [100, 650, 600, 900] (area 125,000 -> kept)
+    boxes = [
+        [100, 100, 600, 500],
+        [120, 120, 350, 480],
+        [610, 200, 660, 250],
+        [100, 650, 600, 900],
+    ]
+    surviving = _filter_page_figure_bboxes(boxes, page_width=1000.0, page_height=1000.0)
+    assert len(surviving) == 2
+    assert surviving[0][0] == 0
+    assert surviving[0][1] == (100.0, 100.0, 660.0, 500.0)
+    assert surviving[1][0] == 3
+    assert surviving[1][1] == (100.0, 650.0, 600.0, 900.0)
+
+
+def test_preserve_marginalia_and_glossary_definitions():
+    """Verifies 6a: margin glossary definitions and footnote markers are preserved even if labeled as furniture."""
+    from backend.services.extraction_postprocess import _is_marginalia_or_glossary_note
+
+    assert _is_marginalia_or_glossary_note("¹ Osmose: Gerichtete Diffusion durch eine Membran.") is True
+    assert _is_marginalia_or_glossary_note("^2 Katalysator beschleunigt chemische Reaktionen.") is True
+    assert _is_marginalia_or_glossary_note("1 Substrat bezeichnet den Ausgangsstoff einer Reaktion.") is True
+    assert _is_marginalia_or_glossary_note("Worterklärung: Homöostase bezeichnet das Gleichgewicht.") is True
+    assert _is_marginalia_or_glossary_note("500 KAPITEL 11. OPTIK") is False
+
+    raw_vlm = "## 3.4 Stofftransport durch Membranen\n\nSemipermeable Membranen lassen nur bestimmte Teilchen passieren."
+    docling_layout = {
+        "furniture_by_page": {
+            0: [
+                {"type": "page_header", "text": "KAPITEL 3 ZELLBIOLOGIE 84", "page_idx": 0},
+                {
+                    "type": "page_footer",
+                    "text": "¹ Semipermeabel: Halbdurchlässig für ausgewählte Moleküle.",
+                    "page_idx": 0,
+                },
+                {
+                    "type": "furniture",
+                    "text": "Worterklärung: Konzentrationsgefälle ist der Unterschied der Teilchendichte.",
+                    "page_idx": 0,
+                },
+            ]
+        },
+        "text_blocks_by_page": {
+            0: [
+                {
+                    "type": "text",
+                    "text": "Semipermeable Membranen lassen nur bestimmte Teilchen passieren.",
+                    "page_idx": 0,
+                }
+            ]
+        },
+    }
+    fused = fuse_vlm_page_with_docling(
+        raw_vlm,
+        page_images=[],
+        phys_num=84,
+        docling_layout=docling_layout,
+        page_idx=0,
+    )
+    assert "KAPITEL 3 ZELLBIOLOGIE 84" not in fused
+    assert "¹ Semipermeabel: Halbdurchlässig für ausgewählte Moleküle." in fused
+    assert "Worterklärung: Konzentrationsgefälle ist der Unterschied der Teilchendichte." in fused
+
+
+def test_vlm_diagram_prompt_and_custom_rules_prompt_strengthening():
+    """Verifies 3c: VLM coordinate diagram axis rules and Buchkonferenz custom rules prompt instructions."""
+    from backend.services.prompts import VLM_IMAGE_PROMPT, build_custom_rules_block
+
+    assert "x-Achse:" in VLM_IMAGE_PROMPT
+    assert "y-Achse:" in VLM_IMAGE_PROMPT
+    assert "<Bild>...</Bild>" in VLM_IMAGE_PROMPT
+
+    block = build_custom_rules_block("Aufgaben als ##### Überschrift 5 formatieren.")
+    assert "##### Aufgaben" in block
+    assert "#### M1" in block
+    assert "#### Stichwort" in block
+
+
 
 
 

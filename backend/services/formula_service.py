@@ -939,14 +939,40 @@ def standardize_formulas(markdown: str) -> str:
 
     text = re.sub(r"\$\$\s*([\s\S]*?)\s*\$\$", clean_display_math, text)
 
-    # 4. Clean inline math ($...$)
+    # 4. Clean inline math ($...$) and strip hallucinated OCR pseudo-formulas
     def clean_inline_math(match):
         inner = match.group(1).strip()
         if not inner or re.match(r"^\d+(?:[.,]\d+)?$", inner):
             return f"${inner}$"
         inner_cleaned = clean_latex_formula(inner)
+        if (
+            re.fullmatch(r"[A-Za-z0-9_{}\^]+", inner_cleaned)
+            and "_" in inner_cleaned
+            and len(re.findall(r"[A-Z]", inner_cleaned)) >= 3
+        ):
+            base_segs = [
+                seg
+                for seg in re.split(
+                    r"_\{?[0-9a-zA-Z,]+\}?|\^\{?[0-9+\-]+\}?", inner_cleaned
+                )
+                if seg
+            ]
+            el_tokens = re.findall(r"[A-Z][a-z]?", "".join(base_segs))
+            has_invalid_el = any(
+                el not in fc.VALID_CHEMICAL_ELEMENTS for el in el_tokens
+            ) and not any(
+                bio in inner_cleaned for bio in ("NAD", "FAD", "ATP", "ADP")
+            )
+            has_dup_caps = any(
+                re.search(r"([A-Z])\1", seg) and "COOH" not in seg
+                for seg in base_segs
+            )
+            has_sub_one = bool(re.search(r"_\{?1\}?", inner_cleaned))
+            if has_invalid_el or has_dup_caps or has_sub_one:
+                return ""
         return f"${inner_cleaned}$"
 
     text = re.sub(r"(?<!\\)\$(?!\$)([^\$\n]+?)(?<!\\)\$", clean_inline_math, text)
+    text = re.sub(r"(?<=\S)[ \t]{2,}(?=\S)", " ", text)
 
     return text

@@ -201,6 +201,243 @@ def is_bbox_inside_callout_rect(
     return False
 
 
+_LAST_DOCLING_LAYOUT: dict[str, Any] = {}
+
+_TABLE_PLACEHOLDER_CELLS: set[str] = {"", "...", "…", "_..._", "-", "–", "—"}
+
+_MARGINALIA_GLOSSARY_RE = re.compile(
+    r"^(?:"
+    r"[¹²³⁴⁵⁶⁷⁸⁹]+\s*\S"
+    r"|\^\d+\s+[A-ZÄÖÜa-zäöü]"
+    r"|[Ww]orterklärung\b"
+    r"|\d{1,2} [A-ZÄÖÜa-zäöü][a-zäöüß]+[^\n]*(?:[:.,;=–—]|\s+\S+\s+\S+)"
+    r")"
+)
+
+
+def _is_marginalia_or_glossary_note(text: str) -> bool:
+    """Checks whether a text item is a margin glossary definition or footnote explanation.
+
+    Args:
+        text: Candidate text block string.
+
+    Returns:
+        True if the text starts with a footnote/glossary marker or ``Worterklärung``
+        rather than a running header/footer.
+    """
+    s = (text or "").strip()
+    if not s or s.isupper():
+        return False
+    if re.match(r"^(?:\d+\s+)?(?:Kapitel|Chapter|Seite|Page|Teil|Abschnitt)\b", s, re.IGNORECASE):
+        return False
+    return bool(_MARGINALIA_GLOSSARY_RE.match(s))
+
+
+def _parse_pipe_table_rows(table_md: str) -> list[list[str]]:
+    """Parses a Markdown pipe table into a list of cell lists, excluding separator rows.
+
+    Args:
+        table_md: Markdown pipe table string.
+
+    Returns:
+        List of rows, where each row is a list of stripped cell strings.
+    """
+    rows: list[list[str]] = []
+    for raw_line in (table_md or "").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or "|" not in stripped:
+            continue
+        inner = stripped.strip("|").strip()
+        if re.match(r"^[\s\|:\-]+$", inner):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        rows.append(cells)
+    return rows
+
+
+def _is_degenerate_diagram_table(table_md: str) -> bool:
+    """Detects false-positive TableFormer pipe tables extracted from diagram/chart axes.
+
+    Args:
+        table_md: Candidate Markdown pipe table string.
+
+    Returns:
+        True if the table has fewer than 2 rows (no data rows), or if all data rows
+        have at least 50% empty/placeholder cells, or if a short table (<= 3 rows)
+        has only empty/placeholder data cells.
+    """
+    rows = _parse_pipe_table_rows(table_md)
+    if len(rows) < 2:
+        if (
+            len(rows) == 1
+            and len([c for c in rows[0] if c]) >= 2
+            and all(re.match(r"^\*?\*?\d+\.\s+\S", c) for c in rows[0] if c)
+        ):
+            return False
+        return True
+    data_rows = rows[1:]
+    if all(
+        not row or sum(1 for c in row if c in _TABLE_PLACEHOLDER_CELLS) / len(row) >= 0.5
+        for row in data_rows
+    ):
+        return True
+    if len(rows) <= 3 and all(c in _TABLE_PLACEHOLDER_CELLS for row in data_rows for c in row):
+        return True
+    return False
+
+
+def _extract_rect_coords(box: Any) -> tuple[float, float, float, float] | None:
+    """Normalizes a bbox object or 4-tuple/list into ``(x0, y0, x1, y1)`` with ``x0 <= x1, y0 <= y1``.
+
+    Args:
+        box: A 4-element sequence ``[x0, y0, x1, y1]`` or object with ``l, b, r, t`` attributes.
+
+    Returns:
+        Normalized ``(x0, y0, x1, y1)`` tuple, or ``None`` if invalid.
+    """
+    if box is None:
+        return None
+    if isinstance(box, (list, tuple)) and len(box) >= 4:
+        x0, y0, x1, y1 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+    elif all(hasattr(box, attr) for attr in ("l", "b", "r", "t")):
+        x0, y0, x1, y1 = float(box.l), float(box.b), float(box.r), float(box.t)
+    else:
+        return None
+    return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
+def _bbox_overlap_ratio(box_a: Any, box_b: Any) -> float:
+    """Computes the fraction of ``box_a``'s area that intersects with ``box_b``.
+
+    Args:
+        box_a: First bounding box (sequence or bbox object).
+        box_b: Second bounding box (sequence or bbox object).
+
+    Returns:
+        Intersection area divided by ``area(box_a)`` in ``[0.0, 1.0]``.
+    """
+    ra = _extract_rect_coords(box_a)
+    rb = _extract_rect_coords(box_b)
+    if ra is None or rb is None:
+        return 0.0
+    ax0, ay0, ax1, ay1 = ra
+    bx0, by0, bx1, by1 = rb
+    area_a = max(0.0, ax1 - ax0) * max(0.0, ay1 - ay0)
+    if area_a <= 0.0:
+        return 0.0
+    ix0 = max(ax0, bx0)
+    iy0 = max(ay0, by0)
+    ix1 = min(ax1, bx1)
+    iy1 = min(ay1, by1)
+    inter = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+    return inter / area_a
+
+
+def _filter_page_figure_bboxes(
+    bboxes: list[Any],
+    page_width: float = 1000.0,
+    page_height: float = 1000.0,
+) -> list[tuple[int, tuple[float, float, float, float]]]:
+    """Filters nested sub-figure crops and merges tiny icon/label fragments on a page.
+
+    1. Drops any box A contained inside a larger box B on the same page
+       (``intersection_area / area(A) >= 0.65``).
+    2. When a page has 3 or more figure boxes and one of them has a tiny area
+       (``< 1.2%`` of page area) and is spatially close (``< 5%`` page width/height gap)
+       or overlapping another figure box, merges its bounding box into the neighboring
+       figure box rather than emitting a standalone crop.
+
+    Args:
+        bboxes: List of candidate figure bounding boxes on the page.
+        page_width: Page width in the same coordinate system as ``bboxes``.
+        page_height: Page height in the same coordinate system as ``bboxes``.
+
+    Returns:
+        List of ``(original_index, (x0, y0, x1, y1))`` for surviving figure boxes.
+    """
+    indexed_rects: list[tuple[int, tuple[float, float, float, float]]] = []
+    for idx, b in enumerate(bboxes):
+        rect = _extract_rect_coords(b)
+        if rect is not None:
+            indexed_rects.append((idx, rect))
+    if len(indexed_rects) <= 1:
+        return indexed_rects
+
+    pw = page_width if page_width > 0 else 1000.0
+    ph = page_height if page_height > 0 else 1000.0
+    page_area = pw * ph
+    initial_count = len(indexed_rects)
+
+    def _rect_area(r: tuple[float, float, float, float]) -> float:
+        return max(0.0, r[2] - r[0]) * max(0.0, r[3] - r[1])
+
+    def _drop_contained(
+        items: list[tuple[int, tuple[float, float, float, float]]],
+    ) -> list[tuple[int, tuple[float, float, float, float]]]:
+        kept: list[tuple[int, tuple[float, float, float, float]]] = []
+        for i, (idx_a, rect_a) in enumerate(items):
+            area_a = _rect_area(rect_a)
+            contained = False
+            for j, (idx_b, rect_b) in enumerate(items):
+                if i == j:
+                    continue
+                area_b = _rect_area(rect_b)
+                if area_b > area_a or (area_b == area_a and idx_b < idx_a):
+                    if _bbox_overlap_ratio(rect_a, rect_b) >= 0.65:
+                        contained = True
+                        break
+            if not contained:
+                kept.append((idx_a, rect_a))
+        return kept
+
+    surviving = _drop_contained(indexed_rects)
+
+    if initial_count >= 3 and len(surviving) >= 2:
+        tiny_threshold = 0.012 * page_area
+        max_gap_x = 0.05 * pw
+        max_gap_y = 0.05 * ph
+        rects_by_pos = [list(item) for item in surviving]
+        dropped_positions: set[int] = set()
+
+        for i, (_idx_a, rect_a) in enumerate(rects_by_pos):
+            if i in dropped_positions:
+                continue
+            if _rect_area(rect_a) >= tiny_threshold:
+                continue
+            ax0, ay0, ax1, ay1 = rect_a
+            best_j: int | None = None
+            best_dist = float("inf")
+            for j, (_idx_b, rect_b) in enumerate(rects_by_pos):
+                if i == j or j in dropped_positions:
+                    continue
+                bx0, by0, bx1, by1 = rect_b
+                gap_x = max(0.0, max(ax0, bx0) - min(ax1, bx1))
+                gap_y = max(0.0, max(ay0, by0) - min(ay1, by1))
+                if gap_x < max_gap_x and gap_y < max_gap_y:
+                    dist = gap_x + gap_y
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_j = j
+            if best_j is not None:
+                bx0, by0, bx1, by1 = rects_by_pos[best_j][1]
+                rects_by_pos[best_j][1] = (
+                    min(bx0, ax0),
+                    min(by0, ay0),
+                    max(bx1, ax1),
+                    max(by1, ay1),
+                )
+                dropped_positions.add(i)
+
+        surviving = [
+            (int(item[0]), item[1])
+            for k, item in enumerate(rects_by_pos)
+            if k not in dropped_positions
+        ]
+        surviving = _drop_contained(surviving)
+
+    return surviving
+
+
 def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any]:
     """Run hybrid Docling CPU Layout & TableFormer extraction in a single pass.
 
@@ -209,9 +446,12 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
       - tables_by_page: {page_idx: [markdown_table, ...]}
       - furniture_by_page: {page_idx: [{"type": str, "text": str, "page_idx": int}, ...]}
       - heading_blocks: [{"type": "title", "text": str, "text_level": 1, "page_idx": int, "bbox": [0, 0, w, h], "is_body_sized": bool}, ...]
+      - text_blocks: [{"type": str, "text": str, "page_idx": int}, ...]
+      - text_blocks_by_page: {page_idx: [{"type": str, "text": str, "page_idx": int}, ...]}
       - opening_headers_by_page: {page_idx: [heading_str, ...]} for chapter/section titles placed in the PDF running header
       - body_line_height: float
     """
+    global _LAST_DOCLING_LAYOUT
     os.makedirs(images_dir, exist_ok=True)
     result: dict[str, Any] = {
         "pictures_by_page": {},
@@ -219,6 +459,8 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
         "furniture_by_page": {},
         "heading_blocks": [],
         "layout_blocks": [],
+        "text_blocks": [],
+        "text_blocks_by_page": {},
         "opening_headers_by_page": {},
         "body_line_height": 0.0,
     }
@@ -278,7 +520,87 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                     if getattr(sz, "width", 0) and getattr(sz, "height", 0):
                         page_sizes_by_idx[p_idx] = (float(sz.width), float(sz.height))
 
-        # 1. Tables per page
+        # 1. Pictures per page (filtered for nested sub-crops and tiny composite fragments)
+        figure_bboxes_1000_by_page: dict[int, list[list[int]]] = {}
+        figure_raw_rects_by_page: dict[int, list[tuple[float, float, float, float]]] = {}
+        if getattr(doc, "pictures", None):
+            pics_by_page_raw: dict[int, list[tuple[int, Any, Any]]] = {}
+            for idx, pic in enumerate(doc.pictures):
+                p_no = 1
+                pic_bbox_obj = None
+                if getattr(pic, "prov", None) and len(pic.prov) > 0:
+                    p_no = pic.prov[0].page_no
+                    pic_bbox_obj = pic.prov[0].bbox
+                p_idx = max(0, p_no - 1)
+                pics_by_page_raw.setdefault(p_idx, []).append((idx, pic, pic_bbox_obj))
+
+            from types import SimpleNamespace
+
+            for p_idx, page_pic_entries in pics_by_page_raw.items():
+                pw_p, ph_p = page_sizes_by_idx.get(p_idx, (595.0, 842.0))
+                if len(page_pic_entries) > 1 and all(entry[2] is not None for entry in page_pic_entries):
+                    surviving_boxes = _filter_page_figure_bboxes(
+                        [entry[2] for entry in page_pic_entries],
+                        page_width=pw_p if pw_p > 0 else 595.0,
+                        page_height=ph_p if ph_p > 0 else 842.0,
+                    )
+                    filtered_entries: list[tuple[int, Any, Any]] = []
+                    for rel_idx, merged_rect in surviving_boxes:
+                        orig_idx, orig_pic, orig_bbox = page_pic_entries[rel_idx]
+                        orig_rect = _extract_rect_coords(orig_bbox)
+                        if orig_rect is not None and merged_rect != orig_rect:
+                            coord_origin = getattr(orig_bbox, "coord_origin", None)
+                            merged_bbox = SimpleNamespace(
+                                l=merged_rect[0],
+                                b=merged_rect[1],
+                                r=merged_rect[2],
+                                t=merged_rect[3],
+                                coord_origin=coord_origin,
+                            )
+                            filtered_entries.append((orig_idx, orig_pic, merged_bbox))
+                        else:
+                            filtered_entries.append((orig_idx, orig_pic, orig_bbox))
+                else:
+                    filtered_entries = page_pic_entries
+
+                for idx, pic, pic_bbox_obj in filtered_entries:
+                    try:
+                        pil_img = pic.get_image(doc)
+                        if pil_img is not None and pil_img.width >= 30 and pil_img.height >= 30:
+                            if pic_bbox_obj is not None and pdf_doc_shared is not None and p_idx < len(pdf_doc_shared):
+                                vec_img = render_pdf_figure_crop(
+                                    pdf_doc_shared[p_idx],
+                                    pic_bbox_obj,
+                                    target_longest_edge=2048,
+                                )
+                                if vec_img is not None:
+                                    pil_img = vec_img
+                            img_bytes = pil_img.tobytes()
+                            img_hash = hashlib.sha256(img_bytes).hexdigest()[:16]
+                            img_filename = f"picture_{p_idx}_{idx}_{img_hash}.png"
+                            img_path = os.path.join(images_dir, img_filename)
+                            pil_img.save(img_path, format="PNG")
+                            result["pictures_by_page"].setdefault(p_idx, []).append(img_filename)
+                            raw_rect = _extract_rect_coords(pic_bbox_obj)
+                            if raw_rect is not None:
+                                figure_raw_rects_by_page.setdefault(p_idx, []).append(raw_rect)
+                            pic_bbox_1000 = (
+                                normalize_bbox_to_1000(pic_bbox_obj, pw_p, ph_p)
+                                if pic_bbox_obj
+                                else None
+                            )
+                            if pic_bbox_1000 is not None:
+                                figure_bboxes_1000_by_page.setdefault(p_idx, []).append(pic_bbox_1000)
+                                result["layout_blocks"].append({
+                                    "type": "image",
+                                    "text": f"![](images/{img_filename})",
+                                    "page_idx": p_idx,
+                                    "bbox_1000": pic_bbox_1000,
+                                })
+                    except Exception:
+                        pass
+
+        # 2. Tables per page (excluding degenerate diagram tables and tables overlapping figures >= 35%)
         if getattr(doc, "tables", None):
             for t_item in doc.tables:
                 p_no = 1
@@ -289,55 +611,31 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                 p_idx = max(0, p_no - 1)
                 try:
                     t_md = t_item.export_to_markdown(doc=doc).strip()
-                    if t_md and "|" in t_md:
-                        result["tables_by_page"].setdefault(p_idx, []).append(t_md)
-                        pw_t, ph_t = page_sizes_by_idx.get(p_idx, (0.0, 0.0))
-                        t_bbox_1000 = normalize_bbox_to_1000(t_bbox_obj, pw_t, ph_t) if t_bbox_obj else None
-                        if t_bbox_1000 is not None:
-                            result["layout_blocks"].append({
-                                "type": "table",
-                                "text": t_md,
-                                "page_idx": p_idx,
-                                "bbox_1000": t_bbox_1000,
-                            })
-                except Exception:
-                    pass
-
-        # 2. Pictures per page
-        if getattr(doc, "pictures", None):
-            for idx, pic in enumerate(doc.pictures):
-                p_no = 1
-                pic_bbox_obj = None
-                if getattr(pic, "prov", None) and len(pic.prov) > 0:
-                    p_no = pic.prov[0].page_no
-                    pic_bbox_obj = pic.prov[0].bbox
-                p_idx = max(0, p_no - 1)
-                try:
-                    pil_img = pic.get_image(doc)
-                    if pil_img is not None and pil_img.width >= 30 and pil_img.height >= 30:
-                        if pic_bbox_obj is not None and pdf_doc_shared is not None and p_idx < len(pdf_doc_shared):
-                            vec_img = render_pdf_figure_crop(
-                                pdf_doc_shared[p_idx],
-                                pic_bbox_obj,
-                                target_longest_edge=2048,
-                            )
-                            if vec_img is not None:
-                                pil_img = vec_img
-                        img_bytes = pil_img.tobytes()
-                        img_hash = hashlib.sha256(img_bytes).hexdigest()[:16]
-                        img_filename = f"picture_{p_idx}_{idx}_{img_hash}.png"
-                        img_path = os.path.join(images_dir, img_filename)
-                        pil_img.save(img_path, format="PNG")
-                        result["pictures_by_page"].setdefault(p_idx, []).append(img_filename)
-                        pw_p, ph_p = page_sizes_by_idx.get(p_idx, (0.0, 0.0))
-                        pic_bbox_1000 = normalize_bbox_to_1000(pic_bbox_obj, pw_p, ph_p) if pic_bbox_obj else None
-                        if pic_bbox_1000 is not None:
-                            result["layout_blocks"].append({
-                                "type": "image",
-                                "text": f"![](images/{img_filename})",
-                                "page_idx": p_idx,
-                                "bbox_1000": pic_bbox_1000,
-                            })
+                    if not t_md or "|" not in t_md or _is_degenerate_diagram_table(t_md):
+                        continue
+                    pw_t, ph_t = page_sizes_by_idx.get(p_idx, (0.0, 0.0))
+                    t_bbox_1000 = normalize_bbox_to_1000(t_bbox_obj, pw_t, ph_t) if t_bbox_obj else None
+                    overlaps_figure = False
+                    if t_bbox_1000 is not None:
+                        for fig_bbox in figure_bboxes_1000_by_page.get(p_idx, []):
+                            if _bbox_overlap_ratio(t_bbox_1000, fig_bbox) >= 0.35:
+                                overlaps_figure = True
+                                break
+                    if not overlaps_figure and t_bbox_obj is not None:
+                        for fig_rect in figure_raw_rects_by_page.get(p_idx, []):
+                            if _bbox_overlap_ratio(t_bbox_obj, fig_rect) >= 0.35:
+                                overlaps_figure = True
+                                break
+                    if overlaps_figure:
+                        continue
+                    result["tables_by_page"].setdefault(p_idx, []).append(t_md)
+                    if t_bbox_1000 is not None:
+                        result["layout_blocks"].append({
+                            "type": "table",
+                            "text": t_md,
+                            "page_idx": p_idx,
+                            "bbox_1000": t_bbox_1000,
+                        })
                 except Exception:
                     pass
 
@@ -373,7 +671,9 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
             pw_i, ph_i = page_sizes_by_idx.get(p_idx, (0.0, 0.0))
             bbox_1000 = normalize_bbox_to_1000(bbox_obj, pw_i, ph_i) if bbox_obj else None
 
-            if layer == ContentLayer.FURNITURE or lbl in ("page_header", "page_footer"):
+            if (
+                layer == ContentLayer.FURNITURE or lbl in ("page_header", "page_footer", "furniture")
+            ) and not _is_marginalia_or_glossary_note(txt):
                 f_type = "page_header" if "header" in lbl else "page_footer"
                 furn_entry: dict[str, Any] = {
                     "type": f_type,
@@ -388,6 +688,19 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                     if open_hdr:
                         result["opening_headers_by_page"].setdefault(p_idx, []).append(open_hdr)
                 continue
+
+            effective_lbl = (
+                "text" if lbl in ("page_header", "page_footer", "furniture") else lbl
+            )
+            tb_entry: dict[str, Any] = {
+                "type": effective_lbl,
+                "text": txt,
+                "page_idx": p_idx,
+            }
+            if bbox_1000 is not None:
+                tb_entry["bbox_1000"] = bbox_1000
+            result["text_blocks"].append(tb_entry)
+            result["text_blocks_by_page"].setdefault(p_idx, []).append(tb_entry)
 
             if lbl in ("text", "list_item") and 5.0 <= h <= 18.0 and 15 <= len(txt) <= 75 and w >= 80:
                 body_heights.append(h)
@@ -434,25 +747,157 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
     except Exception as e:
         logger.warning(f"Docling page layout extraction fallback: {e}")
 
+    _LAST_DOCLING_LAYOUT = result
     return result
+
+
+def _format_pipe_table_from_rows(rows: list[list[str]]) -> str:
+    """Formats a 2D list of cell strings as a standard Markdown pipe table.
+
+    Args:
+        rows: Non-empty list of table rows (header row first, followed by data rows).
+
+    Returns:
+        Formatted Markdown pipe table string.
+    """
+    if not rows:
+        return ""
+    max_cols = max((len(r) for r in rows), default=0)
+    if max_cols == 0:
+        return ""
+    out: list[str] = []
+    for r_idx, row in enumerate(rows):
+        padded = row + [""] * (max_cols - len(row))
+        out.append("| " + " | ".join(padded) + " |")
+        if r_idx == 0:
+            out.append("| " + " | ".join(["---"] * max_cols) + " |")
+    return "\n".join(out)
+
+
+def _merge_or_select_better_pipe_table(vlm_table_md: str, docling_table_md: str) -> str:
+    """Selects or merges a VLM pipe table and a Docling TableFormer pipe table without cell truncation.
+
+    Compares the count of non-empty data cells and checks whether the Docling table
+    has empty trailing cells in its last row where the VLM table has values. Backfills
+    any empty cells in the selected table from the counterpart when dimensions match.
+
+    Args:
+        vlm_table_md: Markdown pipe table extracted by the VLM.
+        docling_table_md: Markdown pipe table extracted by Docling TableFormer.
+
+    Returns:
+        The more complete pipe table with any missing cells backfilled.
+    """
+    vlm_rows = _parse_pipe_table_rows(vlm_table_md)
+    doc_rows = _parse_pipe_table_rows(docling_table_md)
+    if not doc_rows:
+        return vlm_table_md
+    if not vlm_rows:
+        return docling_table_md
+
+    vlm_non_empty = sum(
+        1 for r in vlm_rows[1:] for c in r if c not in _TABLE_PLACEHOLDER_CELLS
+    )
+    doc_non_empty = sum(
+        1 for r in doc_rows[1:] for c in r if c not in _TABLE_PLACEHOLDER_CELLS
+    )
+
+    doc_has_truncated_tail = False
+    if len(vlm_rows) >= 2 and len(doc_rows) >= 2:
+        vlm_last = vlm_rows[-1]
+        doc_last = doc_rows[-1]
+        for idx_c in range(min(len(vlm_last), len(doc_last))):
+            if (
+                doc_last[idx_c] in _TABLE_PLACEHOLDER_CELLS
+                and vlm_last[idx_c] not in _TABLE_PLACEHOLDER_CELLS
+            ):
+                doc_has_truncated_tail = True
+                break
+        if len(vlm_last) > len(doc_last) and any(
+            c not in _TABLE_PLACEHOLDER_CELLS for c in vlm_last[len(doc_last) :]
+        ):
+            doc_has_truncated_tail = True
+
+    prefer_vlm = vlm_non_empty > doc_non_empty or doc_has_truncated_tail
+    primary = [list(r) for r in (vlm_rows if prefer_vlm else doc_rows)]
+    secondary = doc_rows if prefer_vlm else vlm_rows
+
+    if len(primary) == len(secondary):
+        for r_i in range(len(primary)):
+            max_c = max(len(primary[r_i]), len(secondary[r_i]))
+            while len(primary[r_i]) < max_c:
+                primary[r_i].append("")
+            for c_i in range(len(secondary[r_i])):
+                if (
+                    primary[r_i][c_i] in _TABLE_PLACEHOLDER_CELLS
+                    and secondary[r_i][c_i] not in _TABLE_PLACEHOLDER_CELLS
+                ):
+                    primary[r_i][c_i] = secondary[r_i][c_i]
+
+    return _format_pipe_table_from_rows(primary)
 
 
 def _enrich_flattened_tables_with_docling(cleaned_text: str, page_tables: list[str]) -> str:
     """Replaces VLM-flattened borderless tables in ``cleaned_text`` with structured
-    Markdown pipe tables from Docling's TableFormer, or appends missed tables.
+    Markdown pipe tables from Docling's TableFormer, merges/preserves non-truncated VLM
+    pipe tables, or appends missed non-degenerate tables.
     """
-    if not page_tables:
+    valid_page_tables = [
+        t_md for t_md in (page_tables or []) if t_md and not _is_degenerate_diagram_table(t_md)
+    ]
+    if not valid_page_tables:
         return cleaned_text
 
     if "|" not in cleaned_text:
-        return cleaned_text.strip() + "\n\n" + "\n\n".join(page_tables)
+        return cleaned_text.strip() + "\n\n" + "\n\n".join(valid_page_tables)
 
-    # Check each Docling table: if its distinct cell tokens are absent from existing pipe tables
-    # but appear as plain text lines, append or splice the table.
+    pipe_block_re = re.compile(r"(?:^[ \t]*\|[^\n]+\|[ \t]*(?:\n|$)){2,}", re.MULTILINE)
+    existing_matches = list(pipe_block_re.finditer(cleaned_text))
+    matched_docling_indices: set[int] = set()
+
+    if existing_matches:
+        replacements: list[tuple[int, int, str]] = []
+        for m in existing_matches:
+            vlm_tbl = m.group(0).strip()
+            vlm_tokens = {
+                re.sub(r"\W+", "", c.lower())
+                for r in _parse_pipe_table_rows(vlm_tbl)
+                for c in r
+                if len(re.sub(r"\W+", "", c)) >= 2
+            }
+            best_t_idx: int | None = None
+            best_overlap = 0
+            for t_idx, doc_tbl in enumerate(valid_page_tables):
+                if t_idx in matched_docling_indices:
+                    continue
+                doc_tokens = {
+                    re.sub(r"\W+", "", c.lower())
+                    for r in _parse_pipe_table_rows(doc_tbl)
+                    for c in r
+                    if len(re.sub(r"\W+", "", c)) >= 2
+                }
+                overlap = len(vlm_tokens & doc_tokens)
+                min_needed = max(1, min(len(vlm_tokens), len(doc_tokens)) // 3)
+                if overlap >= min_needed and overlap > best_overlap:
+                    best_overlap = overlap
+                    best_t_idx = t_idx
+            if best_t_idx is not None:
+                matched_docling_indices.add(best_t_idx)
+                merged_tbl = _merge_or_select_better_pipe_table(
+                    vlm_tbl, valid_page_tables[best_t_idx]
+                )
+                trailing_nl = "\n" if m.group(0).endswith("\n") else ""
+                replacements.append((m.start(), m.end(), merged_tbl + trailing_nl))
+
+        for start_i, end_i, repl_str in reversed(replacements):
+            cleaned_text = cleaned_text[:start_i] + repl_str + cleaned_text[end_i:]
+
     existing_pipe_lines = "\n".join(
         ln for ln in cleaned_text.splitlines() if ln.strip().startswith("|")
     ).lower()
-    for t_md in page_tables:
+    for t_idx, t_md in enumerate(valid_page_tables):
+        if t_idx in matched_docling_indices:
+            continue
         cells = [
             c.strip()
             for r in t_md.splitlines()
@@ -468,26 +913,160 @@ def _enrich_flattened_tables_with_docling(cleaned_text: str, page_tables: list[s
     return cleaned_text
 
 
+def clean_vlm_repetition_loops(vlm_md: str) -> tuple[str, bool]:
+    r"""Detect and strip degenerate VLM-OCR token repetition loops and empty headings.
+
+    Detects runs of 8 or more consecutive short headings (e.g. ``#### A``,
+    ``#### B``, ... or single-token headings ``#{1,6}\s+\S{1,3}$``), identical or
+    cycling short lines repeated 8 or more times in a row, and standalone empty
+    headings (``#{1,6}\s*$``).
+
+    Args:
+        vlm_md: Raw or partially cleaned VLM page Markdown string.
+
+    Returns:
+        Tuple ``(cleaned_markdown, had_loop)`` where ``had_loop`` is True if a
+        degenerate repetition run of 8 or more lines was detected and truncated.
+    """
+    if not vlm_md:
+        return vlm_md, False
+
+    lines = vlm_md.splitlines()
+    non_empty: list[tuple[int, str]] = [
+        (idx, lines[idx].strip()) for idx in range(len(lines)) if lines[idx].strip()
+    ]
+    if not non_empty:
+        return "", False
+
+    short_heading_re = re.compile(r"^#{1,6}(?:\s+\S{1,3})?\s*$")
+    empty_heading_re = re.compile(r"^#{1,6}\s*$")
+    short_token_line_re = re.compile(r"^(?:#{1,6}\s*)?[A-Za-z0-9äöüÄÖÜß]{1,3}[\.\)\:]?$")
+    structural_prefix = ("((", "|", "![", "<", "```")
+
+    drop_line_indices: set[int] = set()
+    had_loop = False
+
+    n_ne = len(non_empty)
+    k = 0
+    while k < n_ne:
+        line_idx, s = non_empty[k]
+        if short_heading_re.match(s):
+            m = k + 1
+            while m < n_ne and short_heading_re.match(non_empty[m][1]):
+                m += 1
+            if m - k >= 8:
+                had_loop = True
+                start_l = non_empty[k][0]
+                end_l = non_empty[m - 1][0]
+                for d_i in range(start_l, end_l + 1):
+                    drop_line_indices.add(d_i)
+                k = m
+                continue
+
+        if not s.startswith(structural_prefix) and short_token_line_re.match(s):
+            m = k + 1
+            while (
+                m < n_ne
+                and not non_empty[m][1].startswith(structural_prefix)
+                and (short_token_line_re.match(non_empty[m][1]) or empty_heading_re.match(non_empty[m][1]))
+            ):
+                m += 1
+            if m - k >= 8:
+                had_loop = True
+                start_l = non_empty[k][0]
+                end_l = non_empty[m - 1][0]
+                for d_i in range(start_l, end_l + 1):
+                    drop_line_indices.add(d_i)
+                k = m
+                continue
+
+        if not s.startswith(structural_prefix):
+            matched_cycle = False
+            for period in (1, 2, 3, 4):
+                if k + 8 > n_ne:
+                    break
+                m = k + period
+                while (
+                    m < n_ne
+                    and not non_empty[m][1].startswith(structural_prefix)
+                    and non_empty[m][1] == non_empty[k + ((m - k) % period)][1]
+                ):
+                    m += 1
+                if m - k >= 8:
+                    had_loop = True
+                    start_l = non_empty[k][0]
+                    end_l = non_empty[m - 1][0]
+                    for d_i in range(start_l, end_l + 1):
+                        drop_line_indices.add(d_i)
+                    k = m
+                    matched_cycle = True
+                    break
+            if matched_cycle:
+                continue
+
+        k += 1
+
+    surviving_lines: list[str] = []
+    for idx, raw_line in enumerate(lines):
+        if idx in drop_line_indices:
+            continue
+        if empty_heading_re.match(raw_line.strip()):
+            continue
+        surviving_lines.append(raw_line)
+
+    cleaned = "\n".join(surviving_lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, had_loop
+
+
 def fuse_vlm_page_with_docling(
     raw_text: str,
     page_images: list[str],
     phys_num: int | str,
     page_tables: list[str] | None = None,
     opening_headers: list[str] | None = None,
+    docling_layout: Any = None,
+    page_idx: int | None = None,
 ) -> str:
     r"""Fuse a raw VLM OCR page with Docling layout crops, tables, and running header/footer stripping.
 
-    1. Strips code fences, cleans HTML layout wrappers, unescapes \$...\$, and converts HTML <table> to pipe tables.
+    1. Strips degenerate VLM repetition loops, code fences, and HTML layout wrappers; unescapes \$...\$; converts HTML <table> to pipe tables.
     2. Strips running footers / lone page numbers and all-caps running top headers (while rescuing opening chapter banners).
-    3. Deduplicates repeated figure captions and unwraps heading/italic formatting on captions.
-    4. Matches Docling-cropped layout figures (page_images) to inline placeholders and figure captions.
-    5. Fuses borderless tables from Docling TableFormer (page_tables) when missed by the VLM.
-    6. Repairs broken intra-line hyphenations and injects the physical page marker ((phys_num)).
-    """
-    cleaned_text = clean_markdown_fences(fix_escaped_dollars(raw_text))
-    cleaned_text = convert_html_tables_to_markdown(cleaned_text)
+    3. Recovers missing non-furniture Docling text blocks when a VLM repetition loop truncated the page.
+    4. Deduplicates repeated figure captions and unwraps heading/italic formatting on captions.
+    5. Matches Docling-cropped layout figures (page_images) to inline placeholders and figure captions.
+    6. Fuses borderless tables from Docling TableFormer (page_tables) when missed by the VLM.
+    7. Repairs broken intra-line hyphenations and injects the physical page marker ((phys_num)).
 
-    # 1. Strip running footers / page numbers at start or end of page
+    Args:
+        raw_text: Raw VLM OCR Markdown text for a single page.
+        page_images: Extracted Docling picture filenames on this page.
+        phys_num: Physical printed page number or Roman label.
+        page_tables: Optional Docling TableFormer pipe tables on this page.
+        opening_headers: Optional chapter/section opening headers from FURNITURE.
+        docling_layout: Optional Docling layout dict or object containing ``text_blocks`` for fallback recovery.
+        page_idx: Optional 0-based page index when ``docling_layout`` is multi-page.
+
+    Returns:
+        Fused and post-processed page Markdown string.
+    """
+    from backend.services.fibs_postprocess import normalize_heading_page_markers
+
+    loop_cleaned_text, had_loop = clean_vlm_repetition_loops(raw_text)
+    cleaned_text = clean_markdown_fences(fix_escaped_dollars(loop_cleaned_text))
+    cleaned_text = convert_html_tables_to_markdown(cleaned_text)
+    cleaned_text = normalize_heading_page_markers(cleaned_text)
+
+    # Strip degenerate diagram pipe tables already present in VLM output
+    cleaned_text = re.sub(
+        r"(?:^[ \t]*\|[^\n]+\|[ \t]*(?:\n|$))+",
+        lambda m: "" if _is_degenerate_diagram_table(m.group(0)) else m.group(0),
+        cleaned_text,
+        flags=re.MULTILINE,
+    )
+    cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text).strip()
+
+    # 1. Strip running footers / page numbers at start or end of page (preserving marginalia/glossary notes)
     phys_str = str(phys_num).strip()
     generic_footer_patterns = [
         r"^\s*\d{1,4}\s*\n+",
@@ -506,7 +1085,9 @@ def fuse_vlm_page_with_docling(
             ]
         )
     for fp in generic_footer_patterns:
-        cleaned_text = re.sub(fp, "", cleaned_text, flags=re.IGNORECASE)
+        m_fp = re.search(fp, cleaned_text, flags=re.IGNORECASE)
+        if m_fp and not _is_marginalia_or_glossary_note(m_fp.group(0).strip()):
+            cleaned_text = cleaned_text[: m_fp.start()] + cleaned_text[m_fp.end() :]
 
     # 2. Strip running top headers (preserving chapter/section opening headers on their first page)
     first_line = cleaned_text.strip().splitlines()[0].strip() if cleaned_text.strip() else ""
@@ -531,6 +1112,139 @@ def fuse_vlm_page_with_docling(
             for oh in reversed(opening_headers):
                 if oh.lstrip("#").strip().lower() not in cleaned_text.lower():
                     cleaned_text = f"{oh}\n\n{cleaned_text.strip()}"
+
+    # 2b. Recover missing non-furniture Docling text blocks (when a VLM repetition loop truncated the page)
+    #     and always preserve marginalia/glossary notes even if Docling labeled them as furniture.
+    effective_layout = docling_layout if docling_layout is not None else _LAST_DOCLING_LAYOUT
+    inferred_p_idx = page_idx
+    if inferred_p_idx is None and page_images:
+        for fn in page_images:
+            m_p = re.match(r"^picture_(\d+)_", os.path.basename(fn))
+            if m_p:
+                inferred_p_idx = int(m_p.group(1))
+                break
+
+    if effective_layout:
+        candidate_blocks: list[Any] = []
+        furniture_norms: set[str] = set()
+        if isinstance(effective_layout, dict):
+            furn_by_page = effective_layout.get("furniture_by_page") or {}
+            for f_p_idx, f_list in furn_by_page.items():
+                for f_item in f_list or []:
+                    f_txt = (f_item.get("text") if isinstance(f_item, dict) else str(f_item)) or ""
+                    if not f_txt.strip():
+                        continue
+                    if _is_marginalia_or_glossary_note(f_txt):
+                        if inferred_p_idx is None or f_p_idx == inferred_p_idx:
+                            candidate_blocks.append(
+                                {"type": "text", "text": f_txt.strip(), "page_idx": f_p_idx}
+                            )
+                    else:
+                        furniture_norms.add(re.sub(r"\W+", " ", f_txt).strip().lower())
+
+            tb_by_page = effective_layout.get("text_blocks_by_page") or {}
+            if inferred_p_idx is not None and inferred_p_idx in tb_by_page:
+                candidate_blocks.extend(tb_by_page[inferred_p_idx])
+            elif tb_by_page and len(tb_by_page) == 1:
+                candidate_blocks.extend(next(iter(tb_by_page.values())))
+            elif tb_by_page and cleaned_text.strip():
+                surv_words = set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{4,}", cleaned_text.lower()))
+                best_p = None
+                best_overlap = 0
+                for cand_p, p_blocks in tb_by_page.items():
+                    p_txt = " ".join(
+                        (b.get("text", "") if isinstance(b, dict) else str(b)) for b in p_blocks
+                    ).lower()
+                    p_words = set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{4,}", p_txt))
+                    ov = len(surv_words & p_words)
+                    if ov > best_overlap:
+                        best_overlap = ov
+                        best_p = cand_p
+                if best_p is not None:
+                    candidate_blocks.extend(tb_by_page[best_p])
+            if not candidate_blocks:
+                candidate_blocks.extend(
+                    effective_layout.get("text_blocks")
+                    or effective_layout.get("blocks")
+                    or effective_layout.get("layout_blocks")
+                    or []
+                )
+        elif isinstance(effective_layout, (list, tuple)):
+            candidate_blocks = list(effective_layout)
+        else:
+            candidate_blocks = list(
+                getattr(effective_layout, "text_blocks", None)
+                or getattr(effective_layout, "blocks", None)
+                or []
+            )
+
+        norm_existing = re.sub(r"\W+", " ", cleaned_text).lower()
+        existing_words = set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{3,}", norm_existing))
+        recovered_paras: list[str] = []
+
+        for item in candidate_blocks:
+            if isinstance(item, str):
+                b_txt = item.strip()
+                b_type = "text"
+                b_layer = "body"
+                b_p_idx = None
+            elif isinstance(item, dict):
+                b_txt = str(item.get("text") or "").strip()
+                b_type = str(item.get("type") or item.get("label") or "text").split(".")[-1].lower()
+                b_layer = str(item.get("content_layer") or item.get("layer") or "body").split(".")[-1].lower()
+                b_p_idx = item.get("page_idx")
+            else:
+                b_txt = str(getattr(item, "text", "") or "").strip()
+                b_type = str(getattr(item, "type", None) or getattr(item, "label", None) or "text").split(".")[-1].lower()
+                b_layer = str(getattr(item, "content_layer", None) or getattr(item, "layer", None) or "body").split(".")[-1].lower()
+                b_p_idx = getattr(item, "page_idx", None)
+
+            if not b_txt or len(b_txt) < 4 or re.fullmatch(r"\d{1,4}", b_txt):
+                continue
+            if inferred_p_idx is not None and b_p_idx is not None and b_p_idx != inferred_p_idx:
+                continue
+            is_glossary = _is_marginalia_or_glossary_note(b_txt)
+            if not had_loop and not is_glossary:
+                continue
+            if b_type in ("image", "picture", "table"):
+                continue
+            if (
+                "furniture" in b_layer
+                or b_type in ("header", "footer", "page_header", "page_footer", "furniture")
+            ) and not is_glossary:
+                continue
+            norm_b = re.sub(r"\W+", " ", b_txt).strip().lower()
+            if not norm_b or (not is_glossary and norm_b in furniture_norms):
+                continue
+            if norm_b in norm_existing or (len(norm_b) >= 30 and norm_b[:30] in norm_existing):
+                continue
+            b_words = re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{3,}", norm_b)
+            if not b_words:
+                continue
+            if (
+                not is_glossary
+                and len(b_words) >= 3
+                and (sum(1 for w in b_words if w in existing_words) / len(b_words)) >= 0.75
+            ):
+                continue
+
+            if b_type in ("title", "section_header", "heading") and not b_txt.startswith("#") and not is_glossary:
+                formatted_b = f"## {b_txt}"
+            elif b_type == "list_item" and not b_txt.startswith(("-", "*", "1.")) and not is_glossary:
+                formatted_b = f"- {b_txt}"
+            else:
+                formatted_b = b_txt
+
+            recovered_paras.append(formatted_b)
+            norm_existing = f"{norm_existing} {norm_b}"
+            existing_words.update(b_words)
+
+        if recovered_paras:
+            cleaned_text = (
+                f"{cleaned_text.rstrip()}\n\n" + "\n\n".join(recovered_paras)
+                if cleaned_text.strip()
+                else "\n\n".join(recovered_paras)
+            )
 
     # 3. Unwrap italic/bold around standalone figure captions (*Abbildung 4.1: ...* -> Abbildung 4.1: ...)
     cleaned_text = re.sub(
@@ -633,7 +1347,47 @@ def fuse_vlm_page_with_docling(
 
     # 4b. Enrich with Docling TableFormer tables when missed or flattened by VLM
     if page_tables:
-        cleaned_text = _enrich_flattened_tables_with_docling(cleaned_text, page_tables)
+        filtered_tables: list[str] = []
+        fig_boxes_on_page: list[Any] = []
+        table_boxes_by_md: dict[str, Any] = {}
+        if isinstance(effective_layout, dict):
+            for lb in effective_layout.get("layout_blocks") or []:
+                if not isinstance(lb, dict):
+                    continue
+                if inferred_p_idx is not None and lb.get("page_idx") is not None and lb.get("page_idx") != inferred_p_idx:
+                    continue
+                lb_box = lb.get("bbox_1000") or lb.get("bbox")
+                if not lb_box:
+                    continue
+                if lb.get("type") in ("image", "picture", "figure"):
+                    fig_boxes_on_page.append(lb_box)
+                elif lb.get("type") == "table" and lb.get("text"):
+                    table_boxes_by_md[str(lb["text"]).strip()] = lb_box
+            for fb in effective_layout.get("figure_bboxes") or []:
+                fig_boxes_on_page.append(fb)
+        elif effective_layout is not None:
+            for fb in getattr(effective_layout, "figure_bboxes", None) or []:
+                fig_boxes_on_page.append(fb)
+
+        for t_entry in page_tables:
+            if isinstance(t_entry, dict):
+                t_md = str(t_entry.get("markdown") or t_entry.get("text") or "").strip()
+                t_box = t_entry.get("bbox") or t_entry.get("bbox_1000")
+            elif hasattr(t_entry, "markdown"):
+                t_md = str(getattr(t_entry, "markdown", "") or "").strip()
+                t_box = getattr(t_entry, "bbox", None)
+            else:
+                t_md = str(t_entry or "").strip()
+                t_box = table_boxes_by_md.get(t_md)
+            if not t_md or _is_degenerate_diagram_table(t_md):
+                continue
+            if t_box is not None and fig_boxes_on_page:
+                if any(_bbox_overlap_ratio(t_box, fb) >= 0.35 for fb in fig_boxes_on_page):
+                    continue
+            filtered_tables.append(t_md)
+
+        if filtered_tables:
+            cleaned_text = _enrich_flattened_tables_with_docling(cleaned_text, filtered_tables)
 
     # 5. Place any remaining unmatched images after top page marker or at top
     if remaining_images:
@@ -665,6 +1419,8 @@ def sanitize_runaway_repetitions(text: str) -> str:
     """
     if not text:
         return text
+
+    text, _ = clean_vlm_repetition_loops(text)
 
     # 1. Runaway image paths (contain 10+ identical consecutive chars, excessively long > 300 chars, or unclosed trailing tags)
     text = re.sub(r"!\[.*?\]\([^\)\n]*?([a-zA-Z0-9_\-=*~`./\\ ])\1{10,}[^\)\n]*(?:\)|$)", "", text)
@@ -1487,6 +2243,10 @@ def reconstruct_title_hierarchy(
     """
     if not markdown_content:
         return markdown_content
+
+    from backend.services.fibs_postprocess import normalize_heading_page_markers
+
+    markdown_content = normalize_heading_page_markers(markdown_content)
 
     # Step 0a: Join consecutive '# CHAPTER N' + '# <Title>' on adjacent lines into '# CHAPTER N: <Title>'
     markdown_content = re.sub(
