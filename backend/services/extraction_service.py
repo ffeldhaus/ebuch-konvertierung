@@ -455,6 +455,61 @@ def is_contiguous_range(pages: list[int]) -> bool:
     return pages == list(range(pages[0], pages[-1] + 1))
 
 
+def format_export_base_name(
+    original_name: str,
+    pages_str: str | None = None,
+    total_pages: int = 0,
+    physical_start: int = 1,
+    page_labels: list[str] | None = None,
+) -> str:
+    """Build the base export filename, prepending the page range if only a subset of the book is converted.
+
+    Args:
+        original_name: Original uploaded filename (e.g. 'Dokumentname.pdf').
+        pages_str: Optional page selection string (e.g. '25-31', '10', 'I-V').
+        total_pages: Total number of pages in the source document.
+        physical_start: Detected 1-based physical start page.
+        page_labels: Optional per-page label list for Roman/mixed page resolution.
+
+    Returns:
+        Base filename without extension, prefixed with ``<pages>_`` when a partial range is selected
+        (e.g. ``'25-31_Dokumentname'``), or ``'Dokumentname'`` when the full document is converted.
+    """
+    base = os.path.splitext(original_name or "ebuch")[0] or "ebuch"
+    raw_pages = (pages_str or "").strip()
+    if not raw_pages:
+        return base
+
+    if total_pages > 0:
+        selected = resolve_page_selection_to_relative_indices(
+            raw_pages,
+            total_pages,
+            physical_start=physical_start,
+            page_labels=page_labels,
+        )
+        if not selected or len(selected) >= total_pages:
+            return base
+
+    normalized_parts: list[str] = []
+    for part in raw_pages.split(","):
+        clean = re.sub(r"\s*-\s*", "-", part.strip())
+        clean = re.sub(r"[^0-9A-Za-z\-]", "", clean)
+        if not clean:
+            continue
+        if "-" in clean:
+            bounds = [b for b in clean.split("-") if b]
+            if len(bounds) == 2 and bounds[0].upper() == bounds[1].upper():
+                clean = bounds[0]
+        normalized_parts.append(clean)
+
+    if not normalized_parts:
+        return base
+    prefix = "_".join(normalized_parts)
+    if base.startswith(f"{prefix}_"):
+        return base
+    return f"{prefix}_{base}"
+
+
 def _parse_labels_from_selection_string(pages_str: str) -> list[str]:
     """Expand a page selection string ('I-III, 1-2') into an ordered list of page label strings."""
     if not pages_str or not pages_str.strip():

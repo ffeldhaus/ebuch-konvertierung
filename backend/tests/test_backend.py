@@ -1733,3 +1733,182 @@ def test_api_pdf_preview_filtered_by_roman_pages(tmp_path):
     finally:
         active_tasks.pop(task_id, None)
 
+
+def test_export_filename_page_range_prefix(tmp_path):
+    """Verify export download filenames prepend the page number/range only when a subset of the book is converted."""
+    import uuid
+
+    from backend.services.extraction_service import format_export_base_name
+    from backend.services.task_manager import Task
+
+    # Unit checks for format_export_base_name
+    assert format_export_base_name("Dokumentname.pdf", None, total_pages=100) == "Dokumentname"
+    assert format_export_base_name("Dokumentname.pdf", "", total_pages=100) == "Dokumentname"
+    assert format_export_base_name("Dokumentname.pdf", "1-100", total_pages=100) == "Dokumentname"
+    assert format_export_base_name("Dokumentname.pdf", "25-31", total_pages=100) == "25-31_Dokumentname"
+    assert format_export_base_name("Dokumentname.pdf", "25 - 31", total_pages=100) == "25-31_Dokumentname"
+    assert format_export_base_name("Dokumentname.pdf", "10", total_pages=100) == "10_Dokumentname"
+    assert format_export_base_name("Dokumentname.pdf", "10-10", total_pages=100) == "10_Dokumentname"
+    assert (
+        format_export_base_name(
+            "Dokumentname.pdf",
+            "I-III",
+            total_pages=20,
+            page_labels=["I", "II", "III", "IV", "V"] + [str(i) for i in range(1, 16)],
+        )
+        == "I-III_Dokumentname"
+    )
+    assert (
+        format_export_base_name(
+            "Dokumentname.pdf",
+            "I-15",
+            total_pages=20,
+            page_labels=["I", "II", "III", "IV", "V"] + [str(i) for i in range(1, 16)],
+        )
+        == "Dokumentname"
+    )
+
+    # Endpoint check for GET /api/download/{task_id}
+    dummy_docx = tmp_path / "ebuch_output.docx"
+    dummy_docx.write_bytes(b"PK\x03\x04dummy")
+    task_id = str(uuid.uuid4())
+    task = Task(
+        task_id=task_id,
+        original_name="Biologie_Oberstufe.pdf",
+        input_path=str(tmp_path / "Biologie_Oberstufe.pdf"),
+        extension=".pdf",
+        page_count=200,
+        pages="25-31",
+        output_path=str(dummy_docx),
+    )
+    active_tasks[task_id] = task
+    try:
+        res_partial = client.get(f"/api/download/{task_id}")
+        assert res_partial.status_code == 200
+        assert 'filename="25-31_Biologie_Oberstufe_ebuch.docx"' in res_partial.headers.get("content-disposition", "")
+
+        task.pages = "1-200"
+        res_full = client.get(f"/api/download/{task_id}")
+        assert res_full.status_code == 200
+        assert 'filename="Biologie_Oberstufe_ebuch.docx"' in res_full.headers.get("content-disposition", "")
+    finally:
+        active_tasks.pop(task_id, None)
+
+
+def test_custom_benchmark_evaluate_with_existing_source_task_id(tmp_path, monkeypatch):
+    """Verify POST /api/benchmark/custom-evaluate accepts source_task_id and inherits PDF, pages, and custom ruleset."""
+    import uuid
+
+    import pypdfium2 as pdfium
+    from reportlab.pdfgen import canvas
+
+    import backend.main as main_mod
+    import backend.services.benchmark_task_manager as btm_mod
+    from backend.services.benchmark_task_manager import benchmark_task_manager
+    from backend.services.task_manager import Task
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(btm_mod, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(main_mod, "evaluate_custom_submission", lambda *args, **kwargs: {})
+
+    pdf_path = tmp_path / "Kapitel_Mechanik.pdf"
+    c = canvas.Canvas(str(pdf_path))
+    for p in range(1, 6):
+        c.drawString(72, 720, f"Seite {p}")
+        c.showPage()
+    c.save()
+
+    src_task_id = str(uuid.uuid4())
+    src_out_dir = tmp_path / src_task_id
+    src_out_dir.mkdir(parents=True, exist_ok=True)
+    (src_out_dir / "custom_ruleset.txt").write_text("Spezialregel: Merksätze immer als Rahmen.", encoding="utf-8")
+
+    task = Task(
+        task_id=src_task_id,
+        original_name="Kapitel_Mechanik.pdf",
+        input_path=str(pdf_path),
+        extension=".pdf",
+        page_count=5,
+        pages="2-3",
+        physical_start_page=1,
+        page_labels=["1", "2", "3", "4", "5"],
+    )
+    active_tasks[src_task_id] = task
+    bench_task_id = None
+    try:
+        res = client.post(
+            "/api/benchmark/custom-evaluate",
+            data={"source_task_id": src_task_id, "engines": "docling"},
+            files={"ground_truth_file": ("gt.md", b"((2))\n\n# Mechanik\n\n((3))\n\nInhalt.\n", "text/markdown")},
+        )
+        assert res.status_code == 200
+        payload = res.json()
+        bench_task_id = payload["task_id"]
+        assert payload["source_filename"] == "Kapitel_Mechanik.pdf"
+        assert payload["has_custom_rules"] is True
+
+        cropped_pdf_path = tmp_path / bench_task_id / "Kapitel_Mechanik.pdf"
+        assert cropped_pdf_path.exists()
+        doc = pdfium.PdfDocument(str(cropped_pdf_path))
+        assert len(doc) == 2
+        doc.close()
+
+        copied_rules = (tmp_path / bench_task_id / "custom_ruleset.txt").read_text(encoding="utf-8")
+        assert "Spezialregel: Merksätze immer als Rahmen." in copied_rules
+
+        # Verify GET /api/tasks sorts tasks newest first (finished_at / started_at / created_at descending)
+        older_id = str(uuid.uuid4())
+        newer_id = str(uuid.uuid4())
+        active_tasks[older_id] = Task(
+            task_id=older_id,
+            original_name="Alt.pdf",
+            input_path=str(pdf_path),
+            extension=".pdf",
+            created_at=1000.0,
+            finished_at=1100.0,
+        )
+        active_tasks[newer_id] = Task(
+            task_id=newer_id,
+            original_name="Neu.pdf",
+            input_path=str(pdf_path),
+            extension=".pdf",
+            created_at=2000.0,
+            finished_at=2100.0,
+        )
+        tasks_res = client.get("/api/tasks")
+        assert tasks_res.status_code == 200
+        returned_ids = [t["task_id"] for t in tasks_res.json()]
+        assert returned_ids.index(newer_id) < returned_ids.index(older_id)
+        # Verify sibling task of the same book (without its own custom_ruleset.txt) inherits the ruleset automatically
+        sibling_id = str(uuid.uuid4())
+        active_tasks[sibling_id] = Task(
+            task_id=sibling_id,
+            original_name="Kapitel_Mechanik.pdf",
+            input_path=str(pdf_path),
+            extension=".pdf",
+            page_count=5,
+            pages="4-5",
+            created_at=2500.0,
+            finished_at=2600.0,
+        )
+        sib_rules_res = client.get(f"/api/ruleset/{sibling_id}")
+        assert sib_rules_res.status_code == 200
+        sib_rules_json = sib_rules_res.json()
+        assert sib_rules_json["has_ruleset"] is True
+        assert "Spezialregel: Merksätze immer als Rahmen." in sib_rules_json["content"]
+
+        sib_state_res = client.get(f"/api/tasks/{sibling_id}/state")
+        assert sib_state_res.status_code == 200
+        sib_state_json = sib_state_res.json()
+        assert sib_state_json["has_custom_ruleset"] is True
+        assert "Spezialregel: Merksätze immer als Rahmen." in sib_state_json["custom_ruleset_content"]
+    finally:
+        active_tasks.pop(src_task_id, None)
+        active_tasks.pop(older_id, None)
+        active_tasks.pop(newer_id, None)
+        active_tasks.pop(sibling_id, None)
+        if bench_task_id:
+            benchmark_task_manager.delete_run(bench_task_id)
+
+
+

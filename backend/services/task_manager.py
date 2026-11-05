@@ -73,6 +73,7 @@ class Task:
     stall_warned: bool = False
     stream_text: str = ""              # accumulated LLM tokens for reattaching clients
     ruleset: str | None = None      # parameters needed to resume standardisation
+    custom_ruleset_name: str | None = None
     describe_images: bool = True
     standardisation_backend: str | None = None  # "gemma" | "rule_based_fallback"
 
@@ -175,6 +176,7 @@ class Task:
                 "progress": self.progress,
                 "job_kind": self.job_kind,
                 "ruleset": self.ruleset,
+                "custom_ruleset_name": self.custom_ruleset_name,
                 "describe_images": self.describe_images,
                 "standardisation_backend": self.standardisation_backend,
                 "logs_tail": list(self.logs[-PERSISTED_LOG_TAIL:]),
@@ -186,14 +188,113 @@ class Task:
         except Exception:
             pass
 
-    def to_state_dict(self) -> dict:
+    def resolve_custom_ruleset(
+        self,
+        output_dir: str | None = None,
+        sibling_tasks: list[Any] | None = None,
+    ) -> tuple[str, str | None]:
+        """Resolve custom ruleset content and filename for this task or a sibling task of the same book.
+
+        Args:
+            output_dir: Optional override for ``assets/output`` root directory.
+            sibling_tasks: Optional in-memory tasks to inspect for matching ``original_name``.
+
+        Returns:
+            Tuple of ``(ruleset_content, ruleset_name)``. Returns ``("", None)`` if none exists.
+        """
+        import glob
+        import json
+        import os
+
+        out_root = output_dir or os.path.join(_project_root(), "assets", "output")
+        task_out_dir = os.path.join(out_root, self.task_id)
+        direct_path = os.path.join(task_out_dir, "custom_ruleset.txt")
+        if os.path.exists(direct_path):
+            try:
+                with open(direct_path, encoding="utf-8") as rf:
+                    content = rf.read().strip()
+                if content:
+                    return content, self.custom_ruleset_name or "custom_ruleset.txt"
+            except Exception:
+                pass
+
+        if not self.original_name:
+            return "", None
+
+        target_name = self.original_name.strip().lower()
+        candidates: list[tuple[float, str, str | None]] = []
+
+        if sibling_tasks:
+            for sib in sibling_tasks:
+                if getattr(sib, "task_id", None) == self.task_id:
+                    continue
+                sib_orig = (getattr(sib, "original_name", "") or "").strip().lower()
+                if sib_orig != target_name:
+                    continue
+                sib_rules = os.path.join(out_root, sib.task_id, "custom_ruleset.txt")
+                if os.path.exists(sib_rules):
+                    ts = float(
+                        getattr(sib, "finished_at", None)
+                        or getattr(sib, "started_at", None)
+                        or getattr(sib, "created_at", None)
+                        or os.path.getmtime(sib_rules)
+                    )
+                    candidates.append(
+                        (ts, sib_rules, getattr(sib, "custom_ruleset_name", None))
+                    )
+
+        if os.path.isdir(out_root):
+            for rules_file in glob.glob(os.path.join(out_root, "*", "custom_ruleset.txt")):
+                cand_dir = os.path.dirname(rules_file)
+                cand_id = os.path.basename(cand_dir)
+                if cand_id == self.task_id:
+                    continue
+                info_file = os.path.join(cand_dir, "task_info.json")
+                if not os.path.exists(info_file):
+                    continue
+                try:
+                    with open(info_file, encoding="utf-8") as mf:
+                        meta = json.load(mf)
+                    if (meta.get("original_name") or "").strip().lower() == target_name:
+                        ts = float(
+                            meta.get("finished_at")
+                            or meta.get("started_at")
+                            or meta.get("created_at")
+                            or os.path.getmtime(rules_file)
+                        )
+                        candidates.append((ts, rules_file, meta.get("custom_ruleset_name")))
+                except Exception:
+                    continue
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        for _, rules_file, r_name in candidates:
+            try:
+                with open(rules_file, encoding="utf-8") as rf:
+                    content = rf.read().strip()
+                if content:
+                    try:
+                        os.makedirs(task_out_dir, exist_ok=True)
+                        with open(direct_path, "w", encoding="utf-8") as wf:
+                            wf.write(content)
+                    except Exception:
+                        pass
+                    if r_name and not self.custom_ruleset_name:
+                        self.custom_ruleset_name = r_name
+                    return content, self.custom_ruleset_name or r_name or "custom_ruleset.txt"
+            except Exception:
+                continue
+
+        return "", None
+
+    def to_state_dict(self, output_dir: str | None = None, sibling_tasks: list[Any] | None = None) -> dict:
         """Return full state dict for task reattach endpoint."""
         raw_md = self.raw_markdown
         if not raw_md:
             import glob
             import os
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            task_out_dir = os.path.join(base_dir, "assets", "output", self.task_id)
+            out_root = output_dir or os.path.join(base_dir, "assets", "output")
+            task_out_dir = os.path.join(out_root, self.task_id)
             if os.path.exists(task_out_dir):
                 md_files = glob.glob(os.path.join(task_out_dir, "**", "*.md"), recursive=True)
                 for f in md_files:
@@ -224,6 +325,9 @@ class Task:
 
         clean_raw = _sanitize(raw_md)
         clean_std = _sanitize(self.standardised_markdown)
+        rules_content, rules_name = self.resolve_custom_ruleset(
+            output_dir=output_dir, sibling_tasks=sibling_tasks
+        )
 
         return {
             "task_id": self.task_id,
@@ -245,6 +349,10 @@ class Task:
             "finished_at": self.finished_at,
             "extension": self.extension,
             "job_kind": self.job_kind,
+            "ruleset": self.ruleset,
+            "has_custom_ruleset": bool(rules_content),
+            "custom_ruleset_name": rules_name,
+            "custom_ruleset_content": rules_content,
             "resumable": self.status in RESUMABLE_STATUSES and not self.job_running(),
         }
 
@@ -387,6 +495,7 @@ class TaskManager:
             finished_at=finished_at,
             job_kind=meta.get("job_kind"),
             ruleset=meta.get("ruleset"),
+            custom_ruleset_name=meta.get("custom_ruleset_name"),
             describe_images=meta.get("describe_images", True),
             standardisation_backend=meta.get("standardisation_backend"),
             logs=list(meta.get("logs_tail") or []),

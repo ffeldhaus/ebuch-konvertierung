@@ -23,6 +23,7 @@ from backend.services.docx_service import convert_markdown_to_docx
 from backend.services.extraction_service import (
     detect_physical_start_page,
     extract_pdf_pages,
+    format_export_base_name,
     get_page_labels_for_pdf,
     get_pdf_page_count,
     resolve_page_selection_to_relative_indices,
@@ -299,6 +300,10 @@ async def upload_file(file: UploadFile = File(...)):
             f"(geprüfte Seiten: {directory_info.get('checked_pages', 0)}, "
             f"Startseite: {physical_start_page})."
         )
+    inherited_rules, inherited_rules_name = task.resolve_custom_ruleset(
+        output_dir=OUTPUT_DIR,
+        sibling_tasks=list(task_manager._tasks.values()),
+    )
     task.save_meta()
 
     logger.info(
@@ -312,6 +317,9 @@ async def upload_file(file: UploadFile = File(...)):
         "page_count": page_count,
         "physical_start_page": physical_start_page,
         "page_labels": page_labels,
+        "has_custom_ruleset": bool(inherited_rules),
+        "custom_ruleset_name": inherited_rules_name,
+        "custom_ruleset_content": inherited_rules,
         "directories": directory_info,
     }
 
@@ -476,8 +484,12 @@ async def extract_markdown(
 
 @app.get("/api/tasks")
 async def get_tasks():
-    """List all active document conversion tasks."""
+    """List all active document conversion tasks, newest first."""
     tasks = await task_manager.list_all()
+    tasks.sort(
+        key=lambda t: t.finished_at or t.started_at or t.created_at or 0,
+        reverse=True,
+    )
     logger.debug(f"get_tasks called: found {len(tasks)} tasks")
     return [t.to_summary_dict() for t in tasks]
 
@@ -488,7 +500,10 @@ async def get_task_state(task_id: str):
     task = await task_manager.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
-    return task.to_state_dict()
+    return task.to_state_dict(
+        output_dir=OUTPUT_DIR,
+        sibling_tasks=list(task_manager._tasks.values()),
+    )
 
 
 def _load_task_layout_blocks(task_id: str) -> list[LayoutBlock]:
@@ -1516,6 +1531,11 @@ async def upload_ruleset(task_id: str = Form(...), file: UploadFile = File(...))
         with open(ruleset_path, "w", encoding="utf-8") as buffer:
             buffer.write(markdown_content)
 
+    task_obj = await task_manager.get(task_id)
+    if task_obj is not None:
+        task_obj.custom_ruleset_name = file.filename
+        task_obj.save_meta()
+
     logger.info(f"Custom ruleset uploaded for task {task_id}: {file.filename} ({len(markdown_content)} chars)")
     return {
         "task_id": task_id,
@@ -1528,17 +1548,20 @@ async def upload_ruleset(task_id: str = Form(...), file: UploadFile = File(...))
 @app.get("/api/ruleset/{task_id}")
 async def get_ruleset(task_id: str):
     """Retrieves the parsed custom ruleset content for inspection."""
-    if not task_manager.contains_sync(task_id):
+    task = await task_manager.get(task_id)
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
-    ruleset_path = os.path.join(OUTPUT_DIR, task_id, "custom_ruleset.txt")
-    if not os.path.exists(ruleset_path):
-        return {"task_id": task_id, "has_ruleset": False, "content": "", "chars": 0}
     try:
-        with open(ruleset_path, encoding="utf-8") as f:
-            content = f.read()
+        content, ruleset_name = task.resolve_custom_ruleset(
+            output_dir=OUTPUT_DIR,
+            sibling_tasks=list(task_manager._tasks.values()),
+        )
+        if not content:
+            return {"task_id": task_id, "has_ruleset": False, "ruleset_name": None, "content": "", "chars": 0}
         return {
             "task_id": task_id,
             "has_ruleset": True,
+            "ruleset_name": ruleset_name or "custom_ruleset.txt",
             "content": content,
             "chars": len(content),
         }
@@ -1729,7 +1752,13 @@ async def download_file(task_id: str):
     if not task or not task.output_path:
         raise HTTPException(status_code=404, detail="Converted file not found.")
 
-    original_base = os.path.splitext(task.original_name)[0]
+    original_base = format_export_base_name(
+        task.original_name,
+        task.pages,
+        total_pages=task.page_count or 0,
+        physical_start=task.physical_start_page or 1,
+        page_labels=task.page_labels or None,
+    )
     download_filename = f"{original_base}_ebuch.docx"
 
     return FileResponse(
@@ -1741,23 +1770,60 @@ async def download_file(task_id: str):
 
 @app.post("/api/benchmark/custom-evaluate")
 async def custom_benchmark_evaluate(
-    source_file: UploadFile = File(...),
+    source_file: UploadFile | None = File(None),
+    source_task_id: str | None = Form(None),
     ground_truth_file: UploadFile = File(...),
     custom_rules_file: UploadFile | None = File(None),
     custom_rules_text: str | None = Form(None),
     pages: str | None = Form(None),
     ruleset: str = Form("uebertragungsregeln_09_2025"),
-    engines: str = Form("infinity,docling")
+    engines: str = Form("infinity,docling"),
 ):
-    """On-Demand Custom Benchmark Evaluation with Document-Specific Rules:
-    Evaluates selected extraction engines on an uploaded source PDF against an uploaded manual ground truth Markdown file,
-    incorporating optional document-specific conversion rules into the LLM standardisation pipeline.
+    """Evaluates selected extraction engines against a manual ground truth file.
+
+    Accepts either an uploaded ``source_file`` PDF or an existing conversion task via
+    ``source_task_id``, crops to ``pages`` when requested, and incorporates optional
+    document-specific conversion rules into the LLM standardisation pipeline.
     """
+    import shutil
+
+    has_uploaded_source = bool(source_file and source_file.filename)
+    clean_source_task_id = source_task_id.strip() if source_task_id else ""
+    if not has_uploaded_source and not clean_source_task_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Bitte ein Quell-PDF hochladen oder eine bestehende Übertragung auswählen.",
+        )
+
+    src_task = None
+    if not has_uploaded_source:
+        src_task = await task_manager.get(clean_source_task_id)
+        if not src_task or not src_task.input_path or not os.path.exists(src_task.input_path):
+            raise HTTPException(
+                status_code=404,
+                detail="Quell-PDF der ausgewählten Übertragung wurde nicht gefunden.",
+            )
+        source_filename = src_task.original_name or os.path.basename(src_task.input_path)
+        if pages is None and src_task.pages:
+            pages = src_task.pages
+    else:
+        assert source_file is not None and source_file.filename is not None
+        source_filename = source_file.filename
+
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(OUTPUT_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
-    source_path = os.path.join(task_dir, source_file.filename)
+    if src_task is not None:
+        src_dir_info = os.path.join(OUTPUT_DIR, src_task.task_id, "directory_info.json")
+        if os.path.exists(src_dir_info):
+            await asyncio.to_thread(
+                shutil.copyfile,
+                src_dir_info,
+                os.path.join(task_dir, "directory_info.json"),
+            )
+
+    source_path = os.path.join(task_dir, source_filename)
     gt_path = os.path.join(task_dir, ground_truth_file.filename)
 
     selected_engines = [e.strip() for e in engines.split(",") if e.strip()]
@@ -1767,47 +1833,84 @@ async def custom_benchmark_evaluate(
     from backend.services.benchmark_task_manager import benchmark_task_manager
     benchmark_task = benchmark_task_manager.create_task(
         task_id=task_id,
-        source_filename=source_file.filename,
+        source_filename=source_filename,
         ground_truth_filename=ground_truth_file.filename,
         ruleset=ruleset,
         engines=selected_engines,
-        has_custom_rules=False
+        has_custom_rules=False,
     )
 
     try:
-        benchmark_task.add_log(f"Lade Quelldokument '{source_file.filename}'...")
-        
+        benchmark_task.add_log(f"Lade Quelldokument '{source_filename}'...")
+
         # Save source PDF (cropped if page range requested)
         if pages and pages.strip():
-            raw_source_path = os.path.join(task_dir, f"full_{source_file.filename}")
-            with open(raw_source_path, "wb") as f:
-                content = await source_file.read()
-                f.write(content)
-            
-            total_pages = await asyncio.to_thread(get_pdf_page_count, raw_source_path)
-            source_labels = await asyncio.to_thread(get_page_labels_for_pdf, raw_source_path)
+            if src_task is not None:
+                raw_source_path = src_task.input_path
+                total_pages = src_task.page_count or await asyncio.to_thread(get_pdf_page_count, raw_source_path)
+                source_labels = src_task.page_labels or await asyncio.to_thread(
+                    get_page_labels_for_pdf, raw_source_path
+                )
+                physical_start = src_task.physical_start_page or await asyncio.to_thread(
+                    detect_physical_start_page, raw_source_path, directory_info=src_task.directory_info
+                )
+            else:
+                assert source_file is not None
+                raw_source_path = os.path.join(task_dir, f"full_{source_filename}")
+                with open(raw_source_path, "wb") as f:
+                    content = await source_file.read()
+                    f.write(content)
+                total_pages = await asyncio.to_thread(get_pdf_page_count, raw_source_path)
+                source_labels = await asyncio.to_thread(get_page_labels_for_pdf, raw_source_path)
+                physical_start = await asyncio.to_thread(detect_physical_start_page, raw_source_path)
+
             is_valid, err_msg = validate_pages_string(
-                pages.strip(), total_pages, page_labels=source_labels or None
+                pages.strip(),
+                total_pages,
+                physical_start=physical_start,
+                page_labels=source_labels or None,
             )
             if not is_valid:
                 raise HTTPException(status_code=400, detail=err_msg)
-            
+
+            rel_indices = resolve_page_selection_to_relative_indices(
+                pages.strip(),
+                total_pages,
+                physical_start=physical_start,
+                page_labels=source_labels or None,
+            )
+            rel_pages_str = ",".join(str(i) for i in rel_indices)
             extracted = await asyncio.to_thread(
                 extract_pdf_pages,
                 raw_source_path,
-                pages.strip(),
+                rel_pages_str,
                 source_path,
                 source_labels or None,
+                True,
             )
-            cropped_count = await asyncio.to_thread(get_pdf_page_count, source_path) if os.path.exists(source_path) else 0
+            cropped_count = (
+                await asyncio.to_thread(get_pdf_page_count, source_path) if os.path.exists(source_path) else 0
+            )
             if not extracted or not os.path.exists(source_path) or cropped_count == 0:
-                raise HTTPException(status_code=400, detail=f"Ungültiger Seitenbereich '{pages.strip()}'. Keine Seiten konnten extrahiert werden.")
-            
-            benchmark_task.add_log(f"Seitenbereich [{pages.strip()}] ausgewählt. Quell-PDF gekürzt ({cropped_count} von {total_pages} Seiten).")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Ungültiger Seitenbereich '{pages.strip()}'. Keine Seiten konnten extrahiert werden.",
+                )
+
+            benchmark_task.add_log(
+                f"Seitenbereich [{pages.strip()}] ausgewählt. Quell-PDF gekürzt ({cropped_count} von {total_pages} Seiten)."
+            )
         else:
-            with open(source_path, "wb") as f:
-                content = await source_file.read()
-                f.write(content)
+            if src_task is not None:
+                await asyncio.to_thread(shutil.copyfile, src_task.input_path, source_path)
+                src_labels_sidecar = f"{src_task.input_path}.labels.json"
+                if os.path.exists(src_labels_sidecar):
+                    await asyncio.to_thread(shutil.copyfile, src_labels_sidecar, f"{source_path}.labels.json")
+            else:
+                assert source_file is not None
+                with open(source_path, "wb") as f:
+                    content = await source_file.read()
+                    f.write(content)
 
         # Save and read Ground Truth (.md, .txt, or .docx)
         gt_filename_lower = ground_truth_file.filename.lower()
@@ -1866,6 +1969,13 @@ async def custom_benchmark_evaluate(
                 custom_rules += "\n\n" + custom_rules_text.strip()
             else:
                 custom_rules = custom_rules_text.strip()
+        elif not custom_rules and src_task is not None:
+            resolved_rules, _ = src_task.resolve_custom_ruleset(
+                output_dir=OUTPUT_DIR,
+                sibling_tasks=list(task_manager._tasks.values()),
+            )
+            if resolved_rules:
+                custom_rules = resolved_rules
 
         if custom_rules:
             benchmark_task.has_custom_rules = True
@@ -1901,12 +2011,14 @@ async def custom_benchmark_evaluate(
         return {
             "task_id": task_id,
             "status": "running",
-            "source_filename": source_file.filename,
+            "source_filename": source_filename,
             "ground_truth_filename": ground_truth_file.filename,
             "is_docx_ground_truth": gt_filename_lower.endswith(".docx"),
             "has_custom_rules": bool(custom_rules),
-            "total_engines": len(selected_engines)
+            "total_engines": len(selected_engines),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Custom benchmark initialization failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Initialization failed: {str(e)}")

@@ -188,6 +188,8 @@ class AppController {
   private benchDownloadDocxBtn = document.getElementById('bench-download-docx-btn') as HTMLAnchorElement;
   private benchHistorySelect = document.getElementById('bench-history-select') as HTMLSelectElement;
   private benchDeleteHistoryBtn = document.getElementById('bench-delete-history-btn') as HTMLButtonElement;
+  private benchSourceTaskSelect = document.getElementById('bench-source-task-select') as HTMLSelectElement | null;
+  private benchRefreshTasksBtn = document.getElementById('bench-refresh-tasks-btn') as HTMLButtonElement | null;
   private benchSkipEngineBtn = document.getElementById('bench-skip-engine-btn') as HTMLButtonElement;
   private benchAbortBtn = document.getElementById('bench-abort-btn') as HTMLButtonElement;
   private benchLiveProgressPct = document.getElementById('bench-live-progress-pct') as HTMLSpanElement;
@@ -208,6 +210,7 @@ class AppController {
 
   private activeFile: File | null = null;
   private activeBenchSourceFile: File | null = null;
+  private activeBenchSourceTaskId: string | null = null;
   private activeBenchGtFile: File | null = null;
   private activeBenchRulesFile: File | null = null;
   private activeBenchSourcePageCount: number = 0;
@@ -452,8 +455,8 @@ class AppController {
     }
 
     // Export button actions
-    this.downloadRawBtn.addEventListener('click', () => this.downloadTextFile('raw-extracted.md', this.rawMarkdownTextarea.value));
-    this.downloadStandardBtn.addEventListener('click', () => this.downloadTextFile('ebuch-standardised.md', this.standardisedMarkdownTextarea.value));
+    this.downloadRawBtn.addEventListener('click', () => this.downloadTextFile(this.formatExportFilename('_raw.md', 'raw-extracted.md'), this.rawMarkdownTextarea.value));
+    this.downloadStandardBtn.addEventListener('click', () => this.downloadTextFile(this.formatExportFilename('_ebuch.md', 'ebuch-standardised.md'), this.standardisedMarkdownTextarea.value));
     this.downloadDocxBtn.addEventListener('click', () => this.triggerDocxExport());
 
     // Abort conversion button actions
@@ -961,6 +964,32 @@ class AppController {
     this.rulesetModal.classList.add('hidden');
   }
 
+  private applyWorkspaceRulesetState(content: string, rulesetName: string) {
+    const trimmed = (content || '').trim();
+    if (trimmed) {
+      const displayName = rulesetName || 'Spezifische Regeln';
+      this.parsedRulesetContent = trimmed;
+      if (this.rulesetStatusText) {
+        this.rulesetStatusText.textContent = `Regeln: ${displayName}`;
+      }
+      if (this.rulesetBadge) {
+        this.rulesetBadge.textContent = displayName;
+        this.rulesetBadge.title = displayName;
+      }
+      if (this.rulesetActions) {
+        this.rulesetActions.classList.remove('hidden');
+      }
+    } else {
+      this.parsedRulesetContent = '';
+      if (this.rulesetStatusText && this.taskId) {
+        this.rulesetStatusText.textContent = 'Zusätzliche Regeln hochladen';
+      }
+      if (this.rulesetActions) {
+        this.rulesetActions.classList.add('hidden');
+      }
+    }
+  }
+
   private updateRulesetUploadState(enabled: boolean) {
     if (!this.rulesetUploadZone || !this.rulesetFileInput) return;
     if (enabled && this.taskId) {
@@ -1100,6 +1129,10 @@ class AppController {
       this.pageLabels = Array.isArray(uploadData.page_labels) ? uploadData.page_labels.map(String) : [];
       localStorage.setItem('active_task_id', uploadData.task_id);
       this.updateRulesetUploadState(true);
+      this.applyWorkspaceRulesetState(
+        uploadData.custom_ruleset_content || '',
+        uploadData.custom_ruleset_name || ''
+      );
       this.log(`Datei hochgeladen. Task-ID: ${this.taskId}`, 'success');
       if (uploadData.directories?.has_any_directory) {
         const typesList = (uploadData.directories.detected_types || []).join(', ');
@@ -1679,9 +1712,7 @@ class AppController {
       if (data.engine) {
         this.engineSelect.value = data.engine;
       }
-      if (data.pages) {
-        this.pagesInput.value = data.pages;
-      }
+      this.pagesInput.value = data.pages || '';
       if (data.extension === '.pdf' && this.activePageCount > 0) {
         this.pagesInput.disabled = false;
         this.pagesInput.classList.remove('cursor-not-allowed', 'opacity-60');
@@ -1712,6 +1743,10 @@ class AppController {
       // Set PDF Preview
       this.refreshPdfPreview();
       this.updateRulesetUploadState(true);
+      this.applyWorkspaceRulesetState(
+        data.custom_ruleset_content || '',
+        data.custom_ruleset_name || ''
+      );
       
       // Unconditionally restore raw markdown and standardised markdown if present
       if (data.raw_markdown) {
@@ -2202,6 +2237,50 @@ class AppController {
     } catch (err: any) {
       this.log(`Fehler beim DOCX-Export: ${err.message}`, 'error');
     }
+  }
+
+  private formatExportFilename(suffix: string, fallback: string): string {
+    const rawName = (this.activeFile?.name || this.selectedFileName?.textContent || '').trim();
+    const lastDot = rawName.lastIndexOf('.');
+    const baseName = lastDot > 0 ? rawName.substring(0, lastDot) : rawName;
+    const rawPages = this.pagesInput?.value.trim() || '';
+
+    let prefix = '';
+    if (rawPages) {
+      const selectedRel = this.resolveSelectedRelativePages(
+        rawPages,
+        this.activePageCount,
+        this.physicalStartPage,
+        this.pageLabels
+      );
+      const isPartial =
+        this.activePageCount === 0 ||
+        (selectedRel !== null && selectedRel.length > 0 && selectedRel.length < this.activePageCount);
+      if (isPartial) {
+        const parts = rawPages
+          .split(',')
+          .map((p) => {
+            const clean = p.trim().replace(/\s*-\s*/g, '-').replace(/[^0-9A-Za-z-]/g, '');
+            if (clean.includes('-')) {
+              const bounds = clean.split('-').filter(Boolean);
+              if (bounds.length === 2 && bounds[0].toUpperCase() === bounds[1].toUpperCase()) {
+                return bounds[0];
+              }
+            }
+            return clean;
+          })
+          .filter(Boolean);
+        if (parts.length > 0) {
+          prefix = `${parts.join('_')}_`;
+        }
+      }
+    }
+
+    if (!baseName) {
+      return `${prefix}${fallback}`;
+    }
+    const effectiveBase = prefix && !baseName.startsWith(prefix) ? `${prefix}${baseName}` : baseName;
+    return `${effectiveBase}${suffix}`;
   }
 
   private downloadTextFile(filename: string, text: string) {
@@ -3951,6 +4030,18 @@ class AppController {
       this.benchAbortBtn.addEventListener('click', () => this.handleAbortBenchmark());
     }
 
+    // Existing transfer task selector & refresh button
+    if (this.benchSourceTaskSelect) {
+      this.benchSourceTaskSelect.addEventListener('change', () => {
+        this.handleBenchmarkSourceTaskSelect(this.benchSourceTaskSelect?.value || '');
+      });
+    }
+    if (this.benchRefreshTasksBtn) {
+      this.benchRefreshTasksBtn.addEventListener('click', () => {
+        this.loadBenchmarkSourceTasks();
+      });
+    }
+
     // History select dropdown & delete button
     if (this.benchHistorySelect) {
       this.benchHistorySelect.addEventListener('change', () => {
@@ -4037,6 +4128,7 @@ class AppController {
 
     // Load initial benchmark history & check for active task on page load
     this.loadBenchmarkHistory();
+    this.loadBenchmarkSourceTasks();
     this.checkActiveBenchmarkTaskOnLoad();
   }
 
@@ -4057,6 +4149,10 @@ class AppController {
     if (this.headerStepper) this.headerStepper.classList.toggle('md:flex', view === 'workspace');
     if (this.headerPaneToggles) this.headerPaneToggles.classList.toggle('hidden', view !== 'workspace');
 
+    if (view === 'benchmark') {
+      this.loadBenchmarkSourceTasks();
+    }
+
     if (view === 'feedback') {
       if (!this.feedbackController) {
         this.feedbackController = new FeedbackController({
@@ -4072,14 +4168,187 @@ class AppController {
     }
   }
 
+  private async loadBenchmarkSourceTasks() {
+    if (!this.benchSourceTaskSelect) return;
+    const prevValue = this.benchSourceTaskSelect.value || this.activeBenchSourceTaskId || '';
+    try {
+      const res = await fetch('/api/tasks');
+      if (!res.ok) return;
+      const raw = await res.json();
+      const allTasks: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : [];
+      const pdfTasks = allTasks
+        .filter(
+          (t: any) =>
+            (t.extension && String(t.extension).toLowerCase() === '.pdf') ||
+            (t.original_name && String(t.original_name).toLowerCase().endsWith('.pdf'))
+        )
+        .sort(
+          (a: any, b: any) =>
+            (Number(b.finished_at || b.started_at || b.created_at) || 0) -
+            (Number(a.finished_at || a.started_at || a.created_at) || 0)
+        );
+
+      this.benchSourceTaskSelect.innerHTML = '';
+      const defaultOpt = document.createElement('option');
+      defaultOpt.value = '';
+      defaultOpt.textContent = '-- Bestehende Übertragung wählen (optional) --';
+      this.benchSourceTaskSelect.appendChild(defaultOpt);
+
+      const statusLabels: Record<string, string> = {
+        completed: 'Fertig',
+        processing: 'Läuft',
+        queued: 'Wartet',
+        failed: 'Fehler',
+        aborted: 'Abgebrochen',
+        interrupted: 'Unterbrochen',
+        pending: 'Bereit',
+      };
+
+      for (const t of pdfTasks) {
+        const opt = document.createElement('option');
+        opt.value = t.task_id;
+        const ts = Number(t.finished_at || t.started_at || t.created_at) || 0;
+        const dateStr = ts > 0
+          ? new Date(ts * 1000).toLocaleString('de-DE', {
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          : '';
+        const datePart = dateStr ? ` · ${dateStr}` : '';
+        const pagesPart = t.pages ? ` [S. ${t.pages}]` : '';
+        const enginePart = t.engine ? ` · ${t.engine}` : '';
+        const statusPart = t.status ? ` (${statusLabels[t.status] || t.status})` : '';
+        opt.textContent = `${t.original_name || t.task_id}${pagesPart}${enginePart}${datePart}${statusPart}`;
+        this.benchSourceTaskSelect.appendChild(opt);
+      }
+
+      if (prevValue && pdfTasks.some((t: any) => t.task_id === prevValue)) {
+        this.benchSourceTaskSelect.value = prevValue;
+      }
+    } catch (e) {
+      console.warn('Could not load benchmark source tasks:', e);
+    }
+  }
+
+  private async handleBenchmarkSourceTaskSelect(taskId: string) {
+    if (!taskId) {
+      this.activeBenchSourceTaskId = null;
+      if (!this.activeBenchSourceFile) {
+        if (this.benchSourceFilename) this.benchSourceFilename.textContent = 'PDF hier ablegen oder klicken';
+        if (this.benchSourceBadge) {
+          this.benchSourceBadge.textContent = 'Ausgewählt';
+          this.benchSourceBadge.classList.add('hidden');
+        }
+        this.activeBenchSourcePageCount = 0;
+        this.activeBenchPhysicalStartPage = 1;
+        this.activeBenchPageLabels = [];
+        if (this.benchPagesInput) {
+          this.benchPagesInput.disabled = true;
+          this.benchPagesInput.classList.add('cursor-not-allowed', 'opacity-60');
+          this.benchPagesInput.value = '';
+          this.benchPagesInput.placeholder = 'Erst Quell-PDF hochladen...';
+          this.clearInputError(this.benchPagesInput, this.benchPagesInputError);
+        }
+      }
+      return;
+    }
+
+    try {
+      const [stateRes, rulesetRes] = await Promise.all([
+        fetch(`/api/tasks/${taskId}/state`),
+        fetch(`/api/ruleset/${taskId}`),
+      ]);
+      if (!stateRes.ok) {
+        throw new Error('Übertragungs-Status konnte nicht geladen werden.');
+      }
+      const data = await stateRes.json();
+      const rulesetData = rulesetRes.ok ? await rulesetRes.json() : null;
+
+      this.activeBenchSourceTaskId = taskId;
+      this.activeBenchSourceFile = null;
+
+      // Update Box 1: Quell-Dokument (PDF)
+      if (this.benchSourceFilename) {
+        this.benchSourceFilename.textContent = data.original_name || 'Quell-PDF aus Übertragung';
+      }
+      if (this.benchSourceBadge) {
+        this.benchSourceBadge.textContent = 'Aus Übertragung';
+        this.benchSourceBadge.classList.remove('hidden');
+      }
+      this.activeBenchSourcePageCount = data.page_count || 0;
+      this.activeBenchPhysicalStartPage = data.physical_start_page || 1;
+      this.activeBenchPageLabels = Array.isArray(data.page_labels) ? data.page_labels.map(String) : [];
+
+      // Update Box 3: Spezifische Regeln
+      this.activeBenchRulesFile = null;
+      const customRules =
+        (rulesetData && rulesetData.has_ruleset && rulesetData.content)
+          ? String(rulesetData.content).trim()
+          : String(data.custom_ruleset_content || '').trim();
+      const customRulesName =
+        (rulesetData && rulesetData.ruleset_name) ||
+        data.custom_ruleset_name ||
+        'Regeln aus Übertragung übernommen';
+
+      if (customRules) {
+        if (this.benchCustomRulesTextarea) this.benchCustomRulesTextarea.value = customRules;
+        if (this.benchRulesFilename) {
+          this.benchRulesFilename.textContent = `${customRulesName} (${customRules.length.toLocaleString('de-DE')} Zeichen)`;
+        }
+        if (this.benchRulesBadge) {
+          this.benchRulesBadge.textContent = 'Aus Übertragung';
+          this.benchRulesBadge.classList.remove('hidden');
+        }
+        if (this.benchRulesDropzone) {
+          this.benchRulesDropzone.classList.add('border-purple-500/60', 'bg-purple-500/5');
+        }
+      } else {
+        if (this.benchCustomRulesTextarea) this.benchCustomRulesTextarea.value = '';
+        if (this.benchRulesFilename) this.benchRulesFilename.textContent = 'Regel-Datei (.docx, .md, .txt, .pdf) ablegen';
+        if (this.benchRulesBadge) {
+          this.benchRulesBadge.textContent = 'Aktiv';
+          this.benchRulesBadge.classList.add('hidden');
+        }
+        if (this.benchRulesDropzone) {
+          this.benchRulesDropzone.classList.remove('border-purple-500/60', 'bg-purple-500/5');
+        }
+      }
+
+      // Update Box 4: Konfiguration (Seitenbereich & Basis-Regelsatz)
+      if (this.benchPagesInput) {
+        this.benchPagesInput.disabled = false;
+        this.benchPagesInput.classList.remove('cursor-not-allowed', 'opacity-60');
+        this.benchPagesInput.placeholder = this.formatPagesPlaceholder(
+          this.activeBenchSourcePageCount || 1,
+          this.activeBenchPageLabels
+        );
+        this.benchPagesInput.value = data.pages || '';
+        this.clearInputError(this.benchPagesInput, this.benchPagesInputError);
+      }
+      if (data.ruleset && this.benchRulesetSelect && this.benchRulesetSelect.querySelector(`option[value="${data.ruleset}"]`)) {
+        this.benchRulesetSelect.value = data.ruleset;
+      }
+    } catch (e: any) {
+      this.showErrorModal(e.message || 'Die ausgewählte Übertragung konnte nicht geladen werden.', 'Fehler beim Laden');
+    }
+  }
+
   private async handleBenchmarkSourceSelect(file: File) {
     if (!file.name.toLowerCase().endsWith('.pdf')) {
       this.showErrorModal('Bitte wählen Sie eine gültige PDF-Datei als Quelldokument aus.', 'Ungültiges Dateiformat');
       return;
     }
+    this.activeBenchSourceTaskId = null;
+    if (this.benchSourceTaskSelect) this.benchSourceTaskSelect.value = '';
     this.activeBenchSourceFile = file;
     if (this.benchSourceFilename) this.benchSourceFilename.textContent = file.name;
-    if (this.benchSourceBadge) this.benchSourceBadge.classList.remove('hidden');
+    if (this.benchSourceBadge) {
+      this.benchSourceBadge.textContent = 'Ausgewählt';
+      this.benchSourceBadge.classList.remove('hidden');
+    }
 
     if (this.benchPagesInput) {
       this.benchPagesInput.disabled = true;
@@ -4145,8 +4414,8 @@ class AppController {
   }
 
   private async handleCustomBenchmarkRun() {
-    if (!this.activeBenchSourceFile) {
-      this.showErrorModal('Bitte laden Sie zuerst ein Quell-PDF hoch.', 'Quelldokument fehlt');
+    if (!this.activeBenchSourceFile && !this.activeBenchSourceTaskId) {
+      this.showErrorModal('Bitte laden Sie zuerst ein Quell-PDF hoch oder wählen Sie eine bestehende Übertragung aus.', 'Quelldokument fehlt');
       return;
     }
     if (!this.activeBenchGtFile) {
@@ -4179,6 +4448,7 @@ class AppController {
     }
 
     const ruleset = this.benchRulesetSelect ? this.benchRulesetSelect.value : 'uebertragungsregeln_09_2025';
+    const sourceDisplayName = this.activeBenchSourceFile?.name || this.benchSourceFilename?.textContent || 'Quell-PDF';
 
     // Show live status UI immediately
     if (this.benchLiveStatus) this.benchLiveStatus.classList.remove('hidden');
@@ -4191,13 +4461,17 @@ class AppController {
     if (this.benchLiveProgressBar) this.benchLiveProgressBar.style.width = '1.0%';
     if (this.benchLiveLogs) {
       const tStr = new Date().toLocaleTimeString();
-      this.benchLiveLogs.innerHTML = `<div><span class="text-slate-500 font-mono">[${tStr}]</span> <span class="text-indigo-300 font-bold">🚀 Lade Quell-PDF '${this.activeBenchSourceFile.name}' & Referenz '${this.activeBenchGtFile.name}' hoch...</span></div><div><span class="text-slate-500 font-mono">[${tStr}]</span> <span class="text-slate-300">Ground Truth Parsing & Dokumentenverarbeitung startet...</span></div>`;
+      this.benchLiveLogs.innerHTML = `<div><span class="text-slate-500 font-mono">[${tStr}]</span> <span class="text-indigo-300 font-bold">🚀 Lade Quell-PDF '${sourceDisplayName}' & Referenz '${this.activeBenchGtFile.name}' hoch...</span></div><div><span class="text-slate-500 font-mono">[${tStr}]</span> <span class="text-slate-300">Ground Truth Parsing & Dokumentenverarbeitung startet...</span></div>`;
       this.benchLiveLogs.scrollTop = this.benchLiveLogs.scrollHeight;
     }
 
     try {
       const formData = new FormData();
-      formData.append('source_file', this.activeBenchSourceFile);
+      if (this.activeBenchSourceFile) {
+        formData.append('source_file', this.activeBenchSourceFile);
+      } else if (this.activeBenchSourceTaskId) {
+        formData.append('source_task_id', this.activeBenchSourceTaskId);
+      }
       formData.append('ground_truth_file', this.activeBenchGtFile);
       if (this.activeBenchRulesFile) {
         formData.append('custom_rules_file', this.activeBenchRulesFile);
@@ -4209,6 +4483,8 @@ class AppController {
       const pagesVal = this.benchPagesInput?.value.trim();
       if (pagesVal) {
         formData.append('pages', pagesVal);
+      } else if (this.activeBenchSourceTaskId) {
+        formData.append('pages', '');
       }
       formData.append('ruleset', ruleset);
       formData.append('engines', selectedEngines.join(','));
