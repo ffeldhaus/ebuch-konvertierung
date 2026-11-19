@@ -269,3 +269,17 @@ def compute_gemma_stream_percent(
     fraction = ((idx - 1) + intra) / total
     pct = start + int(fraction * span)
     return max(start, min(end, pct))
+
+
+def estimate_gemma_chunk_chars(markdown_text: str, total_chunks: int) -> int:
+    """Estimates expected streamed Gemma output characters per chunk with ``<Bild-Ref>`` compression.
+
+    Args:
+        markdown_text: Full Markdown input prior to Gemma standardisation.
+        total_chunks: Planned number of Gemma standardisation chunks.
+
+    Returns:
+        Expected character count per chunk (at least ``400``).
+    """
+    compact = fc.BILD_FULL_BLOCK_RE.sub('<Bild-Ref id="BILD_001" />', markdown_text or "")
+    return max(400, len(compact) // max(1, int(total_chunks)))

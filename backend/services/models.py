@@ -263,4 +263,26 @@ class StageProgressBudget(DomainModel):
     """Inclusive percentage ceiling reached before final DOCX export."""
 
 
+class BuchkonferenzProfile(DomainModel):
+    """Parsed structural and formatting directives from a Buchkonferenz ``custom_rules`` text."""
+
+    tasks_h5: bool = False
+    """Whether Überschrift 5 is used for tasks with a standalone '##### Aufgaben' header."""
+    tasks_h5_numbers_only: bool = False
+    """Whether Überschrift 5 formats only task numbers ('##### 1') without '##### Aufgaben'."""
+    point_difficulty_map: dict[int, str] = Field(default_factory=dict)
+    """Mapping from 1..3 dot points to bracketed difficulty labels such as '[einfach]'."""
+    has_hierarchy: bool = False
+    """Whether explicit Buchkonferenz Ü1..Ü4 section hierarchy rules are active."""
+    material_h3_section: bool = False
+    """Whether 'Material' is assigned to Überschrift 3 ('### Material')."""
+    text_subheadings_h4: bool = False
+    """Whether unnumbered body text subheadings ('schwarze Textüberschriften') demote to Ü4."""
+    adopt_toc_u1: bool = False
+    """Whether TOC-only main chapter headings should be injected as '# <Title>' on their start page."""
+    plain_italic_intro: bool = False
+    """Whether italic introductory paragraphs right under headings strip emphasis ('nicht fett')."""
+
+
+
 

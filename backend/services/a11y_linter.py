@@ -76,15 +76,17 @@ def lint_markdown(
 
     # Parse explicit Buchkonferenz heading level assignments (1..6) from custom_rules
     custom_level_patterns: dict[int, list[re.Pattern[str]]] = {}
+    allow_h1_h2_to_h4 = False
     if custom_rules and custom_rules.strip():
         level_chunks: list[tuple[int, str]] = []
         for m_sec in re.finditer(
-            r"(?:^|\n)[ \t#*\-]*(?:Überschrift|Ebene)\s*([1-6])\s*:[ \t]*([\s\S]*?)"
-            r"(?=\n[ \t#*\-]*(?:Überschrift|Ebene)\s*[1-6]\s*:|\n[ \t*]*Sonstiges|\n[ \t*]*Anmerkungen|\n<Anmerkung|\Z)",
+            r"(?:^|\n)[ \t#*\-]*(?:(?:Überschrift|Ebene)\s*([1-6])|Ü([1-6]))\b[ \t]*:?[ \t]*([\s\S]*?)"
+            r"(?=\n[ \t#*\-]*(?:(?:Überschrift|Ebene)\s*[1-6]|Ü[1-6])\b|\n#{1,6}\s+|\n[ \t*]*Sonstiges|\n[ \t*]*Anmerkungen|\n<Anmerkung|\Z)",
             custom_rules,
             re.IGNORECASE,
         ):
-            level_chunks.append((int(m_sec.group(1)), m_sec.group(2)))
+            lvl_val = int(m_sec.group(1) or m_sec.group(2))
+            level_chunks.append((lvl_val, m_sec.group(3)))
 
         for m_inl in re.finditer(
             r"\b([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß\- ]{1,35}?)\s+(?:(?:in|als|=|:)\s*)?(?:Überschrift\s*|Ü|H)([1-6])\b",
@@ -97,8 +99,19 @@ def lint_markdown(
 
         for lvl_num, chunk_txt in level_chunks:
             pats = custom_level_patterns.setdefault(lvl_num, [])
+            if lvl_num == 4 and re.search(
+                r"Textüberschrift\w*|kapitelinterne\s+Überschrift\w*|Abschnittsüberschrift\w*|größere\s+Absätze",
+                chunk_txt,
+                re.IGNORECASE,
+            ):
+                allow_h1_h2_to_h4 = True
             if re.search(r"\b(?:Aufgaben?|Übungen?|Aufgabennummern?)\b", chunk_txt, re.IGNORECASE):
-                pats.append(re.compile(r"^(?:Aufgaben?|Übungen?|[A-LN-Z]?\d+[a-z]?)\b:?\s*$", re.IGNORECASE))
+                pats.append(
+                    re.compile(
+                        r"^(?:Aufgaben?|Übungen?|[A-LN-Z]?\d+(?:\.\d+)*[a-z]?)[.:]?\s*$",
+                        re.IGNORECASE,
+                    )
+                )
             if re.search(r"\b(?:Abbildungsunterschrift|Bildunterschrift)\w*", chunk_txt, re.IGNORECASE):
                 pats.append(
                     re.compile(
@@ -124,6 +137,22 @@ def lint_markdown(
             if len(chunk_txt.split()) <= 4 and re.fullmatch(r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß0-9 \-]{1,35}", chunk_txt.strip()):
                 pats.append(re.compile(rf"^{re.escape(chunk_txt.strip())}\b", re.IGNORECASE))
 
+        if re.search(
+            r"(?:(?:Überschrift|Ebene)\s*4|Ü\s*4)[\s\S]{0,180}(?:Textüberschrift\w*|kapitelinterne\s+Überschrift\w*|Abschnittsüberschrift\w*|größere\s+Absätze)"
+            r"|(?:Textüberschrift\w*|kapitelinterne\s+Überschrift\w*|Abschnittsüberschrift\w*|größere\s+Absätze)[^\n]{0,60}(?:(?:Überschrift|Ebene)\s*4|Ü\s*4)",
+            custom_rules,
+            re.IGNORECASE,
+        ):
+            allow_h1_h2_to_h4 = True
+        if re.search(
+            r"[MBQ]1?\s*\+\s*Bildtitel|Den\s+Abbildungen\s+ein\s+[MBQ]\s+voranstellen",
+            custom_rules,
+            re.IGNORECASE,
+        ):
+            custom_level_patterns.setdefault(4, []).append(
+                re.compile(r"^[MBQ]\s*\d+", re.IGNORECASE)
+            )
+
     # 1. Heading Hierarchy Check
     current_level = 0
     for idx, line in enumerate(lines):
@@ -134,7 +163,7 @@ def lint_markdown(
             is_semantic_element_heading = bool(_SEMANTIC_HEADING_RE.match(title))
             is_custom_level_heading = any(
                 p.search(title) for p in custom_level_patterns.get(level, ())
-            )
+            ) or (level == 4 and current_level in (1, 2) and allow_h1_h2_to_h4)
             if (
                 current_level > 0
                 and level > current_level + 1
@@ -345,13 +374,16 @@ def lint_markdown(
                 line_clean,
             )
         m_pg = re.match(
-            r"^\(\((\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((\d+|[IVXLCDMivxlcdm]+)\)\))?$",
+            r"^\(\((\d+|[IVXLCDMivxlcdm]+)(?:\s*[-–]\s*(\d+|[IVXLCDMivxlcdm]+))?\)\)(?:\s*/\s*\(\((\d+|[IVXLCDMivxlcdm]+)\)\))*$",
             line_clean,
         )
         if m_pg:
-            page_markers_with_lines.append((m_pg.group(1), idx + 1))
             if m_pg.group(2):
+                page_markers_with_lines.append((m_pg.group(1), idx + 1))
                 page_markers_with_lines.append((m_pg.group(2), idx + 1))
+            else:
+                for pg_tok in re.findall(r"\(\((\d+|[IVXLCDMivxlcdm]+)\)\)", line_clean):
+                    page_markers_with_lines.append((pg_tok, idx + 1))
 
     for i in range(1, len(page_markers_with_lines)):
         prev_pg, _ = page_markers_with_lines[i - 1]
@@ -385,14 +417,37 @@ def lint_markdown(
                     f"(({prev_pg})) -> (({curr_pg}))",
                 )
 
+    raw_unique_pgs: list[str] = []
+    if raw_markdown:
+        from backend.services.fibs_postprocess import split_markdown_pages
+
+        for r_seg in split_markdown_pages(raw_markdown):
+            if not r_seg.page:
+                continue
+            m_rh = re.match(r"^(\(\([^\n]+\)[ \t]*)(?:\n([\s\S]*))?$", r_seg.text)
+            r_hdr = m_rh.group(1) if m_rh else f"(({r_seg.page}))"
+            r_body = (m_rh.group(2) if m_rh else "") or ""
+            if not r_body.strip():
+                continue
+            for r_tok in re.findall(r"\(\((\d+|[IVXLCDMivxlcdm]+)\)\)", r_hdr):
+                r_low = r_tok.lower()
+                if r_low not in raw_unique_pgs:
+                    raw_unique_pgs.append(r_low)
+        if not raw_unique_pgs:
+            raw_unique_pgs = list(
+                dict.fromkeys(
+                    p.lower()
+                    for p in re.findall(r"\(\((\d+|[IVXLCDMivxlcdm]+)\)\)", raw_markdown)
+                )
+            )
+
     target_expected_pages = expected_pages
-    if target_expected_pages is None and raw_markdown:
-        raw_pgs = list(dict.fromkeys(re.findall(r"\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)", raw_markdown)))
-        if len(raw_pgs) >= 2:
-            target_expected_pages = len(raw_pgs)
+    if target_expected_pages is None and len(raw_unique_pgs) >= 2:
+        target_expected_pages = len(raw_unique_pgs)
     if target_expected_pages and target_expected_pages >= 2:
         unique_pred_pgs = list(dict.fromkeys(p.lower() for p, _ in page_markers_with_lines))
-        if len(unique_pred_pgs) < target_expected_pages:
+        matched_raw_source = bool(raw_unique_pgs and len(unique_pred_pgs) >= len(raw_unique_pgs))
+        if len(unique_pred_pgs) < target_expected_pages and not matched_raw_source:
             _add_issue(
                 "page_number_missing",
                 "warning",

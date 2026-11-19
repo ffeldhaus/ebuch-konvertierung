@@ -708,19 +708,341 @@ def _sort_blocks_in_reading_order(blocks: list[dict[str, Any]]) -> list[dict[str
     return [b for _, b in without_coords_top] + ordered_coords + [b for _, b in without_coords_tail]
 
 
+def normalize_split_decimal_headings(markdown_text: str) -> str:
+    """Normalizes 2-line PDF section headings where a decimal number sits mid-title.
+
+    Rewrites headings such as ``## Grundlagen 2.1 im Überblick`` into
+    ``## 2.1 Grundlagen im Überblick`` while preserving label prefixes (e.g. ``Abbildung 4.1``),
+    and drops an immediately preceding unnumbered duplicate heading on the same page.
+
+    Args:
+        markdown_text: Input Markdown text.
+
+    Returns:
+        Markdown text with split decimal section headings normalized and deduplicated.
+    """
+    if not markdown_text:
+        return markdown_text
+
+    lines = markdown_text.split("\n")
+    norm_lines: list[str] = []
+    for raw_ln in lines:
+        s_ln = raw_ln.strip()
+        m_sp = fc.SPLIT_DECIMAL_HEADING_RE.match(s_ln)
+        if m_sp:
+            hashes_sp = m_sp.group(1)
+            prefix_sp = m_sp.group(2).strip()
+            num_sp = re.sub(r"\s*\.\s*", ".", m_sp.group(3).strip())
+            suffix_sp = m_sp.group(4).strip()
+            maj_s, sub_s = num_sp.rstrip(".").split(".", 1)
+            if (
+                not fc.SPLIT_HEADING_EXCLUDED_PREFIX_RE.match(prefix_sp)
+                and int(maj_s) <= 40
+                and int(sub_s) <= 40
+                and not re.match(r"^(?:°|%|cm\b|mm\b|km\b|kg\b|ms\b|mol\b|Hz\b)", suffix_sp)
+            ):
+                raw_ln = f"{hashes_sp}{num_sp} {prefix_sp} {suffix_sp}"
+                s_ln = raw_ln.strip()
+
+        m_dec = re.match(r"^(#{1,4})\s+([1-9]\d?\.[1-9]\d?\.?)\s+([A-ZÄÖÜa-zäöüß].+)$", s_ln)
+        if m_dec and norm_lines:
+            cur_hashes, cur_num, cur_title = m_dec.group(1), m_dec.group(2), m_dec.group(3)
+            cur_title_norm = re.sub(r"\W+", " ", cur_title).strip().lower()
+            if len(cur_title_norm) >= 5:
+                prev_idx = len(norm_lines) - 1
+                while prev_idx >= 0 and not norm_lines[prev_idx].strip():
+                    prev_idx -= 1
+                if prev_idx >= 0:
+                    prev_s = norm_lines[prev_idx].strip()
+                    m_prev_h = re.match(r"^#{1,4}\s+([^\d#\n][^\n]*)$", prev_s)
+                    if m_prev_h:
+                        prev_title_norm = re.sub(r"\W+", " ", m_prev_h.group(1)).strip().lower()
+                        if prev_title_norm == cur_title_norm:
+                            del norm_lines[prev_idx:]
+                    else:
+                        m_prev_dec = re.match(
+                            r"^(#{1,4})\s+([1-9]\d?\.[1-9]\d?\.?)\s+([A-ZÄÖÜa-zäöüß].+)$",
+                            prev_s,
+                        )
+                        if m_prev_dec and m_prev_dec.group(2).rstrip(".") == cur_num.rstrip("."):
+                            prev_dec_norm = re.sub(r"\W+", " ", m_prev_dec.group(3)).strip().lower()
+                            if prev_dec_norm == cur_title_norm:
+                                best_h = (
+                                    m_prev_dec.group(1)
+                                    if len(m_prev_dec.group(1)) <= len(cur_hashes)
+                                    else cur_hashes
+                                )
+                                del norm_lines[prev_idx:]
+                                raw_ln = f"{best_h} {cur_num} {cur_title}"
+
+        norm_lines.append(raw_ln)
+
+    return "\n".join(norm_lines)
+
+
+def _detect_page_3dot_task_difficulties(
+    page: Any,
+    textpage: Any,
+    pw: float,
+    ph: float,
+    bx0: float,
+    by0: float,
+    rotation: int,
+    pdfium_c: Any,
+) -> list[dict[str, Any]]:
+    """Detects horizontal 3-dot vector task difficulty indicators on a single PDF page.
+
+    Applies a strict zero-overhead guard: ``page.render(scale=2.0)`` is invoked only
+    when at least one collinear triplet of 3 equal-sized small square/circle paths
+    exists above ``y = 20 pt``. Filters out diagram-interior particle circles without
+    adjacent task prose/bullets and sorts indicators in 2-column reading order.
+
+    Args:
+        page: Open ``pypdfium2.PdfPage`` handle.
+        textpage: Open ``pypdfium2.PdfTextPage`` handle.
+        pw: Page width in PDF points.
+        ph: Page height in PDF points.
+        bx0: Page bounding box left origin in PDF points.
+        by0: Page bounding box bottom origin in PDF points.
+        rotation: Page rotation in degrees.
+        pdfium_c: ``pypdfium2.raw`` C bindings module.
+
+    Returns:
+        Reading-order list of ``{"points": 1|2|3, "anchor": str, "y_1000": float}`` dicts.
+    """
+    raw_dots: list[tuple[float, float, float, float, float, float, float, float]] = []
+    try:
+        path_objs = page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_PATH], max_depth=3)
+        for obj in path_objs:
+            try:
+                l_b, b_b, r_b, t_b = (float(v) for v in obj.get_bounds())
+            except Exception:
+                continue
+            w_b = r_b - l_b
+            h_b = t_b - b_b
+            if (
+                2.5 <= w_b <= 6.8
+                and 2.5 <= h_b <= 6.8
+                and abs(w_b - h_b) <= 1.8
+                and (b_b - by0) > 20.0
+            ):
+                raw_dots.append(
+                    (l_b, b_b, r_b, t_b, (l_b + r_b) / 2.0, (b_b + t_b) / 2.0, w_b, h_b)
+                )
+    except Exception:
+        return []
+
+    if len(raw_dots) < 3:
+        return []
+
+    # Deduplicate concentric / fill+stroke path pairs belonging to the same dot
+    raw_dots.sort(key=lambda d: (round(d[5], 1), d[4]))
+    dedup_dots: list[tuple[float, float, float, float, float, float, float, float]] = []
+    for d in raw_dots:
+        merged = False
+        for idx_d in range(len(dedup_dots) - 1, -1, -1):
+            ed = dedup_dots[idx_d]
+            if abs(d[5] - ed[5]) > 1.8:
+                break
+            if abs(d[4] - ed[4]) < 2.0 and abs(d[5] - ed[5]) <= 1.2:
+                nl, nb = min(d[0], ed[0]), min(d[1], ed[1])
+                nr, nt = max(d[2], ed[2]), max(d[3], ed[3])
+                nw, nh = nr - nl, nt - nb
+                if nw <= 6.8 and nh <= 6.8:
+                    dedup_dots[idx_d] = (
+                        nl,
+                        nb,
+                        nr,
+                        nt,
+                        (nl + nr) / 2.0,
+                        (nb + nt) / 2.0,
+                        nw,
+                        nh,
+                    )
+                merged = True
+                break
+        if not merged:
+            dedup_dots.append(d)
+
+    if len(dedup_dots) < 3:
+        return []
+
+    # Cluster horizontal rows (|dy| <= 1.2 pt) and extract exact-length-3 equidistant runs
+    used = [False] * len(dedup_dots)
+    candidate_triplets: list[
+        tuple[
+            tuple[float, float, float, float, float, float, float, float],
+            tuple[float, float, float, float, float, float, float, float],
+            tuple[float, float, float, float, float, float, float, float],
+        ]
+    ] = []
+    for i_d, seed in enumerate(dedup_dots):
+        if used[i_d]:
+            continue
+        row = [seed]
+        used[i_d] = True
+        for j_d in range(i_d + 1, len(dedup_dots)):
+            if not used[j_d] and abs(dedup_dots[j_d][5] - seed[5]) <= 1.2:
+                row.append(dedup_dots[j_d])
+                used[j_d] = True
+        if len(row) < 3:
+            continue
+        row.sort(key=lambda item: item[4])
+        runs: list[list[tuple[float, float, float, float, float, float, float, float]]] = [[row[0]]]
+        for nxt_d in row[1:]:
+            prev_d = runs[-1][-1]
+            dx_center = nxt_d[4] - prev_d[4]
+            dx_gap = nxt_d[0] - prev_d[2]
+            size_ok = abs(nxt_d[6] - prev_d[6]) <= 1.5 and abs(nxt_d[7] - prev_d[7]) <= 1.5
+            step_ok = dx_gap >= 0.4 and (
+                2.8 <= dx_center <= 8.5 or (2.8 <= dx_gap <= 8.5 and dx_center <= 13.5)
+            )
+            if size_ok and step_ok:
+                runs[-1].append(nxt_d)
+            else:
+                runs.append([nxt_d])
+        for run in runs:
+            if len(run) == 3:
+                step1 = run[1][4] - run[0][4]
+                step2 = run[2][4] - run[1][4]
+                if abs(step2 - step1) <= 2.2:
+                    candidate_triplets.append((run[0], run[1], run[2]))
+
+    if not candidate_triplets:
+        return []
+
+    try:
+        pil_img = page.render(scale=2.0).to_pil().convert("RGB")
+    except Exception:
+        return []
+
+    img_w, img_h = pil_img.size
+    if img_w <= 0 or img_h <= 0:
+        return []
+
+    found_difficulties: list[tuple[int, float, float, dict[str, Any]]] = []
+    for trip in candidate_triplets:
+        states: list[bool] = []
+        ambiguous = False
+        for d in trip:
+            cx_pt = d[4] - bx0
+            cy_pt = d[5] - by0
+            if rotation == 90:
+                cx_r, cy_r = cy_pt, ph - cx_pt
+            elif rotation == 180:
+                cx_r, cy_r = pw - cx_pt, ph - cy_pt
+            elif rotation == 270:
+                cx_r, cy_r = pw - cy_pt, cx_pt
+            else:
+                cx_r, cy_r = cx_pt, cy_pt
+            px_x = max(0, min(img_w - 1, int(round((cx_r / pw) * img_w))))
+            px_y = max(0, min(img_h - 1, int(round(((ph - cy_r) / ph) * img_h))))
+            r_v, g_v, b_v = pil_img.getpixel((px_x, px_y))
+            lum = 0.299 * r_v + 0.587 * g_v + 0.114 * b_v
+            if lum < 195.0:
+                states.append(True)
+            elif lum >= 205.0:
+                states.append(False)
+            else:
+                ambiguous = True
+                break
+        if ambiguous or states not in (
+            [True, False, False],
+            [True, True, False],
+            [True, True, True],
+        ):
+            continue
+
+        n_filled = sum(1 for st in states if st)
+        x0 = trip[0][0]
+        x2 = trip[2][2]
+        y0 = min(d[1] for d in trip)
+        y1 = max(d[3] for d in trip)
+
+        # Detect 2-column right-column placement via empty center gutter + right-side text
+        col_idx = 0
+        col_left_clamp = 0.0
+        if x0 > bx0 + pw * 0.48:
+            gutter_w = max(8.0, pw * 0.02)
+            for frac in (0.44, 0.46, 0.48, 0.50, 0.52, 0.54):
+                gx0 = bx0 + pw * frac
+                gx1 = gx0 + gutter_w
+                if gx1 >= x0 - 12.0:
+                    break
+                try:
+                    g_txt = textpage.get_text_bounded(
+                        gx0, max(0.0, y0 - 3.0), gx1, y1 + 3.0
+                    ).strip()
+                    r_txt = textpage.get_text_bounded(
+                        gx1, max(0.0, y0 - 4.0), max(gx1, x0 - 1.5), y1 + 4.0
+                    ).strip()
+                except Exception:
+                    g_txt, r_txt = "x", ""
+                if not g_txt and r_txt:
+                    col_idx = 1
+                    col_left_clamp = gx1
+                    break
+
+        snippet = ""
+        try:
+            snippet = " ".join(
+                textpage.get_text_bounded(
+                    max(col_left_clamp, x0 - 45.0), max(0.0, y0 - 5.0), x2 + 10.0, y1 + 5.0
+                ).split()
+            )
+            if len(re.sub(r"[•●○◦∙⋅\s]+", "", snippet)) < 2:
+                snippet = " ".join(
+                    textpage.get_text_bounded(
+                        max(col_left_clamp, x0 - 160.0),
+                        max(0.0, y0 - 5.0),
+                        x2 + 10.0,
+                        y1 + 5.0,
+                    ).split()
+                )
+        except Exception:
+            snippet = ""
+
+        has_bullets = bool(fc.DOT_BULLET_RUN_RE.search(snippet))
+        clean_snip = re.sub(r"[•●○◦∙⋅\s]+", " ", snippet).strip()
+        alpha_words_3 = re.findall(r"[A-Za-zÄÖÜäöüß]{3,}", clean_snip)
+        ends_punct = clean_snip.endswith((".", "?", "!", ":"))
+        has_prose_anchor = len(alpha_words_3) >= 2 or (
+            ends_punct
+            and len(re.findall(r"[A-Za-zÄÖÜäöüß]{2,}", clean_snip)) >= 1
+            and not re.fullmatch(r"(?:ca|vgl|bzw|Abb|Fig|Tab)\.", clean_snip, re.IGNORECASE)
+        )
+        if not has_bullets and not has_prose_anchor:
+            continue
+
+        y_1000 = round(((ph - (((y0 + y1) / 2.0) - by0)) / ph) * 1000.0, 1)
+        x_1000 = round(((x0 - bx0) / pw) * 1000.0, 1)
+        found_difficulties.append(
+            (
+                col_idx,
+                y_1000,
+                x_1000,
+                {"points": n_filled, "anchor": snippet, "y_1000": y_1000},
+            )
+        )
+
+    found_difficulties.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in found_difficulties]
+
+
 def extract_pdf_page_details(
     pdf_path_or_doc: Any,
     figure_bboxes_by_page: dict[int, list[list[int]]] | None = None,
     table_bboxes_by_page: dict[int, list[list[int]]] | None = None,
     callout_rects_by_page: dict[int, list[tuple[float, float, float, float]]] | None = None,
 ) -> dict[str, dict[int, list[Any]]]:
-    """Extracts born-digital PDF text blocks, inline font spans, furniture, and in-figure labels in one pass.
+    """Extracts born-digital PDF text blocks, inline font spans, furniture, in-figure labels, and 3-dot task difficulties.
 
     Uses a single ``pypdfium2.PdfDocument`` handle and ``FPDFText_GetFontInfo`` /
     ``FPDFText_GetFontWeight`` to capture ``Bold``/``SemiBold`` and ``Italic``/``Oblique``
-    spans (excluding headings and whole-paragraph italic intro blocks of >= 25 words),
-    separate in-figure text inside ``figure_bboxes_by_page``, and build clean reading-order
-    PDF text blocks with ``bbox_1000``.
+    spans (excluding headings and whole-paragraph italic intro blocks of >= 15 words
+    immediately under a heading or >= 25 words elsewhere), separate in-figure text inside
+    ``figure_bboxes_by_page``, detect 3-dot vector task difficulty indicators, and build
+    clean reading-order PDF text blocks with ``bbox_1000``.
 
     Args:
         pdf_path_or_doc: Path to a PDF file or an already-open ``pypdfium2.PdfDocument``.
@@ -730,13 +1052,14 @@ def extract_pdf_page_details(
 
     Returns:
         Dictionary with keys ``font_spans_by_page``, ``figure_texts_by_page``,
-        ``pdf_blocks_by_page``, and ``furniture_by_page``.
+        ``pdf_blocks_by_page``, ``furniture_by_page``, and ``task_difficulties_by_page``.
     """
     details: dict[str, dict[int, list[Any]]] = {
         "font_spans_by_page": {},
         "figure_texts_by_page": {},
         "pdf_blocks_by_page": {},
         "furniture_by_page": {},
+        "task_difficulties_by_page": {},
     }
     if pdf_path_or_doc is None:
         return details
@@ -791,6 +1114,12 @@ def extract_pdf_page_details(
             bx0, by0 = page.get_bbox()[:2]
             textpage = page.get_textpage()
             try:
+                page_diffs = _detect_page_3dot_task_difficulties(
+                    page, textpage, pw, ph, bx0, by0, rotation, pdfium_c
+                )
+                if page_diffs:
+                    details["task_difficulties_by_page"][p_idx] = page_diffs
+
                 n_chars = textpage.count_chars()
                 if n_chars <= 0:
                     continue
@@ -957,12 +1286,35 @@ def extract_pdf_page_details(
                     callout_fig_rects.append(fb_rect)
 
             body_lines: list[dict[str, Any]] = []
+            page_has_top_rubric_badge = any(
+                ln_e["bbox_1000"][1] <= 120
+                and not fc.FOLIO_EDGE_NUMBER_RE.search(ln_e["text"].strip())
+                and bool(fc.STANDALONE_RUBRIC_LABEL_RE.match(ln_e["text"].strip()))
+                for ln_e in raw_lines
+            )
 
             for ln_entry in raw_lines:
                 lb = ln_entry["bbox_1000"]
                 ltxt = ln_entry["text"]
+                s_ltxt = ltxt.strip()
                 cx = (lb[0] + lb[2]) / 2.0
                 cy = (lb[1] + lb[3]) / 2.0
+                is_top_rubric_banner = (
+                    lb[1] <= 120
+                    and not fc.FOLIO_EDGE_NUMBER_RE.search(s_ltxt)
+                    and (
+                        bool(fc.DIDACTIC_RUBRIC_BANNER_RE.match(s_ltxt))
+                        or (
+                            page_has_top_rubric_badge
+                            and 2 <= len(s_ltxt.split()) <= 14
+                            and not s_ltxt.endswith(".")
+                            and (
+                                len(re.findall(r"\b[A-ZÄÖÜ][A-Za-zÄÖÜäöüß\-]+", s_ltxt)) >= 2
+                                or (len(s_ltxt.split()) <= 4 and bool(re.match(r"^[A-ZÄÖÜ]", s_ltxt)))
+                            )
+                        )
+                    )
+                )
 
                 in_fig = False
                 in_rescued_callout = False
@@ -977,8 +1329,11 @@ def extract_pdf_page_details(
                         if fb_rect in callout_fig_rects:
                             in_rescued_callout = True
                             break
-                        # Keep real captions positioned at the bottom edge of a figure box out of figure_texts
-                        if lb[1] >= fb_rect[3] - 32 and _is_figure_caption_line(ltxt, has_page_images=True):
+                        # Keep real captions positioned at the bottom edge of a figure box or top rubric banners out of figure_texts
+                        if is_top_rubric_banner or (
+                            lb[1] >= fb_rect[3] - 32
+                            and _is_figure_caption_line(ltxt, has_page_images=True)
+                        ):
                             in_fig = False
                         else:
                             in_fig = True
@@ -989,7 +1344,11 @@ def extract_pdf_page_details(
                 if in_rescued_callout:
                     ln_entry["in_callout_box"] = True
 
-                if (lb[3] <= 65 or lb[1] >= 945) and not _is_marginalia_or_glossary_note(ltxt):
+                if (
+                    (lb[3] <= 65 or lb[1] >= 945)
+                    and not is_top_rubric_banner
+                    and not _is_marginalia_or_glossary_note(ltxt)
+                ):
                     f_type = "page_header" if lb[3] <= 65 else "page_footer"
                     details["furniture_by_page"].setdefault(p_idx, []).append({
                         "type": f_type,
@@ -1148,10 +1507,25 @@ def extract_pdf_page_details(
                 if is_heading_para:
                     continue
 
+                prev_was_heading = len(page_pdf_blocks) >= 2 and (
+                    page_pdf_blocks[-2].get("type") == "section_header"
+                    or bool(
+                        re.match(
+                            r"^(?:#{1,6}\s+|\d+\.\d+\b|(?:Methode|Basiskonzept|Exkurs)\b)",
+                            str(page_pdf_blocks[-2].get("text") or "").strip(),
+                            re.IGNORECASE,
+                        )
+                    )
+                )
+                min_italic_words = 15 if prev_was_heading else 25
                 alpha_total = sum(1 for ch, _, _ in merged_chars if ch.isalpha())
                 italic_alpha = sum(1 for ch, _b, it in merged_chars if ch.isalpha() and it)
                 bold_alpha = sum(1 for ch, bd, _i in merged_chars if ch.isalpha() and bd)
-                suppress_italic = bool(len(para_words) >= 25 and alpha_total > 0 and (italic_alpha / alpha_total) >= 0.80)
+                suppress_italic = bool(
+                    len(para_words) >= min_italic_words
+                    and alpha_total > 0
+                    and (italic_alpha / alpha_total) >= 0.80
+                )
                 suppress_all_caption = bool(
                     _is_figure_caption_line(para_str, has_page_images=True)
                     and alpha_total > 0
@@ -1394,6 +1768,7 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
         "text_blocks_by_page": {},
         "font_spans_by_page": {},
         "figure_texts_by_page": {},
+        "task_difficulties_by_page": {},
         "opening_headers_by_page": {},
         "body_line_height": 0.0,
     }
@@ -1581,6 +1956,27 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
             callout_rects_by_page = detect_pdf_callout_rects_by_page(pdf_path, pdf_doc=pdf_doc_shared)
             body_heights: list[float] = []
             raw_headings: list[dict[str, Any]] = []
+            pages_with_top_rubric_badge: set[int] = set()
+            for pre_item, _pre_lvl in doc.iterate_items(
+                included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE}
+            ):
+                pre_txt = (getattr(pre_item, "text", "") or "").strip()
+                if (
+                    not pre_txt
+                    or fc.FOLIO_EDGE_NUMBER_RE.search(pre_txt)
+                    or not fc.STANDALONE_RUBRIC_LABEL_RE.match(pre_txt)
+                ):
+                    continue
+                pre_p_no = 1
+                pre_bbox = None
+                if getattr(pre_item, "prov", None) and len(pre_item.prov) > 0:
+                    pre_p_no = pre_item.prov[0].page_no
+                    pre_bbox = pre_item.prov[0].bbox
+                pre_p_idx = max(0, pre_p_no - 1)
+                pw_pre, ph_pre = page_sizes_by_idx.get(pre_p_idx, (0.0, 0.0))
+                pre_b1000 = normalize_bbox_to_1000(pre_bbox, pw_pre, ph_pre) if pre_bbox else None
+                if pre_b1000 is None or pre_b1000[1] <= 120:
+                    pages_with_top_rubric_badge.add(pre_p_idx)
 
             for item, _level in doc.iterate_items(
                 included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE}
@@ -1607,6 +2003,25 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                         continue
                 bbox_1000 = normalize_bbox_to_1000(bbox_obj, pw_i, ph_i) if bbox_obj else None
 
+                is_top_rubric_banner = (
+                    lbl != "page_footer"
+                    and (bbox_1000 is None or bbox_1000[1] <= 120)
+                    and not fc.FOLIO_EDGE_NUMBER_RE.search(txt)
+                    and (
+                        bool(fc.DIDACTIC_RUBRIC_BANNER_RE.match(txt))
+                        or (
+                            p_idx in pages_with_top_rubric_badge
+                            and bbox_1000 is not None
+                            and 2 <= len(txt.split()) <= 14
+                            and not txt.endswith(".")
+                            and (
+                                len(re.findall(r"\b[A-ZÄÖÜ][A-Za-zÄÖÜäöüß\-]+", txt)) >= 2
+                                or (len(txt.split()) <= 4 and bool(re.match(r"^[A-ZÄÖÜ]", txt)))
+                            )
+                        )
+                    )
+                )
+
                 is_top_or_bottom_furniture = bool(
                     bbox_1000 is not None
                     and (bbox_1000[3] <= 65 or (bbox_1000[1] >= 945 and len(txt) <= 85))
@@ -1616,7 +2031,7 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                     layer == ContentLayer.FURNITURE
                     or lbl in ("page_header", "page_footer", "furniture")
                     or is_top_or_bottom_furniture
-                ) and not _is_marginalia_or_glossary_note(txt):
+                ) and not is_top_rubric_banner and not _is_marginalia_or_glossary_note(txt):
                     f_type = (
                         "page_header"
                         if ("header" in lbl or (bbox_1000 is not None and bbox_1000[3] <= 65))
@@ -1643,7 +2058,8 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                     for fig_bbox in figure_bboxes_1000_by_page.get(p_idx, []):
                         if _bbox_overlap_ratio(bbox_1000, fig_bbox) >= 0.55:
                             if (
-                                fc.DIDACTIC_BOX_HEADER_RE.match(txt)
+                                is_top_rubric_banner
+                                or fc.DIDACTIC_BOX_HEADER_RE.match(txt)
                                 or (in_callout_doc and len(txt.split()) >= 4)
                                 or (
                                     bbox_1000[1] >= fig_bbox[3] - 32
@@ -1659,7 +2075,9 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                         continue
 
                 effective_lbl = (
-                    "text" if lbl in ("page_header", "page_footer", "furniture") else lbl
+                    "section_header"
+                    if is_top_rubric_banner
+                    else ("text" if lbl in ("page_header", "page_footer", "furniture") else lbl)
                 )
                 tb_entry: dict[str, Any] = {
                     "type": effective_lbl,
@@ -1673,9 +2091,9 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                 result["text_blocks"].append(tb_entry)
                 result["text_blocks_by_page"].setdefault(p_idx, []).append(tb_entry)
 
-                if lbl in ("text", "list_item") and 5.0 <= h <= 18.0 and 15 <= len(txt) <= 75 and w >= 80:
+                if lbl in ("text", "list_item") and not is_top_rubric_banner and 5.0 <= h <= 18.0 and 15 <= len(txt) <= 75 and w >= 80:
                     body_heights.append(h)
-                elif lbl in ("section_header", "title"):
+                elif lbl in ("section_header", "title") or (is_top_rubric_banner and h > 0):
                     in_callout = is_bbox_inside_callout_rect(bbox_obj, txt, callout_rects_by_page.get(p_idx, []))
                     raw_headings.append({
                         "text": txt,
@@ -1732,6 +2150,9 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
             for p_idx, fig_txts in pdf_details.get("figure_texts_by_page", {}).items():
                 if fig_txts:
                     result["figure_texts_by_page"].setdefault(p_idx, []).extend(fig_txts)
+            for p_idx, t_diffs in pdf_details.get("task_difficulties_by_page", {}).items():
+                if t_diffs:
+                    result["task_difficulties_by_page"][p_idx] = t_diffs
             for p_idx, furn_items in pdf_details.get("furniture_by_page", {}).items():
                 existing_f_norms = {
                     re.sub(r"\W+", " ", str(fi.get("text") or "")).strip().lower()
@@ -3313,8 +3734,111 @@ def fuse_vlm_page_with_docling(
             else:
                 cleaned_text = appended_imgs + "\n\n" + cleaned_text
 
-    # 6. Clean stray space after hyphens in broken words (e.g. Zellkompartimen- ten -> Zellkompartimenten)
+    # 6. Clean stray space after hyphens in broken words, normalize split decimal headings,
+    #    and attach PDF 3-dot task difficulty tags ([1 Punkt]..[3 Punkte])
     cleaned_text = fc.INLINE_HYPHEN_SPACE_RE.sub(r"\1\2", cleaned_text)
+    cleaned_text = normalize_split_decimal_headings(cleaned_text)
+
+    task_diffs_on_page: list[dict[str, Any]] = []
+    if isinstance(effective_layout, dict):
+        td_by_page = effective_layout.get("task_difficulties_by_page") or {}
+        if inferred_p_idx is not None and inferred_p_idx in td_by_page:
+            task_diffs_on_page.extend(td_by_page[inferred_p_idx] or [])
+        elif td_by_page and len(td_by_page) == 1 and inferred_p_idx is None:
+            task_diffs_on_page.extend(next(iter(td_by_page.values())) or [])
+        if effective_layout.get("task_difficulties"):
+            task_diffs_on_page.extend(effective_layout.get("task_difficulties") or [])
+
+    if task_diffs_on_page and cleaned_text:
+        raw_dots_re = re.compile(
+            r"[ \t]*(?:[•●○◦∙⋅]{3}|(?:[•●○◦∙⋅][ \t]+){2}[•●○◦∙⋅])[ \t]*"
+        )
+        td_lines = cleaned_text.splitlines()
+        matched_line_to_pts: dict[int, int] = {}
+        unmatched_entries: list[dict[str, Any]] = []
+
+        for td_entry in task_diffs_on_page:
+            pts_val = int(td_entry.get("points") or 0)
+            if pts_val not in (1, 2, 3):
+                continue
+            anchor_raw = re.sub(r"[•●○◦∙⋅]+", "", str(td_entry.get("anchor") or "")).strip()
+            anchor_cmp = re.sub(r"[\*_]+", "", anchor_raw).strip()
+            hit_idx: int | None = None
+            if anchor_cmp:
+                for li_td, raw_td_ln in enumerate(td_lines):
+                    if li_td in matched_line_to_pts:
+                        continue
+                    s_td = raw_td_ln.strip()
+                    if not s_td or s_td.startswith(("![", "<Bild", "|", "((")):
+                        continue
+                    s_no_dots = raw_dots_re.sub("", s_td).strip()
+                    s_plain = re.sub(r"[\*_]+", "", s_no_dots).strip()
+                    if len(anchor_cmp) >= 3 and s_plain.endswith(anchor_cmp):
+                        hit_idx = li_td
+                        break
+                    if (
+                        len(anchor_cmp) >= 4
+                        and anchor_cmp in s_plain[-max(70, len(anchor_cmp) + 20) :]
+                    ):
+                        hit_idx = li_td
+                        break
+                    if re.fullmatch(r"[A-LN-Z]?\d+[a-z]?[.:)]?", anchor_cmp) and re.match(
+                        rf"^(?:#{{1,6}}\s+)?(?:[-*•]\s+)?(?:\*\*|_)?(?:Aufgabe\s+)?{re.escape(anchor_cmp.rstrip('.:)'))}(?:\*\*|_)?[.:)]?\s+\S",
+                        s_no_dots,
+                        re.IGNORECASE,
+                    ):
+                        hit_idx = li_td
+                        break
+            if hit_idx is not None:
+                matched_line_to_pts[hit_idx] = pts_val
+            else:
+                unmatched_entries.append({"points": pts_val, "anchor": anchor_cmp})
+
+        if unmatched_entries:
+            seq_task_indices: list[int] = []
+            in_aufg_td = False
+            for li_td, raw_td_ln in enumerate(td_lines):
+                s_td = raw_dots_re.sub("", raw_td_ln.strip()).strip()
+                if not s_td:
+                    continue
+                if re.match(
+                    r"^(?:#{1,6}\s+)?(?:\*\*|_)?Aufgaben?:?(?:\*\*|_)?\s*$",
+                    s_td,
+                    re.IGNORECASE,
+                ):
+                    in_aufg_td = True
+                    continue
+                if li_td in matched_line_to_pts:
+                    continue
+                m_t_cand = re.match(
+                    r"^(?:#{1,6}\s+)?(?:[-*•]\s+)?(?:\*\*|_)?(?:Aufgabe\s+|Übung\s+)?([A-LN-Z]\d+|\d{1,2})(?:\*\*|_)?[.:)]?\s+([A-ZÄÖÜ].+)$",
+                    s_td,
+                )
+                if m_t_cand:
+                    body_cand = m_t_cand.group(2).strip()
+                    if (
+                        in_aufg_td
+                        or _TASK_IMPERATIVE_SIE_RE.search(body_cand)
+                        or _TASK_IMPERATIVE_DU_START_RE.match(body_cand)
+                        or body_cand.endswith("?")
+                    ):
+                        seq_task_indices.append(li_td)
+            for td_rem, li_seq in zip(unmatched_entries, seq_task_indices):
+                matched_line_to_pts[li_seq] = int(td_rem["points"])
+
+        for li_td, raw_td_ln in enumerate(td_lines):
+            if li_td in matched_line_to_pts:
+                pts_v = matched_line_to_pts[li_td]
+                unit_lbl = "Punkt" if pts_v == 1 else "Punkte"
+                base_ln = raw_dots_re.sub("", raw_td_ln).rstrip()
+                if not fc.POINT_DIFFICULTY_TAG_RE.search(base_ln):
+                    td_lines[li_td] = f"{base_ln} [{pts_v} {unit_lbl}]"
+                else:
+                    td_lines[li_td] = base_ln
+            elif re.search(r"[•●○◦∙⋅]{3}\s*$", raw_td_ln):
+                td_lines[li_td] = raw_dots_re.sub("", raw_td_ln).rstrip()
+
+        cleaned_text = "\n".join(td_lines)
 
     # 7. Prepend physical page boundary marker if not already present
     if f"(({phys_num}))" not in cleaned_text:
@@ -4302,6 +4826,7 @@ def reconstruct_title_hierarchy(
     from backend.services.fibs_postprocess import normalize_heading_page_markers
 
     markdown_content = normalize_heading_page_markers(markdown_content)
+    markdown_content = normalize_split_decimal_headings(markdown_content)
 
     # Step 0a: Join consecutive '# CHAPTER N' + '# <Title>' on adjacent lines into '# CHAPTER N: <Title>'
     markdown_content = re.sub(

@@ -442,5 +442,190 @@ def test_glossary_rahmen_unwrap_steckbrief_dedup_captions_and_subtasks():
     assert "<Bild> Foto:\nBeschreibung: Ein Porträtfoto eines Forschers im dunklen Anzug steht rechts.\n</Bild>" in out
 
 
+def test_buchkonferenz_numbers_only_u5_point_difficulties_rubrics_u4_demotion_toc_u1_and_italic_intro():
+    """Verifies 18a Part 2: Aufgabennummern without ##### Aufgaben, [einfach]/[mittel]/[schwierig],
+    Ü3 rubrics, schwarze Textüberschriften Ü4 demotion, TOC Ü1 injection, and italic intro stripping.
+    """
+    bk_rules = (
+        "# Überschrift 1: Hauptkapitel (stehen nur im Inhaltsverzeichnis, bitte übernehmen)\n"
+        "## Überschrift 2: Teilkapitel (z. B. 2.1)\n"
+        "### Überschrift 3: Methode, Basiskonzept, Exkurs, Material mit Aufgaben\n"
+        "#### Überschrift 4: schwarze Textüberschriften, Abbildungsunterschriften (mit M)\n"
+        "##### Überschrift 5: Aufgabennummern\n"
+        "Sonstiges:\n"
+        "- kursive Einleitungstexte: nicht fett!\n"
+        "- Schwierigkeitsgrade bei Aufgaben:\n"
+        "  1 Punkt: [einfach]\n"
+        "  2 Punkte: [mittel]\n"
+        "  3 Punkte: [schwierig]\n"
+    )
+    directory_info = {
+        "has_any_directory": True,
+        "detected_types": ["toc"],
+        "toc_entries": [
+            {"title": "1 Energieübertragung in technischen Systemen", "page": 60, "level": 1},
+            {"title": "2.1 Thermische Ausgleichsvorgänge", "page": 60, "level": 2},
+        ],
+    }
+    md_in = (
+        "((60))\n\n"
+        "# Thermische Ausgleichsvorgänge\n\n"
+        "## Thermische 2.1 Ausgleichsvorgänge\n\n"
+        "_In jedem abgeschlossenen System streben Teilbereiche unterschiedlicher Temperatur einem gemeinsamen Gleichgewichtszustand mit CO_2 zu._\n\n"
+        "# Wärmeleitung in Festkörpern\n\n"
+        "Metalle leiten thermische Energie besonders schnell weiter.\n\n"
+        "## Konvektion in Flüssigkeiten\n\n"
+        "Strömungen transportieren Wärme über größere Distanzen.\n\n"
+        "((61))\n\n"
+        "methode\n"
+        "## Kalorimetrische Messung im Labor\n\n"
+        "*Mit einem isolierten Kalorimeter lässt sich die übertragene Wärmemenge präzise im Experiment bestimmen.*\n\n"
+        "basiskonzept • Energieerhaltung und Umwandlung\n\n"
+        "exkurs: Historische Thermometer\n\n"
+        "material mit aufgaben\n\n"
+        "## A Versuchsaufbau mit Messfühler\n\n"
+        "##### Aufgaben\n\n"
+        "1 Benennen Sie die Bauteile des Kalorimeters [1 Punkt].\n\n"
+        "2 Berechnen Sie die spezifische Wärmekapazität aus den Messdaten. [2 Punkte]\n\n"
+        "### A1 Beurteilen Sie mögliche Wärmeverluste an die Umgebung [3 Punkte].\n"
+    )
+
+    out = post_process_structure(
+        md_in,
+        raw_markdown=md_in,
+        directory_info=directory_info,
+        custom_rules=bk_rules,
+    )
+
+    # TOC-only Ü1 injected right after ((60)), split decimal heading normalized & duplicate dropped
+    assert "((60))\n\n# 1 Energieübertragung in technischen Systemen" in out
+    assert "\n# Thermische Ausgleichsvorgänge\n" not in out
+    assert "## 2.1 Thermische Ausgleichsvorgänge" in out
+
+    # Italic intro paragraphs stripped of _..._ / *...* while keeping CO_2 subscript intact
+    assert (
+        "In jedem abgeschlossenen System streben Teilbereiche unterschiedlicher Temperatur "
+        "einem gemeinsamen Gleichgewichtszustand mit CO_2 zu."
+    ) in out
+    assert "_In jedem abgeschlossenen System" not in out
+    assert (
+        "Mit einem isolierten Kalorimeter lässt sich die übertragene Wärmemenge präzise im Experiment bestimmen."
+    ) in out
+    assert "_Mit einem isolierten Kalorimeter" not in out
+
+    # Unnumbered non-rubric subheadings demoted to #### (Ü4)
+    assert "#### Wärmeleitung in Festkörpern" in out
+    assert "#### Konvektion in Flüssigkeiten" in out
+    assert "#### A Versuchsaufbau mit Messfühler" in out
+
+    # Ü3 rubrics normalized cleanly
+    assert "### Methode: Kalorimetrische Messung im Labor" in out
+    assert "### Basiskonzept: Energieerhaltung und Umwandlung" in out
+    assert "### Exkurs: Historische Thermometer" in out
+    assert "### Material mit Aufgaben" in out
+
+    # Ü5 Aufgabennummern WITHOUT '##### Aufgaben' + difficulty labels right beneath ##### <Nr>
+    assert "##### Aufgaben" not in out
+    assert "##### 1\n[einfach]\n\nBenennen Sie die Bauteile des Kalorimeters." in out
+    assert (
+        "##### 2\n[mittel]\n\nBerechnen Sie die spezifische Wärmekapazität aus den Messdaten."
+        in out
+    )
+    assert (
+        "##### A1\n[schwierig]\n\nBeurteilen Sie mögliche Wärmeverluste an die Umgebung."
+        in out
+    )
+    assert "Punkt" not in out
+
+    # When custom_rules does NOT define point-based difficulty labels, [1 Punkt]..[3 Punkte] are stripped cleanly
+    out_plain = post_process_structure(
+        "((10))\n\n### Aufgabe 1: Beschreiben Sie das Diagramm [2 Punkte].\n"
+    )
+    assert "[2 Punkte]" not in out_plain
+    assert "Beschreiben Sie das Diagramm" in out_plain
+
+
+def test_vlm_caption_echo_strip_rubric_banners_duplicate_headings_and_panel_pairs():
+    """Verifies 19c (rubric banner combine), 19d (VLM echo strip + caption pairing + lead-in question guard + dedup), and 19f (panel pairs)."""
+    bk_rules = (
+        "## Überschrift 2: Teilkapitel\n"
+        "### Überschrift 3: Methode, Basiskonzept, Exkurs, Material mit Aufgaben\n"
+        "#### Überschrift 4: schwarze Textüberschriften, Abbildungsunterschriften (mit M)\n"
+        "##### Überschrift 5: Aufgabennummern\n"
+    )
+    md_in = (
+        "((70))\n\n"
+        "## 1.4 Signalübertragung an Grenzflächen\n\n"
+        "#### Signalübertragung 1 . 4 an Grenzflächen\n\n"
+        "### Methode\n\n"
+        "#### Messwerterfassung im Modellversuch\n\n"
+        "#### M1 Mikroskopische Aufnahme\n\n"
+        "<Bild> Mikroskopische Aufnahme:\n"
+        "Beschreibung: Zellkultur im Phasenkontrast bei vierhundertfacher Vergrößerung.\n"
+        "</Bild>\n\n"
+        "1 Zellkultur unter dem Lichtmikroskop\n\n"
+        "#### M2\n\n"
+        "<Bild> Zeichnung:\n"
+        "Beschreibung mit Bildtext: Vergleich von Rezeptorstruktur A im Ruhezustand und Rezeptorstruktur B nach Ligandenbindung.\n"
+        "</Bild>\n\n"
+        "_Konformationsänderung am Membranrezeptor (Schema)_\n\n"
+        "### Rezeptorstruktur A\n\n"
+        "##### A\n\n"
+        "### Rezeptorstruktur B\n\n"
+        "##### B\n\n"
+        "#### M3 Eine schematische Darstellung eines Versuchsaufbaus zeigt eine Messkammer, die an d\n\n"
+        "<Bild> Zeichnung:\n"
+        "Beschreibung: Eine schematische Darstellung eines Versuchsaufbaus zeigt eine Messkammer, die an drei Elektroden angeschlossen ist.\n"
+        "</Bild>\n\n"
+        "#### Versuchsaufbau zur Diffusion\n\n"
+        "### material mitaufgaben\n\n"
+        "#### M4\n\n"
+        "<Bild> Diagramm:\n"
+        "Beschreibung: Zeitverlauf der Konzentration in zwei Kammern.\n"
+        "</Bild>\n\n"
+        "### Material mit Aufgaben\n\n"
+        "##### 4\n\n"
+        "Wie verändert sich die Konzentration in beiden Kammern nach dem Öffnen des Ventils im Zeitverlauf?\n\n"
+        "##### 1\n\n"
+        "Beschreiben Sie den Kurvenverlauf.\n"
+    )
+
+    out = post_process_structure(md_in, raw_markdown=md_in, custom_rules=bk_rules)
+
+    # 19d.1 & 19d.3: Spaced decimal '1 . 4' normalized and deduplicated against '## 1.4 ...'
+    assert out.count("1.4 Signalübertragung an Grenzflächen") == 1
+    assert "## 1.4 Signalübertragung an Grenzflächen" in out
+
+    # 19c: Standalone '### Methode' + '#### Messwerterfassung...' combined into '### Methode: ...'
+    assert "### Methode: Messwerterfassung im Modellversuch" in out
+
+    # 19d.2: VLM Bildart echo 'Mikroskopische Aufnahme' replaced by real printed post-</Bild> caption '1 Zellkultur...'
+    assert "#### M1 Mikroskopische Aufnahme" not in out
+    assert "#### M1 Zellkultur unter dem Lichtmikroskop" in out
+    assert "\n1 Zellkultur unter dem Lichtmikroskop" not in out
+
+    # 19f: Orphan diagram subheading + single-letter panel pairs ('### Rezeptorstruktur A' + '##### A', B) stripped,
+    # while italic post-</Bild> caption promoted to '#### M2 ...'
+    assert "#### M2 Konformationsänderung am Membranrezeptor (Schema)" in out
+    assert "### Rezeptorstruktur A" not in out
+    assert "### Rezeptorstruktur B" not in out
+    assert "##### A" not in out
+    assert "##### B" not in out
+
+    # 19d.2: VLM hinweis boilerplate stripped from '#### M3 ...' and paired with lone '#### Versuchsaufbau zur Diffusion'
+    assert "Eine schematische Darstellung eines Versuchsaufbaus" not in out.split("<Bild>")[2]
+    assert "#### M3 Versuchsaufbau zur Diffusion\n\n<Bild> Zeichnung:" in out
+
+    # 19d.3: '### material mitaufgaben' normalized and duplicate '### Material mit Aufgaben' on same page dropped
+    assert "material mitaufgaben" not in out.lower()
+    assert out.count("### Material mit Aufgaben") == 1
+
+    # 19d.2: Question sentence under '##### 4' NOT attached to bare '#### M4'
+    assert "#### M4\n\n<Bild> Diagramm:" in out
+    assert "Wie verändert sich die Konzentration" in out
+
+
+
+
 
 

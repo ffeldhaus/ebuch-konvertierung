@@ -974,6 +974,7 @@ def _standardise_events(task, request: StandardiseRequest):
                 compute_gemma_stream_percent,
                 compute_post_extraction_budget,
                 compute_vlm_image_percent,
+                estimate_gemma_chunk_chars,
             )
             from backend.services.prompts import VLM_IMAGE_PROMPT, build_vlm_prompt
             from backend.services.vlm_describer import load_cache
@@ -1395,8 +1396,8 @@ def _standardise_events(task, request: StandardiseRequest):
             active_chunk_idx = 1
             active_total_chunks = planned_chunks
             chunk_streamed_chars = 0
-            expected_chunk_chars = max(
-                400, len(markdown_to_process) // max(1, planned_chunks)
+            expected_chunk_chars = estimate_gemma_chunk_chars(
+                markdown_to_process, planned_chunks
             )
 
             # Stream tokens and section progress to the client as Gemma generates them (sentinel-driven, no busy polling)
@@ -1433,8 +1434,8 @@ def _standardise_events(task, request: StandardiseRequest):
 
                 if payload.get("total"):
                     active_total_chunks = max(1, int(payload["total"]))
-                    expected_chunk_chars = max(
-                        400, len(markdown_to_process) // active_total_chunks
+                    expected_chunk_chars = estimate_gemma_chunk_chars(
+                        markdown_to_process, active_total_chunks
                     )
                 event_type = payload.get("event")
                 if event_type == "fallback":

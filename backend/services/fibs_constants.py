@@ -44,7 +44,58 @@ PAGE_MARKER_ONLY_RE: Final[re.Pattern[str]] = re.compile(
 )
 HEADING_LINE_RE: Final[re.Pattern[str]] = re.compile(r"^[ \t]*#{1,6}\s+\S", re.MULTILINE)
 IMAGE_BLOCK_RE: Final[re.Pattern[str]] = re.compile(r"<Bild>(.*?)</Bild>", re.DOTALL)
+BILD_FULL_BLOCK_RE: Final[re.Pattern[str]] = re.compile(
+    r"<Bild\b[^>]*>[\s\S]*?</Bild>", re.IGNORECASE
+)
+BILD_REF_TAG_RE: Final[re.Pattern[str]] = re.compile(
+    r"<Bild-Ref\b(?:[^>]*?\bid=[\"']?|\s+)(BILD_\d+)(?:[\"']?[^>]*?)?/?>([ \t]*</Bild-Ref[ \t]*>)?",
+    re.IGNORECASE,
+)
+BILD_OR_REF_RE: Final[re.Pattern[str]] = re.compile(
+    r"<Bild\b[^>]*>[\s\S]*?</Bild>|<Bild-Ref\b[^>]*?/?>([ \t]*</Bild-Ref[ \t]*>)?",
+    re.IGNORECASE,
+)
 BILD_TAG_DELIM_RE: Final[re.Pattern[str]] = re.compile(r"</?Bild>")
+SPLIT_DECIMAL_HEADING_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(#{1,4}\s+)([A-ZÄÖÜ][^\n\d#]{2,45}?)\s+([1-9]\d?\s*\.\s*[1-9]\d?(?:\s*\.)?)\s+([A-Za-zÄÖÜäöüß]\S.*)$"
+)
+SPLIT_HEADING_EXCLUDED_PREFIX_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:Abb(?:ildung)?|Bild|Grafik|Fig(?:ur|ure)?|Tab(?:elle)?|Table|Kapitel|Chapter|"
+    r"Abschnitt|Section|Teil|Part|Lektion|Band|Aufgaben?|Übung(?:en)?|Beispiele?|Examples?|"
+    r"Versuche?|Experimente?|Material(?:ien)?|Quellen?|Exkurse?|Methoden?|Schema|Karte|"
+    r"Diagramm|Foto)\b",
+    re.IGNORECASE,
+)
+POINT_DIFFICULTY_TAG_RE: Final[re.Pattern[str]] = re.compile(
+    r"\[([123])\s*Punkte?\]", re.IGNORECASE
+)
+DOT_BULLET_RUN_RE: Final[re.Pattern[str]] = re.compile(r"[•●○◦∙⋅]{2,3}")
+ECHO_WORD_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[a-zäöüß0-9]{2,}")
+DIDACTIC_RUBRIC_BANNER_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:Methode|Basiskonzepte?|Exkurs|Praktikum|Streifzug|Im\s+Blickpunkt|Überblick)"
+    r"(?:\s*:\s*\S.*|\s*[:•·\-–]?\s+[A-ZÄÖÜ][^\n.]{2,90})?$",
+    re.IGNORECASE,
+)
+STANDALONE_RUBRIC_LABEL_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:Methode|Basiskonzepte?|Exkurs|Praktikum|Streifzug|Im\s+Blickpunkt|Überblick):?$",
+    re.IGNORECASE,
+)
+FOLIO_EDGE_NUMBER_RE: Final[re.Pattern[str]] = re.compile(r"^\d+\s+|\s+\d+$")
+VLM_GENERIC_BILDART_ONLY_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:\d+\s+)?(?:Mikroskopische\s+Aufnahme(?:n)?|Lichtmikroskopische\s+Aufnahme(?:n)?|"
+    r"Elektronenmikroskopische\s+Aufnahme(?:n)?|Foto(?:s|grafie)?|Foto\s+mit\s+Text|"
+    r"Zeichnung(?:en)?|Schematische\s+Darstellung|Schema|Strukturdiagramm|Flussdiagramm|"
+    r"Balkendiagramm|Säulendiagramm|Kreisdiagramm|Liniendiagramm|Diagramm(?:e)?|"
+    r"Abbildung(?:en)?|Schaubild|Grafik(?:en)?|Illustration|Modell|Karte)\.?$",
+    re.IGNORECASE,
+)
+VLM_DESC_BOILERPLATE_HEADING_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:Eine?|Zwei|Drei|Vier|Mehrere|Links|Rechts|Oben|Unten|"
+    r"Das\s+(?:Diagramm|Foto|Bild|Schema|Schaubild|Modell)|"
+    r"Die\s+(?:Abbildung|Zeichnung|Grafik|Darstellung|Aufnahme))\s+.*?"
+    r"\b(?:zeigt|zeigen|dargestellt|abgebildet|zu\s+sehen|veranschaulicht|illustriert)\b",
+    re.IGNORECASE,
+)
 MD_IMAGE_RE: Final[re.Pattern[str]] = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 MULTI_NEWLINE_RE: Final[re.Pattern[str]] = re.compile(r"\n{3,}")
 BILDART_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[\wÄÖÜäöüß][\wÄÖÜäöüß ./\-–]*")

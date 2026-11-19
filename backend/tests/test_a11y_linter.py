@@ -360,3 +360,89 @@ def test_lint_plural_rubric_headings_and_buchkonferenz_custom_rules():
     assert any(i.rule == "heading_hierarchy" for i in rep_bad.issues)
 
 
+def test_lint_u5_aufgabennummern_exempts_bare_decimal_and_prefixed_task_numbers():
+    """Verifies 18a: ##### 1, ##### 1.1, and ##### A1 are exempted when Ü5 specifies Aufgabennummern."""
+    md_u5_nums = (
+        "((12))\n\n"
+        "# 1 Grundlagen der Mechanik\n\n"
+        "## 1.2 Kräfte im Gleichgewicht\n\n"
+        "Ein Körper bleibt in Ruhe, wenn sich alle wirkenden Kräfte aufheben.\n\n"
+        "##### 1\n"
+        "[einfach]\n\n"
+        "Nennen Sie zwei Beispiele für Kräftegleichgewicht.\n\n"
+        "##### 1.1\n"
+        "[mittel]\n\n"
+        "Zeichnen Sie ein Kräfteparallelogramm.\n\n"
+        "### Material mit Aufgaben\n\n"
+        "##### A1\n"
+        "[schwierig]\n\n"
+        "Berechnen Sie die resultierende Ersatzkraft.\n"
+    )
+    for rules_variant in (
+        "##### Überschrift 5: Aufgabennummern\n",
+        "Ü5: Aufgabennummern\n",
+        "Aufgabennummern als Ü5\n",
+    ):
+        rep = lint_markdown(md_u5_nums, custom_rules=rules_variant)
+        assert not any(i.rule == "heading_hierarchy" for i in rep.issues)
+        assert rep.score == 100
+
+
+def test_lint_u4_text_subheadings_and_double_page_photo_opener():
+    """Verifies 19e: H1/H2 -> H4 exemption under Buchkonferenz Ü4 text subheadings and spread/raw page counting."""
+    bk_rules = (
+        "# Überschrift 1: Hauptkapitel\n"
+        "## Überschrift 2: Teilkapitel\n"
+        "### Überschrift 3: Methode, Basiskonzept, Exkurs\n"
+        "#### Überschrift 4: schwarze Textüberschriften, kapitelinterne Überschriften\n"
+        "##### Überschrift 5: Aufgabennummern\n\n"
+        "## Bilder\n"
+        "- Den Abbildungen ein M voranstellen (z. B. M1 + Bildtitel)\n"
+    )
+    md_spread = (
+        "((170)) / ((171))\n\n"
+        "# 3 Stofftransport und Energieumsatz\n\n"
+        "#### Überblick zum Kapitelauftakt\n\n"
+        "Zellen tauschen fortlaufend Stoffe und Energie mit ihrer Umgebung aus.\n\n"
+        "((172))\n\n"
+        "## 3.1 Diffusion durch Grenzschichten\n\n"
+        "#### Konzentrationsausgleich im Modellversuch\n\n"
+        "Teilchen bewegen sich aufgrund ihrer thermischen Eigenbewegung entlang des Gradienten.\n\n"
+        "#### M1 Konzentrationsverlauf über die Zeit\n\n"
+        "<Bild> Diagramm:\n"
+        "Beschreibung mit Bildtext: Zeitachse t in s \\to Konzentration c in mol/L.\n"
+        "</Bild>\n"
+    )
+    rep_spread = lint_markdown(md_spread, expected_pages=3, custom_rules=bk_rules)
+    assert rep_spread.issues == []
+    assert rep_spread.score == 100
+
+    # When page 171 in a 3-page selection (170-172) is a textless full-bleed photo in raw_markdown (only 2 non-empty raw pages),
+    # standardized output with 2 marked pages must NOT be penalized for matching raw_markdown's page count.
+    raw_photo_opener = (
+        "((170))\n\n"
+        "# 3 Stofftransport und Energieumsatz\n\n"
+        "((171))\n\n"
+        "((172))\n\n"
+        "## 3.1 Diffusion durch Grenzschichten\n\n"
+        "Teilchen bewegen sich entlang des Gradienten.\n"
+    )
+    std_photo_opener = (
+        "((170))\n\n"
+        "# 3 Stofftransport und Energieumsatz\n\n"
+        "((172))\n\n"
+        "## 3.1 Diffusion durch Grenzschichten\n\n"
+        "Teilchen bewegen sich entlang des Gradienten.\n"
+    )
+    rep_raw_match = lint_markdown(
+        std_photo_opener,
+        raw_markdown=raw_photo_opener,
+        expected_pages=3,
+        custom_rules=bk_rules,
+    )
+    assert not any(i.rule == "page_number_missing" for i in rep_raw_match.issues)
+    assert rep_raw_match.score == 100
+
+
+
+

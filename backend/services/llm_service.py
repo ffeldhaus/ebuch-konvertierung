@@ -33,16 +33,21 @@ from openai import AsyncOpenAI, OpenAI
 from backend.services import fibs_constants as fc
 from backend.services.fibs_formatting import (
     bild_tag_from_vlm,
+    convert_unicode_scripts,
     format_bild_tag,
     has_caption_context,
+    normalize_bild_tags,
+    normalize_fibs_units_and_percent,
     parse_char_replacement_suggestions,
 )
 from backend.services.fibs_postprocess import (
+    normalize_heading_page_markers,
     optimize_markdown_fallback,
     post_process_structure,
     split_markdown_pages,
     standardise_markdown_fallback,
 )
+from backend.services.formula_service import standardize_formulas
 from backend.services.models import (
     StandardisationChunk,
     TableDescription,
@@ -977,32 +982,466 @@ def _trim_to_own_pages(text: str, chunk: StandardisationChunk) -> str:
     return "\n".join(lines).strip()
 
 
+def deduplicate_cross_page_echoes(markdown_text: str) -> str:
+    """Removes echoed neighbor-page paragraphs and headings after ``((p+1))`` page markers.
+
+    During chunked Gemma standardisation with ``[KONTEXT VORHERIGE SEITE]``, the model
+    occasionally emits ``((p+1))`` at the top of a chunk and repeats 1–4 trailing headings
+    or prose paragraphs from page ``p`` before continuing with page ``p+1``'s own text.
+    This pass detects and removes those echoed leading blocks and deduplicates repeated
+    mid-sentence prefixes across page breaks while preserving ``<Bild>``, ``<Bild-Ref>``,
+    and ``<Tabelle>`` blocks untouched.
+
+    Args:
+        markdown_text: Assembled multi-page Markdown text with ``((page))`` markers.
+
+    Returns:
+        Markdown text with cross-page context echoes removed.
+    """
+    if not markdown_text:
+        return markdown_text
+
+    segs = split_markdown_pages(markdown_text)
+    if len(segs) < 2:
+        return markdown_text
+
+    def _split_blocks(body_txt: str) -> list[str]:
+        blocks: list[str] = []
+        cur: list[str] = []
+        active_tag: str | None = None
+        for ln in body_txt.splitlines():
+            s_ln = ln.strip()
+            if active_tag is not None:
+                cur.append(ln)
+                if re.search(rf"</{active_tag}>", s_ln, re.IGNORECASE):
+                    active_tag = None
+                continue
+            if not s_ln:
+                if cur:
+                    blocks.append("\n".join(cur))
+                    cur = []
+                continue
+            m_open = re.match(
+                r"^<(Bild|Tabelle|Rahmen|Anmerkung|Lückentext)(?!-Ref)\b",
+                s_ln,
+                re.IGNORECASE,
+            )
+            if m_open and not re.search(rf"</{m_open.group(1)}>", s_ln, re.IGNORECASE):
+                active_tag = m_open.group(1)
+            cur.append(ln)
+        if cur:
+            blocks.append("\n".join(cur))
+        return blocks
+
+    def _is_media_or_marker(blk: str) -> bool:
+        return bool(
+            re.match(
+                r"^(?:<Bild(?:-Ref)?\b|<Tabelle\b|\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))",
+                blk.strip(),
+                re.IGNORECASE,
+            )
+        )
+
+    def _norm_tok(tok: str) -> str:
+        return re.sub(r"^[^\wÄÖÜäöüß]+|[^\wÄÖÜäöüß]+$", "", tok).lower()
+
+    changed = False
+    for idx_s in range(1, len(segs)):
+        prev_seg = segs[idx_s - 1]
+        curr_seg = segs[idx_s]
+        if curr_seg.page is None or not prev_seg.text.strip():
+            continue
+
+        m_prev_hdr = re.match(r"^(\(\([^\n]+\)[ \t]*)(?:\n([\s\S]*))?$", prev_seg.text)
+        prev_body = (m_prev_hdr.group(2) or "") if m_prev_hdr else prev_seg.text
+        m_curr_hdr = re.match(r"^(\(\([^\n]+\)[ \t]*)(?:\n([\s\S]*))?$", curr_seg.text)
+        if not m_curr_hdr:
+            continue
+        curr_hdr = m_curr_hdr.group(1).strip()
+        curr_body = m_curr_hdr.group(2) or ""
+        if not curr_body.strip() or not prev_body.strip():
+            continue
+
+        prev_blocks = _split_blocks(prev_body)
+        curr_blocks = _split_blocks(curr_body)
+        prev_tail = [b for b in prev_blocks if not _is_media_or_marker(b)][-6:]
+        if not prev_tail or not curr_blocks:
+            continue
+
+        prev_heading_norms: set[str] = set()
+        prev_windows: list[tuple[set[str], set[tuple[str, str]], set[str]]] = []
+        for j_p, p_blk in enumerate(prev_tail):
+            m_ph = re.match(r"^#{1,6}\s+(.+)$", p_blk.strip())
+            if m_ph:
+                prev_heading_norms.add(m_ph.group(1).strip().lower())
+            p_ws = fc.ECHO_WORD_TOKEN_RE.findall(p_blk.lower())
+            if p_ws:
+                prev_windows.append(
+                    (
+                        set(p_ws),
+                        {(p_ws[k], p_ws[k + 1]) for k in range(len(p_ws) - 1)},
+                        set(re.findall(r"\b\d+\b", p_blk)),
+                    )
+                )
+            if j_p + 1 < len(prev_tail):
+                comb_txt = f"{p_blk}\n{prev_tail[j_p + 1]}"
+                comb_ws = fc.ECHO_WORD_TOKEN_RE.findall(comb_txt.lower())
+                if comb_ws:
+                    prev_windows.append(
+                        (
+                            set(comb_ws),
+                            {(comb_ws[k], comb_ws[k + 1]) for k in range(len(comb_ws) - 1)},
+                            set(re.findall(r"\b\d+\b", comb_txt)),
+                        )
+                    )
+
+        def _is_echo_prose(
+            cand_txt: str,
+            windows: list[tuple[set[str], set[tuple[str, str]], set[str]]] = prev_windows,
+        ) -> bool:
+            c_ws = fc.ECHO_WORD_TOKEN_RE.findall(cand_txt.lower())
+            if len(c_ws) < 8:
+                return False
+            c_set = set(c_ws)
+            c_bg = {(c_ws[k], c_ws[k + 1]) for k in range(len(c_ws) - 1)}
+            c_nums = set(re.findall(r"\b\d+\b", cand_txt))
+            for p_set, p_bg, p_nums in windows:
+                if c_nums - p_nums:
+                    continue
+                if len(c_set & p_set) / len(c_set) >= 0.80 and (
+                    not c_bg or len(c_bg & p_bg) / len(c_bg) >= 0.45
+                ):
+                    return True
+            return False
+
+        drop_indices: set[int] = set()
+        pending_h_idx: int | None = None
+        scanned_nm = 0
+        for idx_c, c_blk in enumerate(curr_blocks):
+            if _is_media_or_marker(c_blk):
+                continue
+            if scanned_nm >= 6:
+                break
+            scanned_nm += 1
+            s_cb = c_blk.strip()
+            m_ch = re.match(r"^(#{2,5})\s+(.+)$", s_cb)
+            if m_ch:
+                h_norm = m_ch.group(2).strip().lower()
+                if h_norm in prev_heading_norms:
+                    if (
+                        len(fc.ECHO_WORD_TOKEN_RE.findall(h_norm)) >= 2
+                        or re.match(r"^\d+\.\d+", h_norm)
+                    ) and h_norm not in {"aufgaben", "material"}:
+                        drop_indices.add(idx_c)
+                        pending_h_idx = None
+                    else:
+                        pending_h_idx = idx_c
+                    continue
+                break
+
+            if not s_cb.startswith("#") and _is_echo_prose(s_cb):
+                drop_indices.add(idx_c)
+                if pending_h_idx is not None:
+                    drop_indices.add(pending_h_idx)
+                    pending_h_idx = None
+                continue
+            break
+
+        kept_blocks = [b for i_b, b in enumerate(curr_blocks) if i_b not in drop_indices]
+        block_edited = bool(drop_indices)
+
+        # Strip echoed leading sentences or mid-sentence boundary overlaps in the first remaining prose block
+        first_prose_i = -1
+        for i_k, k_blk in enumerate(kept_blocks):
+            if _is_media_or_marker(k_blk):
+                continue
+            if not k_blk.strip().startswith(("#", "<", "-\t", "|")):
+                first_prose_i = i_k
+            break
+
+        if first_prose_i >= 0:
+            fp_txt = kept_blocks[first_prose_i].strip()
+            sents = re.split(r"(?<=[.!?])\s+(?=[A-ZÄÖÜ0-9\"'(])", fp_txt)
+            if len(sents) >= 2:
+                strip_sent_k = 0
+                for k_s in range(1, min(4, len(sents))):
+                    if _is_echo_prose(" ".join(sents[:k_s])):
+                        strip_sent_k = k_s
+                if strip_sent_k > 0:
+                    fp_txt = " ".join(sents[strip_sent_k:]).strip()
+                    kept_blocks[first_prose_i] = fp_txt
+                    block_edited = True
+
+            last_prev_s = prev_tail[-1].strip()
+            if (
+                fp_txt
+                and not last_prev_s.startswith(("#", "<", "-\t", "|"))
+                and not last_prev_s.endswith((".", "!", "?", ":", ";"))
+            ):
+                p_toks = last_prev_s.split()
+                c_toks = fp_txt.split()
+                max_ov = min(25, len(p_toks), len(c_toks) - 1)
+                best_k = 0
+                for k_ov in range(max_ov, 0, -1):
+                    if k_ov == 1 and len(_norm_tok(c_toks[0])) < 6:
+                        continue
+                    if [_norm_tok(t) for t in p_toks[-k_ov:]] == [
+                        _norm_tok(t) for t in c_toks[:k_ov]
+                    ] and all(_norm_tok(t) for t in c_toks[:k_ov]):
+                        best_k = k_ov
+                        break
+                if best_k > 0:
+                    kept_blocks[first_prose_i] = " ".join(c_toks[best_k:]).strip()
+                    block_edited = True
+
+        if block_edited:
+            trailing_sep = "\n\n" if idx_s + 1 < len(segs) else ("\n" if curr_seg.text.endswith("\n") else "")
+            if kept_blocks:
+                curr_seg.text = f"{curr_hdr}\n\n" + "\n\n".join(kept_blocks) + trailing_sep
+            else:
+                curr_seg.text = f"{curr_hdr}{trailing_sep}"
+            changed = True
+
+    if not changed:
+        return markdown_text
+    return "".join(s.text for s in segs)
+
+
+def replace_bild_blocks_with_placeholders(
+    markdown_text: str,
+    *,
+    fibs_mode: bool = True,
+) -> tuple[str, dict[str, str], dict[str, list[str]]]:
+    """Substitutes ``<Bild>...</Bild>`` blocks with compact ``<Bild-Ref>`` placeholders.
+
+    Pre-cleans each stored ``<Bild>`` block deterministically (stripping stray VLM tokens,
+    normalizing multi-line FIBS tags, and standardizing formulas/units when ``fibs_mode``
+    is active) so restored blocks are FIBS-compliant without requiring LLM token generation.
+
+    Args:
+        markdown_text: Input Markdown text potentially containing ``<Bild>`` blocks.
+        fibs_mode: Whether to apply FIBS formula and unit normalization to stored blocks.
+
+    Returns:
+        Tuple ``(placeholder_markdown, bild_map, page_bild_ids)`` mapping ``BILD_xxx`` IDs
+        to cleaned ``<Bild>`` blocks and printed page numbers to ordered ``BILD_xxx`` lists.
+    """
+    if not markdown_text or not fc.BILD_FULL_BLOCK_RE.search(markdown_text):
+        return markdown_text, {}, {}
+
+    bild_map: dict[str, str] = {}
+    page_bild_ids: dict[str, list[str]] = {}
+    counter = 0
+    segs = split_markdown_pages(markdown_text)
+
+    for seg in segs:
+        ids_on_page: list[str] = []
+
+        def _sub_bild(m: re.Match[str]) -> str:
+            nonlocal counter
+            counter += 1
+            bild_id = f"BILD_{counter:03d}"
+            cleaned = re.sub(r"<\|?image\|?>", "", m.group(0), flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r"^<Bild\b[^>]*>", "<Bild>", cleaned, count=1, flags=re.IGNORECASE)
+            cleaned = re.sub(r"</Bild>\s*$", "</Bild>", cleaned, count=1, flags=re.IGNORECASE)
+            cleaned = normalize_bild_tags(cleaned)
+            if fibs_mode:
+                cleaned = convert_unicode_scripts(cleaned)
+                cleaned = standardize_formulas(cleaned, fibs_mode=True)
+                cleaned = normalize_fibs_units_and_percent(cleaned)
+                cleaned = normalize_bild_tags(cleaned)
+
+            bild_map[bild_id] = cleaned
+            ids_on_page.append(bild_id)
+
+            m_typ = re.match(r"^<Bild>\s*([^:\n]{1,50}):", cleaned)
+            raw_typ = m_typ.group(1).strip() if m_typ else fc.DEFAULT_IMAGE_TYPE
+            typ = re.sub(r'["<>\r\n]+', "", raw_typ).strip() or fc.DEFAULT_IMAGE_TYPE
+
+            m_desc = re.search(
+                r"Beschreibung(?: mit Bildtext)?:\s*([\s\S]*?)\s*</Bild>$", cleaned
+            )
+            raw_body = (
+                m_desc.group(1)
+                if m_desc
+                else re.sub(r"^<Bild>[^\n]*|</Bild>$", "", cleaned)
+            )
+            hinweis = re.sub(r"\s+", " ", re.sub(r'["<>]+', "", raw_body)).strip()[:85].rstrip()
+            return f'<Bild-Ref id="{bild_id}" typ="{typ}" hinweis="{hinweis}" />'
+
+        seg.text = fc.BILD_FULL_BLOCK_RE.sub(_sub_bild, seg.text)
+        if ids_on_page:
+            page_key = seg.page if seg.page is not None else ""
+            page_bild_ids.setdefault(page_key, []).extend(ids_on_page)
+
+    return "".join(s.text for s in segs), bild_map, page_bild_ids
+
+
+def restore_bild_placeholders(
+    combined_text: str,
+    bild_map: dict[str, str],
+    page_bild_ids: dict[str, list[str]],
+) -> str:
+    """Restores ``<Bild-Ref>`` placeholders to pre-cleaned ``<Bild>`` blocks with zero-loss recovery.
+
+    Deduplicates repeated emissions of the same ``BILD_xxx`` ID and re-inserts any
+    non-decorative ``BILD_xxx`` omitted by Gemma onto its original ``((page))`` (under
+    an orphan figure caption if present, otherwise before the page's task block or at page end).
+
+    Args:
+        combined_text: Reassembled LLM output containing ``<Bild-Ref>`` placeholders.
+        bild_map: Mapping of ``BILD_xxx`` IDs to pre-cleaned ``<Bild>...</Bild>`` blocks.
+        page_bild_ids: Mapping of page keys to ordered ``BILD_xxx`` IDs from Stage 2.
+
+    Returns:
+        Markdown text with all ``<Bild>`` blocks restored.
+    """
+    if not combined_text or not bild_map:
+        return combined_text
+
+    seen_ids: set[str] = set()
+
+    def _restore_match(m: re.Match[str]) -> str:
+        bild_id = m.group(1).upper()
+        if bild_id not in bild_map or bild_id in seen_ids:
+            return ""
+        seen_ids.add(bild_id)
+        return f"\n\n{bild_map[bild_id]}\n\n"
+
+    restored = fc.BILD_REF_TAG_RE.sub(_restore_match, combined_text)
+    restored = re.sub(
+        r"<Bild-Ref\b[^>]*?/?>([ \t]*</Bild-Ref[ \t]*>)?", "", restored, flags=re.IGNORECASE
+    )
+    restored = re.sub(r"\n{3,}", "\n\n", restored).strip()
+
+    all_expected = [bid for ids in page_bild_ids.values() for bid in ids]
+    if all(bid in seen_ids for bid in all_expected):
+        return restored
+
+    existing_bild_norms = {
+        re.sub(r"\W+", " ", m.group(0)).strip().lower()
+        for m in fc.BILD_FULL_BLOCK_RE.finditer(restored)
+    }
+    orphan_cap_re = re.compile(
+        r"^#{3,5}\s+(?:[MBQ]\s*\d+[a-z]?|Abb(?:ildung)?\.?\s*\d+|Bild\s*\d+|Grafik\s*\d+|"
+        r"Fig(?:ur|ure|\.)?\s*\d+)\b",
+        re.IGNORECASE,
+    )
+    task_start_re = re.compile(
+        r"^(?:#{3,5}\s+(?:Aufgaben?\b|[A-LN-Z]?\d+[.:]?\s*$)|"
+        r"(?:\*\*|_)?Aufgaben:?(?:\*\*|_)?(?:\s+[A-LN-Z]?\d+\b.*)?$)",
+        re.IGNORECASE,
+    )
+
+    segs = split_markdown_pages(normalize_heading_page_markers(restored))
+    seg_idx_by_page = {
+        (s.page if s.page is not None else ""): idx for idx, s in enumerate(segs)
+    }
+    changed_any = False
+
+    for page_key, expected_ids in page_bild_ids.items():
+        missing_ids = [bid for bid in expected_ids if bid not in seen_ids and bid in bild_map]
+        if not missing_ids or page_key not in seg_idx_by_page:
+            continue
+        seg_obj = segs[seg_idx_by_page[page_key]]
+        for bid in missing_ids:
+            blk = bild_map[bid]
+            blk_norm = re.sub(r"\W+", " ", blk).strip().lower()
+            if blk_norm in existing_bild_norms:
+                seen_ids.add(bid)
+                continue
+
+            inner_txt = re.sub(
+                r"^<Bild\b[^>]*>\s*|\s*</Bild>$", "", blk, flags=re.IGNORECASE
+            ).strip()
+            is_decorative_marked = bool(
+                re.match(r"^(?:dekorativ|nicht übertragen|n\.\s*ü\.)", inner_txt, re.IGNORECASE)
+                or re.search(
+                    r"^Beschreibung(?: mit Bildtext)?:\s*(?:dekorativ|nicht übertragen|n\.\s*ü\.)\b",
+                    inner_txt,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+            )
+
+            p_lines = seg_obj.text.splitlines()
+            orphan_ci: int | None = None
+            for ci, raw_ln in enumerate(p_lines):
+                if not orphan_cap_re.match(raw_ln.strip()):
+                    continue
+                nxt_j = ci + 1
+                while nxt_j < len(p_lines) and not p_lines[nxt_j].strip():
+                    nxt_j += 1
+                if nxt_j >= len(p_lines):
+                    orphan_ci = ci
+                    break
+                nxt_s = p_lines[nxt_j].strip()
+                if nxt_s.lower().startswith("<bild"):
+                    continue
+                if not nxt_s.startswith(("#", "<", "((")):
+                    nxt_j2 = nxt_j + 1
+                    while nxt_j2 < len(p_lines) and not p_lines[nxt_j2].strip():
+                        nxt_j2 += 1
+                    if nxt_j2 < len(p_lines) and p_lines[nxt_j2].strip().lower().startswith("<bild"):
+                        continue
+                orphan_ci = ci
+                break
+
+            if is_decorative_marked and not (orphan_ci is not None and len(expected_ids) == 1):
+                continue
+
+            if orphan_ci is not None:
+                p_lines = (
+                    p_lines[: orphan_ci + 1]
+                    + ["", blk, ""]
+                    + p_lines[orphan_ci + 1 :]
+                )
+            else:
+                task_ti: int | None = None
+                for ti, raw_ln in enumerate(p_lines):
+                    if task_start_re.match(raw_ln.strip()):
+                        task_ti = ti
+                        break
+                if task_ti is not None:
+                    p_lines = p_lines[:task_ti] + [blk, ""] + p_lines[task_ti:]
+                else:
+                    p_lines.extend(["", blk])
+
+            seg_obj.text = re.sub(r"\n{3,}", "\n\n", "\n".join(p_lines).rstrip()) + "\n\n"
+            existing_bild_norms.add(blk_norm)
+            seen_ids.add(bid)
+            changed_any = True
+
+    if not changed_any:
+        return restored
+    return re.sub(r"\n{3,}", "\n\n", "".join(s.text for s in segs)).strip()
+
+
 def _count_page_image_blocks(seg_text: str) -> int:
-    """Counts ``<Bild>...</Bild>`` blocks plus standalone Markdown image links in ``seg_text``."""
-    bild_matches = list(re.finditer(r"<Bild\b[^>]*>[\s\S]*?</Bild>", seg_text, flags=re.IGNORECASE))
-    without_bild = re.sub(r"<Bild\b[^>]*>[\s\S]*?</Bild>", "", seg_text, flags=re.IGNORECASE)
+    """Counts ``<Bild>`` / ``<Bild-Ref>`` tags plus standalone Markdown image links in ``seg_text``."""
+    bild_matches = list(fc.BILD_OR_REF_RE.finditer(seg_text))
+    without_bild = fc.BILD_OR_REF_RE.sub("", seg_text)
     md_imgs = re.findall(r"!\[[^\]]*\]\([^)\n]+\)", without_bild)
     return len(bild_matches) + len(md_imgs)
 
 
 def _enforce_chunk_page_bild_boundaries(text: str, chunk: StandardisationChunk) -> str:
-    """Relocates excess trailing ``<Bild>`` blocks pulled from ``P2`` onto ``P1`` back onto ``P2``.
+    """Relocates excess trailing ``<Bild>`` or ``<Bild-Ref>`` tags pulled from ``P2`` onto ``P1``.
 
     When a multi-page Gemma chunk ``[P1, P2]`` causes the model to emit ``P2``'s
-    ``<Bild>`` block(s) before ``((P2))`` (leaving ``P1`` with excess ``<Bild>`` blocks
-    and ``P2`` missing its ``<Bild>`` blocks), deterministically moves the excess
-    trailing ``<Bild>`` block(s) (along with any immediately preceding figure caption)
-    back after ``((P2))`` (under ``P2``'s first heading when present).
+    ``<Bild>``/``<Bild-Ref>`` tag(s) before ``((P2))`` (leaving ``P1`` with excess images
+    and ``P2`` missing its images), deterministically moves the excess trailing
+    image unit(s) (along with any immediately preceding figure caption) back after
+    ``((P2))`` (under ``P2``'s first heading when present).
 
     Args:
         text: Cleaned LLM output for ``chunk``.
         chunk: Planned ``StandardisationChunk`` containing source ``chunk.text`` and ``pages``.
 
     Returns:
-        Markdown string with per-page ``<Bild>`` counts restored across chunk page boundaries.
+        Markdown string with per-page image counts restored across chunk page boundaries.
     """
     valid_pages = [p for p in chunk.pages if p]
-    if len(valid_pages) < 2 or not text or "<Bild" not in text:
+    if len(valid_pages) < 2 or not text or not fc.BILD_OR_REF_RE.search(text):
         return text
 
     in_segs = split_markdown_pages(chunk.text)
@@ -1010,8 +1449,6 @@ def _enforce_chunk_page_bild_boundaries(text: str, chunk: StandardisationChunk) 
     expected_counts = {p: _count_page_image_blocks(in_by_page.get(p, "")) for p in valid_pages}
     if sum(expected_counts.values()) == 0:
         return text
-
-    from backend.services.fibs_postprocess import normalize_heading_page_markers
 
     norm_text = normalize_heading_page_markers(text)
     out_segs = split_markdown_pages(norm_text)
@@ -1032,7 +1469,7 @@ def _enforce_chunk_page_bild_boundaries(text: str, chunk: StandardisationChunk) 
         p1_text = out_segs[idx1].text
         p2_text = out_segs[idx2].text
 
-        bilds_p1 = list(re.finditer(r"<Bild\b[^>]*>[\s\S]*?</Bild>", p1_text, flags=re.IGNORECASE))
+        bilds_p1 = list(fc.BILD_OR_REF_RE.finditer(p1_text))
         actual_p2 = _count_page_image_blocks(p2_text)
         excess_p1 = len(bilds_p1) - expected_counts.get(p1, 0)
         deficit_p2 = expected_counts.get(p2, 0) - actual_p2
@@ -1083,7 +1520,7 @@ def _enforce_chunk_page_bild_boundaries(text: str, chunk: StandardisationChunk) 
                     break
         else:
             p2_src = in_by_page.get(p2, "")
-            m_src_img = re.search(r"<Bild\b|!\[", p2_src, flags=re.IGNORECASE)
+            m_src_img = re.search(r"<Bild(?:-Ref)?\b|!\[", p2_src, flags=re.IGNORECASE)
             src_before_img = p2_src[: m_src_img.start()] if m_src_img else ""
             src_before_body = fc.PAGE_MARKER_START_RE.sub("", src_before_img, count=1).strip()
             if src_before_body:
@@ -1099,7 +1536,7 @@ def _enforce_chunk_page_bild_boundaries(text: str, chunk: StandardisationChunk) 
         else:
             out_segs[idx2].text = f"{head_part}\n\n{relocated_block}\n"
         logger.info(
-            f"Relocated {move_n} excess <Bild> block(s) from page (({p1})) back onto (({p2}))."
+            f"Relocated {move_n} excess <Bild>/<Bild-Ref> block(s) from page (({p1})) back onto (({p2}))."
         )
         relocated_any = True
 
@@ -1555,9 +1992,16 @@ def standardise_markdown(
         StandardisationAborted: If aborted by a callback.
     """
     del image_paths, physical_start_page
+    if ruleset_key != "raw" and fc.BILD_FULL_BLOCK_RE.search(raw_markdown or ""):
+        gemma_markdown, bild_map, page_bild_ids = replace_bild_blocks_with_placeholders(
+            raw_markdown, fibs_mode=True
+        )
+    else:
+        gemma_markdown, bild_map, page_bild_ids = raw_markdown, {}, {}
+
     table_max_cells, directory_info, resolved_custom_rules, system_prompt, chunks, single = (
         _prepare_standardisation_plan(
-            raw_markdown,
+            gemma_markdown,
             ruleset_key,
             task_id,
             table_max_cells,
@@ -1586,7 +2030,7 @@ def standardise_markdown(
         )
         if single:
             hint = _table_hint(chunk.text, table_max_cells)
-            user_content = f"{hint}\n\n{raw_markdown}" if hint else raw_markdown
+            user_content = f"{hint}\n\n{gemma_markdown}" if hint else gemma_markdown
         else:
             user_content = build_chunk_user_message(chunk, total, table_max_cells)
 
@@ -1693,6 +2137,11 @@ def standardise_markdown(
     standardised_content = _strip_hallucinated_page_numbers(
         standardised_content, raw_markdown, directory_info
     )
+    standardised_content = deduplicate_cross_page_echoes(standardised_content or "")
+    if backend is not None and bild_map:
+        standardised_content = restore_bild_placeholders(
+            standardised_content or "", bild_map, page_bild_ids
+        )
     return post_process_structure(
         standardised_content or "",
         raw_markdown=raw_markdown,
@@ -1765,6 +2214,13 @@ async def standardise_markdown_async(
             res = await res
         return res
 
+    if ruleset_key != "raw" and fc.BILD_FULL_BLOCK_RE.search(raw_markdown or ""):
+        gemma_markdown, bild_map, page_bild_ids = await asyncio.to_thread(
+            lambda: replace_bild_blocks_with_placeholders(raw_markdown, fibs_mode=True)
+        )
+    else:
+        gemma_markdown, bild_map, page_bild_ids = raw_markdown, {}, {}
+
     (
         table_max_cells,
         directory_info,
@@ -1774,7 +2230,7 @@ async def standardise_markdown_async(
         single,
     ) = await asyncio.to_thread(
         _prepare_standardisation_plan,
-        raw_markdown,
+        gemma_markdown,
         ruleset_key,
         task_id,
         table_max_cells,
@@ -1802,7 +2258,7 @@ async def standardise_markdown_async(
         )
         if single:
             hint = _table_hint(chunk.text, table_max_cells)
-            user_content = f"{hint}\n\n{raw_markdown}" if hint else raw_markdown
+            user_content = f"{hint}\n\n{gemma_markdown}" if hint else gemma_markdown
         else:
             user_content = build_chunk_user_message(chunk, total, table_max_cells)
 
@@ -1912,6 +2368,14 @@ async def standardise_markdown_async(
     standardised_content = _strip_hallucinated_page_numbers(
         standardised_content, raw_markdown, directory_info
     )
+    standardised_content = deduplicate_cross_page_echoes(standardised_content or "")
+    if backend is not None and bild_map:
+        standardised_content = await asyncio.to_thread(
+            restore_bild_placeholders,
+            standardised_content or "",
+            bild_map,
+            page_bild_ids,
+        )
     return await asyncio.to_thread(
         post_process_structure,
         standardised_content or "",

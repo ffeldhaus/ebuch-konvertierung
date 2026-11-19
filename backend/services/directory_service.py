@@ -99,7 +99,9 @@ def build_fast_docling_pipeline_options(do_ocr: bool = False):
 DIRECTORY_HEADER_PATTERNS: dict[str, re.Pattern] = {
     "toc": re.compile(
         r"^(?:#{1,6}\s*)?(?:\*\*|__|_|\*)?\s*"
+        r"(?:(?:\d{1,3}|[IVXLCDMivxlcdm]{1,6})\s+)?"
         r"(?:Inhaltsverzeichnis|Inhaltsübersicht|Inhalt|Table\s+of\s+Contents|Contents)"
+        r"(?:\s+(?:\d{1,3}|[IVXLCDMivxlcdm]{1,6}))?"
         r"\s*(?:\*\*|__|_|\*)?\s*:?\s*$",
         re.IGNORECASE,
     ),
@@ -263,12 +265,16 @@ def _cluster_docling_items_into_lines(items_on_page: list[dict[str, Any]]) -> li
             txt = x["text"].strip()
             if not txt:
                 continue
-            if prev_r is not None and (x["l"] - prev_r) > 25.0:
-                parts.append("   " + txt)
+            if prev_r is None:
+                parts.append(txt)
+            elif (x["l"] - prev_r) > 25.0:
+                parts.append("    " + txt)
+            elif (x["l"] - prev_r) > 1.8:
+                parts.append(" " + txt)
             else:
                 parts.append(txt)
-            prev_r = x["r"]
-        full_text = " ".join(parts).strip()
+            prev_r = max(prev_r or 0.0, x["r"])
+        full_text = "".join(parts).strip()
         if full_text:
             lines_out.append({
                 "text": full_text,
@@ -304,38 +310,51 @@ def _extract_lines_with_pypdfium(pdf_path: str, max_pages: int) -> tuple[int, li
             all_page_texts.append(raw_text)
 
             if idx < check_count:
-                rect_items: list[dict[str, Any]] = []
-                n_rects = textpage.count_rects()
-                for r_idx in range(n_rects):
-                    l_val, b_val, r_val, t_val = textpage.get_rect(r_idx)
-                    txt = " ".join(textpage.get_text_bounded(l_val, b_val, r_val, t_val).split())
-                    if not txt:
-                        continue
-                    rect_items.append({
-                        "text": txt,
-                        "l": float(l_val),
-                        "r": float(r_val),
-                        "height": abs(float(t_val - b_val)) or 10.0,
-                        "y_mid": float(t_val + b_val) / 2.0,
-                        "origin": "BOTTOMLEFT",
-                    })
-                clustered = _cluster_docling_items_into_lines(rect_items)
-                if clustered:
-                    pages_lines.append(clustered)
-                else:
-                    lines_list: list[dict[str, Any]] = []
-                    for raw_line in raw_text.splitlines():
-                        stripped = raw_line.strip()
-                        if not stripped:
-                            continue
+                lines_list: list[dict[str, Any]] = []
+                pos = 0
+                n_chars = textpage.count_chars()
+                for raw_line in raw_text.splitlines(keepends=True):
+                    line_len = len(raw_line)
+                    stripped = raw_line.strip()
+                    if stripped:
+                        lead_ws = len(raw_line) - len(raw_line.lstrip())
+                        first_idx = min(pos + lead_ws, max(0, n_chars - 1))
+                        last_idx = min(pos + lead_ws + len(stripped) - 1, max(0, n_chars - 1))
+                        indent_val = 48.0
+                        right_val = 500.0
+                        height_val = 10.0
+                        y_val = 0.0
+                        if n_chars > 0:
+                            try:
+                                l0, b0, r0, t0 = textpage.get_charbox(first_idx)
+                                l1, _b1, r1, _t1 = textpage.get_charbox(last_idx)
+                                indent_val = round(float(l0), 2)
+                                right_val = round(float(max(r0, r1, l1)), 2)
+                                height_val = round(abs(float(t0 - b0)) or 10.0, 2)
+                                y_val = round(float(t0 + b0) / 2.0, 2)
+                            except Exception:
+                                pass
                         lines_list.append({
                             "text": stripped,
-                            "indent": 48.0,
-                            "right": 500.0,
-                            "height": 10.0,
-                            "y_mid": 0.0,
+                            "indent": indent_val,
+                            "right": right_val,
+                            "height": height_val,
+                            "y_mid": y_val,
                         })
-                    pages_lines.append(lines_list)
+                    pos += line_len
+                # Normalize 2-column relative left indent so right-column entries match left-column tiers
+                pw, ph = page.get_size()
+                mid_x = pw * 0.5
+                body_l = [ln for ln in lines_list if ph * 0.04 < ln["y_mid"] < ph * 0.90]
+                left_indents = [ln["indent"] for ln in body_l if ln["right"] <= mid_x + 15.0]
+                right_indents = [ln["indent"] for ln in body_l if ln["indent"] >= mid_x - 10.0]
+                if pw > 300 and len(left_indents) >= 5 and len(right_indents) >= 5:
+                    l_base = min(left_indents)
+                    r_base = min(right_indents)
+                    for ln in body_l:
+                        if ln["indent"] >= mid_x - 10.0:
+                            ln["indent"] = round(l_base + max(0.0, ln["indent"] - r_base), 2)
+                pages_lines.append(lines_list)
             textpage.close()
     finally:
         doc.close()
@@ -606,12 +625,14 @@ def _infer_toc_heading_levels(toc_entries: list[dict[str, Any]]) -> None:
     last_numbered_level = 1
     last_indent_rank = 0
 
-    for entry in toc_entries:
+    for idx_e, entry in enumerate(toc_entries):
         title = entry["title"]
         indent_rank = _get_indent_rank(entry.get("indent", 48.0))
+        next_title = toc_entries[idx_e + 1]["title"] if idx_e + 1 < len(toc_entries) else ""
+        followed_by_ch1 = bool(re.match(r"^1(?:\.?\s+|\.1\b)", next_title))
 
-        # 1. Explicit Chapter / Part / Module prefix -> H1
-        if _CHAPTER_PREFIX_RE.match(title):
+        # 1. Explicit Chapter / Part / Module prefix or overarching Part right before Chapter 1 -> H1
+        if _CHAPTER_PREFIX_RE.match(title) or followed_by_ch1:
             lvl = 1
             last_numbered_level = 1
         # 2. Decimal numbering: '5' -> H1, '5.1' -> H2, '5.1.1' -> H3, '5.1.1.1' -> H4
@@ -896,14 +917,27 @@ def check_document_directories(
 
     active_dir_type: str | None = None
     non_entry_streak = 0
+    pending_chapter_line: dict[str, Any] | None = None
+    pending_wrapped_line: dict[str, Any] | None = None
 
     for page_idx, lines_on_page in enumerate(pages_lines):
         page_entries_count = 0
         page_candidate_entries: list[dict[str, Any]] = []
+        pending_wrapped_line = None
+        if page_idx < len(all_page_texts):
+            raw_p_lines = [ln.strip() for ln in all_page_texts[page_idx].splitlines() if ln.strip()]
+            for hdr_cand in raw_p_lines[:3] + raw_p_lines[-3:]:
+                ht_raw = _match_directory_header(hdr_cand)
+                if ht_raw is not None:
+                    active_dir_type = ht_raw
+                    explicit_headers_seen.add(ht_raw)
+                    directory_page_indices.add(page_idx)
+                    non_entry_streak = 0
+                    break
 
         for line_info in lines_on_page:
             text = line_info.get("text", "").strip()
-            if not text:
+            if not text or ".indb" in text.lower():
                 continue
 
             header_type = _match_directory_header(text)
@@ -912,19 +946,59 @@ def check_document_directories(
                 explicit_headers_seen.add(header_type)
                 directory_page_indices.add(page_idx)
                 non_entry_streak = 0
+                pending_wrapped_line = None
                 continue
 
             if active_dir_type is not None:
-                parsed = _parse_directory_entry_line(line_info, active_dir_type, page_idx)
+                eff_line_info = line_info
+                if pending_wrapped_line is not None and not re.match(r"^\d", text):
+                    eff_line_info = dict(pending_wrapped_line)
+                    eff_line_info["text"] = f"{pending_wrapped_line['text'].rstrip('-')} {text}"
+                parsed = _parse_directory_entry_line(eff_line_info, active_dir_type, page_idx)
                 if parsed is not None:
+                    pending_wrapped_line = None
+                    if (
+                        pending_chapter_line is not None
+                        and parsed["type"] == "toc"
+                        and str(parsed.get("number") or "").startswith(f"{pending_chapter_line['ch_num']}.")
+                    ):
+                        entries_by_type["toc"].append({
+                            "type": "toc",
+                            "title": pending_chapter_line["title"],
+                            "clean_title": pending_chapter_line["clean_title"],
+                            "number": pending_chapter_line["ch_num"],
+                            "label": None,
+                            "page": parsed["page"],
+                            "indent": pending_chapter_line["indent"],
+                            "height": pending_chapter_line["height"],
+                            "directory_page_idx": pending_chapter_line["page_idx"],
+                        })
+                        pending_chapter_line = None
                     entries_by_type[parsed["type"]].append(parsed)
                     page_entries_count += 1
                     directory_page_indices.add(page_idx)
                     non_entry_streak = 0
                 else:
-                    # Allow short subheaders inside a directory, but end directory mode
-                    # if body paragraphs appear
-                    if len(text) > 110:
+                    m_ch_np = (
+                        re.match(r"^(\d{1,2})\.?\s+([A-ZÄÖÜ][^\n\d]{3,80})$", text)
+                        if active_dir_type == "toc"
+                        else None
+                    )
+                    if m_ch_np:
+                        pending_chapter_line = {
+                            "ch_num": m_ch_np.group(1),
+                            "title": text,
+                            "clean_title": m_ch_np.group(2).strip(),
+                            "indent": float(line_info.get("indent", 48.0)),
+                            "height": float(line_info.get("height", 10.0)),
+                            "page_idx": page_idx,
+                        }
+                        pending_wrapped_line = None
+                        non_entry_streak = 0
+                    elif active_dir_type == "toc" and len(text) <= 65 and not re.search(r"\d{2,}", text):
+                        pending_wrapped_line = dict(line_info, text=text)
+                    elif len(text) > 110:
+                        pending_wrapped_line = None
                         non_entry_streak += 1
                         if non_entry_streak >= 2:
                             active_dir_type = None

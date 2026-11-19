@@ -1424,6 +1424,227 @@ def test_skeleton_cycle_dedup_mermaid_strip_callout_rescue_and_diagram_headings(
     assert "<Rahmen>\n_James Clerk Maxwell (1831–1879)_" in fused_p
 
 
+def test_split_decimal_heading_dedup_3dot_vector_difficulty_and_italic_intro(
+    tmp_path, monkeypatch
+):
+    """Verifies 18a Part 2: split decimal headings, 3-dot PDF vector difficulty + zero-overhead guard, and >=15-word italic intro."""
+    import pypdfium2 as pdfium
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    from backend.services.extraction_postprocess import (
+        extract_pdf_page_details,
+        fuse_vlm_page_with_docling,
+        normalize_split_decimal_headings,
+        reconstruct_title_hierarchy,
+    )
+
+    # 1. Split 2-line decimal section headings + unnumbered duplicate drop (preserving Abbildung 4.1)
+    raw_headings = (
+        "((14))\n\n"
+        "# Grundlagen der Systemanalyse\n\n"
+        "## Grundlagen 3.5 der Systemanalyse\n\n"
+        "#### Abbildung 4.1 Übersicht des Regelkreises\n\n"
+        "## Funktioneller Aufbau 1.1 von Sensoren\n"
+    )
+    norm_h = normalize_split_decimal_headings(raw_headings)
+    assert "# Grundlagen der Systemanalyse" not in norm_h
+    assert "## 3.5 Grundlagen der Systemanalyse" in norm_h
+    assert "#### Abbildung 4.1 Übersicht des Regelkreises" in norm_h
+    assert "## 1.1 Funktioneller Aufbau von Sensoren" in norm_h
+    assert "## 3.5 Grundlagen der Systemanalyse" in reconstruct_title_hierarchy(raw_headings)
+
+    # 2. Synthetic 2-page PDF:
+    #    - Page 0: heading + 17-word all-italic intro paragraph, NO 3-dot triplets (must NOT call page.render!)
+    #    - Page 1: 3 tasks with [T,F,F]=1, [T,T,F]=2, [T,T,T]=3 vector circles + bottom printer mark at y=10 (ignored)
+    pdf_path = str(tmp_path / "synthetic_3dot_tasks.pdf")
+    c = canvas.Canvas(pdf_path, pagesize=A4)
+    _pw, ph = A4
+
+    # Page 0: Heading + 17-word italic intro paragraph
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(72, ph - 80, "2.1 Thermische Ausgleichsprozesse")
+    c.setFont("Helvetica-Oblique", 11)
+    c.drawString(
+        72,
+        ph - 110,
+        "In geschlossenen Systemen gleichen sich unterschiedliche Temperaturen durch Wärmeleitung und Konvektion schrittweise vollständig aneinander an.",
+    )
+    c.drawString(72, ph - 126, "Dabei bleibt die innere Gesamtenergie konstant erhalten.")
+    c.showPage()
+
+    # Page 1: Tasks with 3-dot vector circles + bottom y=10 printer mark
+    c.setFont("Helvetica", 11)
+    tasks_spec = [
+        (ph - 120, "1 Benennen Sie die drei Übertragungsarten.", [True, False, False]),
+        (ph - 160, "2 Vergleichen Sie Wärmeleitung und Konvektion.", [True, True, False]),
+        (ph - 200, "3 Entwickeln Sie ein Modell zur Wärmedämmung.", [True, True, True]),
+    ]
+    c.setLineWidth(0.7)
+    for y_pos, txt_ln, dot_fills in tasks_spec:
+        c.drawString(72, y_pos, txt_ln)
+        base_x = 340.0
+        for d_i, is_filled in enumerate(dot_fills):
+            cx = base_x + d_i * 6.0
+            cy = y_pos + 3.5
+            if is_filled:
+                c.setFillColorRGB(0.1, 0.1, 0.1)
+                c.circle(cx, cy, 2.0, stroke=1, fill=1)
+            else:
+                c.setFillColorRGB(1.0, 1.0, 1.0)
+                c.circle(cx, cy, 2.0, stroke=1, fill=1)
+
+    # Bottom printer mark at y = 10 pt (must be ignored by y > 20 pt guard)
+    for d_i in range(3):
+        c.setFillColorRGB(0.0, 0.0, 0.0)
+        c.circle(100.0 + d_i * 6.0, 10.0, 2.0, stroke=1, fill=1)
+    c.showPage()
+    c.save()
+
+    render_pages: list[int] = []
+    orig_render = pdfium.PdfPage.render
+
+    def _spy_render(self, *args, **kwargs):
+        render_pages.append(1)
+        return orig_render(self, *args, **kwargs)
+
+    monkeypatch.setattr(pdfium.PdfPage, "render", _spy_render)
+
+    pdf_doc = pdfium.PdfDocument(pdf_path)
+    try:
+        details = extract_pdf_page_details(pdf_doc)
+    finally:
+        pdf_doc.close()
+
+    # Zero-overhead guard: Page 0 was NOT rendered; only Page 1 (with triplets) was rendered once!
+    assert len(render_pages) == 1
+    assert 0 not in details["task_difficulties_by_page"]
+    # 17-word (>= 15) all-italic intro paragraph right under heading on Page 0 suppressed italic font_spans
+    p0_italic_spans = [
+        sp for sp in details["font_spans_by_page"].get(0, []) if sp.get("style") == "italic"
+    ]
+    assert p0_italic_spans == []
+
+    p1_diffs = details["task_difficulties_by_page"].get(1, [])
+    assert [d["points"] for d in p1_diffs] == [1, 2, 3]
+
+    # Fuse VLM page output (containing raw '•••' on tasks) with layout containing task_difficulties_by_page
+    vlm_page_1 = (
+        "Aufgaben\n\n"
+        "1 Benennen Sie die drei Übertragungsarten. •••\n\n"
+        "2 Vergleichen Sie Wärmeleitung und Konvektion. •••\n\n"
+        "3 Entwickeln Sie ein Modell zur Wärmedämmung. •••"
+    )
+    fused = fuse_vlm_page_with_docling(
+        vlm_page_1,
+        page_images=[],
+        phys_num=25,
+        docling_layout={"task_difficulties_by_page": {1: p1_diffs}},
+        page_idx=1,
+    )
+    assert "•••" not in fused
+    assert "1 Benennen Sie die drei Übertragungsarten. [1 Punkt]" in fused
+    assert "2 Vergleichen Sie Wärmeleitung und Konvektion. [2 Punkte]" in fused
+    assert "3 Entwickeln Sie ein Modell zur Wärmedämmung. [3 Punkte]" in fused
+
+
+def test_two_col_3dot_order_diagram_circle_rejection_rubric_banner_rescue_and_spaced_decimal(
+    tmp_path,
+):
+    """Verifies 19b (2-col reading order + diagram particle rejection), 19c (rubric banner rescue), and 19d (1 . 1)."""
+    import pypdfium2 as pdfium
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    from backend.services.extraction_postprocess import (
+        extract_pdf_page_details,
+        normalize_split_decimal_headings,
+    )
+
+    # 19d.1: Spaced decimal '1 . 1' normalized and deduplicated against preceding '## 1.1 ...'
+    spaced_md = (
+        "((40))\n\n"
+        "## 1.1 Funktioneller Aufbau von Sensoren\n\n"
+        "#### Funktioneller Aufbau 1 . 1 von Sensoren\n"
+    )
+    norm_spaced = normalize_split_decimal_headings(spaced_md)
+    assert norm_spaced.count("1.1 Funktioneller Aufbau von Sensoren") == 1
+    assert "## 1.1 Funktioneller Aufbau von Sensoren" in norm_spaced
+    assert "1 . 1" not in norm_spaced
+
+    pdf_path = str(tmp_path / "synthetic_19bc.pdf")
+    c = canvas.Canvas(pdf_path, pagesize=A4)
+    pw, ph = A4
+
+    # Page 0: Top-of-page rubric banner ('methode' + 'Modellbildung im Experiment' at y_1000 <= 60)
+    # AND 2-column tasks where right-column task 3 sits vertically ABOVE lower left-column task 2!
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(48, ph - 26, "methode")
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(48, ph - 44, "Modellbildung im Experiment")
+
+    c.setFont("Helvetica", 10)
+    # Left column: x = 48..255 (col 0)
+    left_tasks = [
+        (ph - 130, "1 Beschreiben Sie den Aufbau.", 245.0, [True, False, False]),
+        (ph - 240, "2 Vergleichen Sie beide Kurven.", 245.0, [True, True, False]),
+    ]
+    # Right column: x = 315..530 (col 1; gutter [260..305] is completely empty!)
+    right_tasks = [
+        (ph - 160, "3 Beurteilen Sie das Modell.", 515.0, [True, True, True]),
+    ]
+    c.setLineWidth(0.7)
+    for y_pos, txt_ln, dot_x, fills in left_tasks + right_tasks:
+        c.drawString(48 if dot_x < 300 else 315, y_pos, txt_ln)
+        for d_i, is_f in enumerate(fills):
+            cx = dot_x + d_i * 6.0
+            cy = y_pos + 3.2
+            c.setFillColorRGB(0.1, 0.1, 0.1) if is_f else c.setFillColorRGB(1.0, 1.0, 1.0)
+            c.circle(cx, cy, 2.0, stroke=1, fill=1)
+    c.showPage()
+
+    # Page 1: Genuine folio running header ('48   Kapitel 2') + diagram with 3 collinear circles and ion label 'H +'
+    c.setFont("Helvetica", 9)
+    c.drawString(48, ph - 28, "48   Kapitel 2")
+    c.setFont("Helvetica", 11)
+    c.drawString(48, ph - 120, "Regulärer Fließtext auf der zweiten Seite mit mehr als zwanzig Zeichen.")
+    # Diagram circles with ion token 'H +' (no task prose, no bullet glyphs) and empty-text circles
+    c.setFont("Helvetica", 8)
+    c.drawString(360, ph - 300, "H +")
+    for base_x, base_y in ((380.0, ph - 298.0), (380.0, ph - 420.0)):
+        for d_i in range(3):
+            c.setFillColorRGB(0.1, 0.1, 0.1)
+            c.circle(base_x + d_i * 6.0, base_y, 2.0, stroke=1, fill=1)
+    c.showPage()
+    c.save()
+
+    pdf_doc = pdfium.PdfDocument(pdf_path)
+    try:
+        details = extract_pdf_page_details(pdf_doc)
+    finally:
+        pdf_doc.close()
+
+    # 19b: Page 0 difficulties sorted in 2-column reading order [1, 2, 3] instead of row-major [1, 3, 2]
+    p0_diffs = details["task_difficulties_by_page"].get(0, [])
+    assert [d["points"] for d in p0_diffs] == [1, 2, 3]
+
+    # 19b: Page 1 diagram circles ('H +' and textless) rejected completely
+    assert 1 not in details["task_difficulties_by_page"]
+
+    # 19c: Page 0 rubric banner rescued from furniture_by_page, while Page 1 folio header stays in furniture_by_page
+    p0_furn_txts = [f["text"] for f in details["furniture_by_page"].get(0, [])]
+    assert "methode" not in p0_furn_txts
+    assert "Modellbildung im Experiment" not in p0_furn_txts
+    p0_body_joined = " ".join(b["text"] for b in details["pdf_blocks_by_page"].get(0, []))
+    assert "methode" in p0_body_joined
+    assert "Modellbildung im Experiment" in p0_body_joined
+
+    p1_furn_txts = [f["text"] for f in details["furniture_by_page"].get(1, [])]
+    assert any("48" in t for t in p1_furn_txts)
+
+
+
+
 
 
 

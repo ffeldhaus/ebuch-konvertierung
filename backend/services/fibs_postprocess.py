@@ -18,7 +18,7 @@ from backend.services.fibs_formatting import (
     normalize_fibs_units_and_percent,
     normalize_versalien,
 )
-from backend.services.models import PageSegment
+from backend.services.models import BuchkonferenzProfile, PageSegment
 
 logger = logging.getLogger(__name__)
 
@@ -1520,14 +1520,29 @@ def _resolve_figure_caption_prefix(
     return "M", False
 
 
+def _is_question_or_lead_in_prose(body: str) -> bool:
+    """Returns True if ``body`` ends with ``?`` or embeds a question in multi-sentence/long prose."""
+    s_b = body.rstrip("*_ ").strip()
+    if not s_b:
+        return False
+    if s_b.endswith("?"):
+        return True
+    return "?" in s_b and (
+        len(s_b) > 180 or len(re.findall(r"[.!?](?:\s+|$)", s_b)) >= 2
+    )
+
+
 def _split_long_caption_body(label_part: str, body_str: str) -> str:
     """Formats a ``Ü4`` figure caption, splitting captions > 140 chars per FIBS §7.1.1.2."""
-    if len(body_str) > 140:
-        for m_sent in re.finditer(r"([.!?])\s+([A-ZÄÖÜ0-9\"'(].+)$", body_str):
-            head_cand = body_str[: m_sent.start()].strip()
+    clean_b = body_str.strip()
+    if not clean_b or fc.VLM_GENERIC_BILDART_ONLY_RE.match(clean_b) or fc.VLM_DESC_BOILERPLATE_HEADING_RE.match(clean_b):
+        return f"#### {label_part}"
+    if len(clean_b) > 140:
+        for m_sent in re.finditer(r"([.!?])\s+([A-ZÄÖÜ0-9\"'(].+)$", clean_b):
+            head_cand = clean_b[: m_sent.start()].strip()
             punct = m_sent.group(1)
             rest_cand = m_sent.group(2).strip()
-            if not (10 <= len(head_cand) <= 140) or not rest_cand:
+            if punct == "?" or not (10 <= len(head_cand) <= 140) or not rest_cand:
                 continue
             if punct == "." and re.search(
                 r"\b(?:Abb|Tab|Fig|Nr|S|Bd|Aufl|vgl|bzw|ca|Dr|Prof|[A-Z])$|(?:\bz\.\s*B|\bu\.\s*a|\bd\.\s*h)$",
@@ -1535,13 +1550,18 @@ def _split_long_caption_body(label_part: str, body_str: str) -> str:
             ):
                 continue
             head_final = head_cand if punct == "." else f"{head_cand}{punct}"
+            if fc.VLM_DESC_BOILERPLATE_HEADING_RE.match(rest_cand):
+                return f"#### {label_part} {head_final}"
             return f"#### {label_part} {head_final}\n\n{rest_cand}"
 
-        m_col = re.match(r"^([^:\n]{10,140}):\s+(.+)$", body_str)
+        m_col = re.match(r"^([^:\n?]{10,140}):\s+(.+)$", clean_b)
         if m_col and m_col.group(2).strip():
-            return f"#### {label_part} {m_col.group(1).strip()}\n\n{m_col.group(2).strip()}"
+            rest_col = m_col.group(2).strip()
+            if fc.VLM_DESC_BOILERPLATE_HEADING_RE.match(rest_col):
+                return f"#### {label_part} {m_col.group(1).strip()}"
+            return f"#### {label_part} {m_col.group(1).strip()}\n\n{rest_col}"
 
-    return f"#### {label_part} {body_str}"
+    return f"#### {label_part} {clean_b}"
 
 
 def _promote_and_clean_bild_captions(
@@ -1567,6 +1587,81 @@ def _promote_and_clean_bild_captions(
         return text
 
     fig_pfx, explicit_bk = _resolve_figure_caption_prefix(custom_rules, ruleset_key)
+    text_subheadings_h4 = bool(
+        custom_rules and _parse_buchkonferenz_profile(custom_rules).text_subheadings_h4
+    )
+
+    # 19f: Strip contiguous >= 2 pairs of orphan in-diagram subheading + single-letter panel heading after </Bild>
+    pair_segs = re.split(r"(<Bild\b[^>]*>[\s\S]*?</Bild>)", text, flags=re.IGNORECASE)
+    pair_changed = False
+    panel_stop_words = {
+        "und", "oder", "der", "die", "das", "mit", "von", "bei", "im", "in", "am", "an", "zu", "zum", "zur"
+    }
+    panel_excl_re = re.compile(
+        r"^(?:Material|Aufgaben?|Übung(?:en)?|Kapitel|Chapter|Teil|Abschnitt|Methode|"
+        r"Basiskonzepte?|Exkurs|Worterklärung|Randspalte|Steckbrief|[MBQ]\s*\d+|Abb(?:ildung)?\b|Bild\b|Grafik\b)\b",
+        re.IGNORECASE,
+    )
+
+    def _matches_bild_diagram_label(cand_ln: str, bild_low: str) -> bool:
+        m_dl = re.match(r"^#{2,5}\s+([^\n#:]{2,80})$", cand_ln)
+        if not m_dl:
+            return False
+        lbl_t = re.sub(r"^(?:\*\*|_)+|(?:\*\*|_)+$", "", m_dl.group(1).strip()).strip()
+        if not (1 <= len(lbl_t.split()) <= 5) or ":" in lbl_t or panel_excl_re.match(lbl_t):
+            return False
+        sig_ws = [
+            w for w in re.findall(r"[a-zäöüß0-9]{3,}", lbl_t.lower()) if w not in panel_stop_words
+        ]
+        if not sig_ws:
+            sig_ws = re.findall(r"[a-zäöüß0-9]{2,}", lbl_t.lower())
+        if not sig_ws:
+            return False
+        return all(
+            w in bild_low or (len(w) >= 5 and w[:-2] in bild_low) for w in sig_ws
+        )
+
+    for p_bi in range(1, len(pair_segs), 2):
+        b_low = pair_segs[p_bi].lower()
+        p_lns = pair_segs[p_bi + 1].splitlines()
+        cur_pi = 0
+        while cur_pi < len(p_lns) and p_lns[cur_pi].strip() in ("", "---"):
+            cur_pi += 1
+        if cur_pi < len(p_lns):
+            first_ps = p_lns[cur_pi].strip()
+            if re.match(r"^(?:_|\*)[^_*\n]{3,180}(?:_|\*)$", first_ps):
+                cur_pi += 1
+        matched_pair_lines: list[int] = []
+        while cur_pi < len(p_lns):
+            i1 = cur_pi
+            while i1 < len(p_lns) and p_lns[i1].strip() in ("", "---"):
+                i1 += 1
+            if i1 >= len(p_lns):
+                break
+            i2 = i1 + 1
+            while i2 < len(p_lns) and p_lns[i2].strip() in ("", "---"):
+                i2 += 1
+            if i2 >= len(p_lns):
+                break
+            s1, s2 = p_lns[i1].strip(), p_lns[i2].strip()
+            is_fwd = _matches_bild_diagram_label(s1, b_low) and bool(
+                re.match(r"^#{3,6}\s+[A-F]\s*$", s2)
+            )
+            is_rev = bool(re.match(r"^#{3,6}\s+[A-F]\s*$", s1)) and _matches_bild_diagram_label(
+                s2, b_low
+            )
+            if is_fwd or is_rev:
+                matched_pair_lines.extend([i1, i2])
+                cur_pi = i2 + 1
+            else:
+                break
+        if len(matched_pair_lines) >= 4:
+            drop_set = set(matched_pair_lines)
+            kept_pl = [ln for idx_l, ln in enumerate(p_lns) if idx_l not in drop_set]
+            pair_segs[p_bi + 1] = "\n".join(kept_pl)
+            pair_changed = True
+    if pair_changed:
+        text = "".join(pair_segs)
 
     # Drop standalone single-letter panel headings ('### A', '#### B') adjacent to <Bild>, ((num)), or captions
     panel_chk_lines = text.splitlines()
@@ -1743,15 +1838,52 @@ def _promote_and_clean_bild_captions(
                 last_ne = idx_p
                 break
 
+        m_bt = re.match(r"^<Bild>\s*([^:\n]{1,60}):", bild_box)
+        bild_typ = m_bt.group(1).strip().lower() if m_bt else ""
+        m_bd = re.search(r"Beschreibung(?: mit Bildtext)?:\s*([\s\S]*?)\s*</Bild>$", bild_box)
+        bild_desc_norm = re.sub(r"\s+", " ", m_bd.group(1)).strip().lower() if m_bd else ""
+
         has_pre_cap = False
         bare_pre_info: tuple[str, str] | None = None
+        was_vlm_echo_pre = False
         cap_text_lower = ""
         cap_num_found = ""
         if last_ne >= 0:
             cand_pre = pre_lines[last_ne].strip()
-            m_bare_pre = re.match(r"^#{3,6}\s+([MBQ])\s*(\d{1,2}[a-z]?)\s*$", cand_pre)
-            if m_bare_pre:
-                bare_pre_info = (m_bare_pre.group(1), m_bare_pre.group(2))
+            m_m_pre = re.match(r"^#{3,6}\s+([MBQ])\s*(\d{1,2}[a-z]?)(?:\s+(.+))?$", cand_pre)
+            suf_pre = (
+                re.sub(r"^(?:\*\*|_)+|(?:\*\*|_)+$", "", (m_m_pre.group(3) or "").strip()).strip()
+                if m_m_pre
+                else ""
+            )
+            suf_pre_norm = re.sub(r"\s+", " ", suf_pre).lower()
+            is_vlm_echo_suf = bool(m_m_pre and suf_pre) and (
+                (bool(bild_typ) and suf_pre_norm.rstrip(".") == bild_typ.rstrip("."))
+                or bool(fc.VLM_GENERIC_BILDART_ONLY_RE.match(suf_pre))
+                or bool(fc.VLM_DESC_BOILERPLATE_HEADING_RE.match(suf_pre))
+                or (
+                    len(suf_pre) >= 25
+                    and bool(bild_desc_norm)
+                    and bild_desc_norm.startswith(suf_pre_norm)
+                    and (
+                        len(suf_pre) >= 70
+                        or bool(
+                            re.match(
+                                r"^(?:ein|eine|einer|eines|zwei|drei|vier|mehrere|links|rechts|oben|unten|im\s+|in\s+|auf\s+|das\s+|die\s+|der\s+)\b",
+                                suf_pre,
+                                re.IGNORECASE,
+                            )
+                        )
+                    )
+                )
+            )
+            if m_m_pre and not suf_pre:
+                bare_pre_info = (m_m_pre.group(1), m_m_pre.group(2))
+            elif m_m_pre and is_vlm_echo_suf:
+                eff_let = fig_pfx if explicit_bk else m_m_pre.group(1).upper()
+                pre_lines[last_ne] = f"#### {eff_let}{m_m_pre.group(2)}"
+                bare_pre_info = (eff_let or m_m_pre.group(1).upper(), m_m_pre.group(2))
+                was_vlm_echo_pre = True
             # Existing Abb. X.Y: / Bild X.Y: / Abbildung X.Y: decimal captions stay as-is
             elif re.match(
                 r"^#{3,6}\s+(?:Abb(?:ildung)?\.?|Bild|Grafik|Figure|Fig\.?)\s*\d+\.\d+",
@@ -1781,7 +1913,7 @@ def _promote_and_clean_bild_captions(
                     if (
                         m_pre
                         and not _TASK_OPERATOR_VERB_RE.match(pre_body_clean)
-                        and not pre_body_clean.rstrip("*_ ").endswith("?")
+                        and not _is_question_or_lead_in_prose(pre_body_clean)
                         and not re.search(r"^[A-ZÄÖÜ][a-zäöüß]+en\s+Sie\b", pre_body_clean)
                     ):
                         hashes_pre = (m_pre.group(1) or "").strip()
@@ -1810,7 +1942,51 @@ def _promote_and_clean_bild_captions(
                             cap_text_lower = c_clean.lower()
                             cap_num_found = m_pre.group(4)
 
+        # Look up to 2 non-empty blocks above a bare '#### M<Nr>' on the same page for a printed caption with matching Nr
+        if bare_pre_info is not None and last_ne > 0:
+            b_let_up, b_num_up = bare_pre_info
+            seen_up = 0
+            for up_i in range(last_ne - 1, -1, -1):
+                up_s = pre_lines[up_i].strip()
+                if not up_s:
+                    continue
+                if up_s.startswith(("((", "</Bild", "</Tabelle", "</Rahmen", "# ", "## ", "### ")):
+                    break
+                seen_up += 1
+                m_up = fig_cap_re.match(up_s)
+                up_body = re.sub(r"^(?:\*\*|_)+", "", m_up.group(6).strip()) if m_up else ""
+                if (
+                    m_up
+                    and m_up.group(4) == b_num_up
+                    and not _TASK_OPERATOR_VERB_RE.match(up_body)
+                    and not _is_question_or_lead_in_prose(up_body)
+                    and not re.search(r"\bSie\b", up_body)
+                ):
+                    formatted_up, c_up = _build_formatted_caption(
+                        m_up.group(2) or "",
+                        b_let_up,
+                        b_num_up,
+                        m_up.group(5) or "",
+                        up_body,
+                    )
+                    pre_lines[last_ne] = formatted_up
+                    pre_lines.pop(up_i)
+                    last_ne -= 1
+                    has_pre_cap = True
+                    bare_pre_info = None
+                    cap_text_lower = c_up.lower()
+                    cap_num_found = b_num_up
+                    break
+                if seen_up >= 2:
+                    break
+
         # Inspect first few non-empty lines after </Bild> for trailing caption, <Anmerkung> caption, or orphan axis fragments
+        last_post_ne_idx = -1
+        for idx_lp in range(len(post_lines) - 1, -1, -1):
+            if post_lines[idx_lp].strip():
+                last_post_ne_idx = idx_lp
+                break
+
         ne_indices: list[int] = []
         for idx_a, a_ln in enumerate(post_lines):
             a_s = a_ln.strip()
@@ -1830,6 +2006,9 @@ def _promote_and_clean_bild_captions(
         post_cap_heading = ""
         for k_pos, idx_a in enumerate(ne_indices):
             cand = post_lines[idx_a].strip()
+            is_next_bild_pre_heading = (
+                b_i + 2 < len(bild_segs) and idx_a == last_post_ne_idx and cand.startswith("#")
+            )
             intervening_ok = all(
                 len(post_lines[prev_a].strip()) <= 50
                 and not post_lines[prev_a].strip().endswith((".", "!", "?"))
@@ -1843,12 +2022,16 @@ def _promote_and_clean_bild_captions(
             if m_anm_post:
                 anm_num = m_anm_post.group(2)
                 anm_body_str = m_anm_post.group(3).strip()
+                if bare_pre_info is not None and anm_num != bare_pre_info[1]:
+                    continue
                 has_fn_ref = bool(re.search(rf"(?<![_^\\])\{{{anm_num}\}}", surrounding_body))
                 is_dup_of_pre = has_pre_cap and (
                     anm_num == cap_num_found or anm_body_str.lower() == cap_text_lower
                 )
-                if (not has_fn_ref or is_dup_of_pre) and not _TASK_OPERATOR_VERB_RE.match(
-                    anm_body_str
+                if (
+                    (not has_fn_ref or is_dup_of_pre)
+                    and not _TASK_OPERATOR_VERB_RE.match(anm_body_str)
+                    and not _is_question_or_lead_in_prose(anm_body_str)
                 ):
                     matched_post_idx = idx_a
                     post_cap_heading, c_clean = _build_formatted_caption(
@@ -1866,35 +2049,77 @@ def _promote_and_clean_bild_captions(
             if (
                 m_post
                 and not _TASK_OPERATOR_VERB_RE.match(post_body_clean)
-                and not post_body_clean.rstrip("*_ ").endswith("?")
+                and not _is_question_or_lead_in_prose(post_body_clean)
                 and not re.search(r"^[A-ZÄÖÜ][a-zäöüß]+en\s+Sie\b", post_body_clean)
             ):
                 hashes_post = (m_post.group(1) or "").strip()
                 word_post = m_post.group(2) or ""
                 let_post = m_post.group(3) or ""
+                post_num = m_post.group(4)
                 if hashes_post in ("#", "##", "###") and not word_post and not let_post:
+                    continue
+                if bare_pre_info is not None and post_num != bare_pre_info[1]:
+                    continue
+                if is_next_bild_pre_heading and (
+                    bare_pre_info is None or post_num != bare_pre_info[1]
+                ):
                     continue
                 matched_post_idx = idx_a
                 post_cap_heading, c_clean = _build_formatted_caption(
                     word_post,
                     let_post,
-                    m_post.group(4),
+                    post_num,
                     m_post.group(5) or "",
                     post_body_clean,
                 )
                 cap_text_lower = cap_text_lower or c_clean.lower()
                 break
 
-            if bare_pre_info is not None:
+            if bare_pre_info is not None and not is_next_bild_pre_heading:
                 m_italic_np = re.match(r"^(?:_|\*)([A-ZÄÖÜ][^_*\n]{6,160}?)(?:_|\*)$", cand)
                 m_schema_h4 = re.match(
-                    r"^####\s+([A-ZÄÖÜ][^\n#]{6,160}?\((?:Schema|Diagramm|Modell|Zeichnung|Grafik|stark vereinfacht)\))$",
+                    r"^####\s+([A-ZÄÖÜ][^\n#]{6,160}?\((?:Schema|Diagramm|Modell|Zeichnung|Grafik|Foto|Aufnahme|stark vereinfacht|schematisch)[^\n)]*\))$",
                     cand,
                 )
+                m_lone_h4 = (
+                    re.match(r"^####\s+([A-ZÄÖÜ][^\n#?]{2,140})$", cand)
+                    if k_pos == 0
+                    else None
+                )
+                lone_h4_body = ""
+                if m_lone_h4 and not m_schema_h4:
+                    cand_h4_b = m_lone_h4.group(1).strip()
+                    if not re.match(
+                        r"^(?:[MBQ]\s*\d+|Abb(?:ildung)?\b|Bild\b|Grafik\b|Material\b|Aufgaben?\b|Worterklärung|Randspalte|Steckbrief\b)",
+                        cand_h4_b,
+                        re.IGNORECASE,
+                    ):
+                        nxt_after_h4 = ""
+                        for fwd_p in range(idx_a + 1, len(post_lines)):
+                            if post_lines[fwd_p].strip():
+                                nxt_after_h4 = post_lines[fwd_p].strip()
+                                break
+                        no_prose_after = not nxt_after_h4 or nxt_after_h4.startswith(
+                            ("#", "<", "((", "---")
+                        )
+                        is_setup_np = bool(
+                            re.match(
+                                r"^(?:Versuchsaufbau|Modellversuch|Versuchsanordnung|Messaufbau|Schematische\w*\s+(?:Aufbau|Darstellung)|(?:Licht|Elektronen)?[Mm]ikroskopische\s+Aufnahme)\b",
+                                cand_h4_b,
+                            )
+                        )
+                        if (
+                            was_vlm_echo_pre
+                            or no_prose_after
+                            or not text_subheadings_h4
+                            or is_setup_np
+                        ):
+                            lone_h4_body = cand_h4_b
+
                 np_body = (
                     m_italic_np.group(1).strip()
                     if m_italic_np
-                    else (m_schema_h4.group(1).strip() if m_schema_h4 else "")
+                    else (m_schema_h4.group(1).strip() if m_schema_h4 else lone_h4_body)
                 )
                 if (
                     np_body
@@ -2425,10 +2650,205 @@ def _apply_linked_worterklaerungen_and_randspalten(
     return "".join(s.text for s in segs).strip()
 
 
+def _parse_buchkonferenz_profile(custom_rules: str | None) -> BuchkonferenzProfile:
+    """Parses structural, task, difficulty, TOC, and emphasis directives from ``custom_rules``.
+
+    Args:
+        custom_rules: Optional book-specific rules string from ``custom_ruleset.txt``.
+
+    Returns:
+        Populated ``BuchkonferenzProfile`` domain model.
+    """
+    if not custom_rules or not custom_rules.strip():
+        return BuchkonferenzProfile()
+
+    u5_chunks: list[str] = []
+    for m_u5 in re.finditer(
+        r"(?:^|\n)[ \t#*\-]*(?:(?:Überschrift|Ebene)\s*5|Ü\s*5)\b[ \t]*:?[ \t]*([\s\S]*?)"
+        r"(?=\n[ \t#*\-]*(?:(?:Überschrift|Ebene)\s*[1-6]|Ü[1-6])\b|\n[ \t*]*Sonstiges|\n[ \t*]*Anmerkungen|\n<Anmerkung|\Z)",
+        custom_rules,
+        re.IGNORECASE,
+    ):
+        u5_chunks.append(m_u5.group(1))
+    u5_text = "\n".join(u5_chunks)
+
+    has_u5_num_kw = bool(
+        re.search(r"\bAufgabennummern?\b", u5_text, re.IGNORECASE)
+        or re.search(
+            r"\bAufgabennummern?\b[^\n]{0,50}(?:Überschrift\s*5|Ü\s*5|H5)",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    has_u5_standalone_aufg = bool(
+        re.search(
+            r"(?:['\"„“]Aufgaben:?['\"“”]|Wort\s+['\"„“]?Aufgaben|\bAufgaben\b(?!nummer))",
+            u5_text,
+            re.IGNORECASE,
+        )
+        or (
+            not u5_text
+            and re.search(
+                r"(?:Überschrift\s*5|Ü\s*5)[\s\S]{0,120}\bAufgaben\b(?!nummer)"
+                r"|\bAufgaben\b(?!nummer)[^\n]{0,50}(?:Überschrift\s*5|Ü\s*5)",
+                custom_rules,
+                re.IGNORECASE,
+            )
+        )
+    )
+    tasks_h5_numbers_only = bool(has_u5_num_kw and not has_u5_standalone_aufg)
+    tasks_h5 = bool(has_u5_standalone_aufg and not tasks_h5_numbers_only)
+
+    point_map: dict[int, str] = {}
+    for m_pt in re.finditer(
+        r"(?<!\d)([123])\s*Punkte?\s*\)?\s*(?::|=|->|→|–|-|entspricht)\s*"
+        r"(?:\[([^\],\n]+)\]|([A-Za-zÄÖÜäöüß]{4,20}))",
+        custom_rules,
+        re.IGNORECASE,
+    ):
+        pt_num = int(m_pt.group(1))
+        lbl_raw = (m_pt.group(2) or m_pt.group(3) or "").strip()
+        if lbl_raw:
+            point_map[pt_num] = f"[{lbl_raw}]"
+
+    text_subheadings_h4 = bool(
+        re.search(
+            r"(?:(?:Überschrift|Ebene)\s*4|Ü\s*4)[\s\S]{0,160}Textüberschrift"
+            r"|Textüberschrift\w*[^\n]{0,60}(?:(?:Überschrift|Ebene)\s*4|Ü\s*4)",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    material_h3_section = bool(
+        re.search(
+            r"Material\s+Ü3|(?:Überschrift\s*3|Ü\s*3)\s*:?[\s\S]{0,120}\bMaterial\b(?!\s+mit\s+Aufgaben)",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    has_hierarchy = bool(
+        text_subheadings_h4
+        or re.search(
+            r"Überschrift\s*1\s*:?\s*[^\n]*(?:Hauptthema|Hauptkapitel|Kapitel)"
+            r"|Überschrift\s*3\s*:?[^\n]*(?:Material|IM\s+BLICKPUNKT|Methode|Basiskonzept|Exkurs)"
+            r"|Überschrift\s*4\s*:?[^\n]*(?:Kapitelinterne|Textüberschrift)",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    adopt_toc_u1 = bool(
+        re.search(
+            r"stehen\s+nur\s+im\s+Inhaltsverzeichnis"
+            r"|aus\s+dem\s+Inhaltsverzeichnis[^\n]*(?:übernehmen|ergänzen|einfügen)"
+            r"|Inhaltsverzeichnis[^\n]*(?:Überschrift\s*1|Ü\s*1)"
+            r"|(?:Überschrift\s*1|Ü\s*1)[\s\S]{0,140}Inhaltsverzeichnis",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    plain_italic_intro = bool(
+        re.search(
+            r"kursiv\w*\s+Einleitungstext\w*[^\n]*nicht\s+fett"
+            r"|Einleitungstext\w*[^\n]*(?:nicht\s+fett|ohne\s+Hervorhebung)",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+
+    return BuchkonferenzProfile(
+        tasks_h5=tasks_h5,
+        tasks_h5_numbers_only=tasks_h5_numbers_only,
+        point_difficulty_map=point_map,
+        has_hierarchy=has_hierarchy,
+        material_h3_section=material_h3_section,
+        text_subheadings_h4=text_subheadings_h4,
+        adopt_toc_u1=adopt_toc_u1,
+        plain_italic_intro=plain_italic_intro,
+    )
+
+
+def _inject_toc_u1_chapters(
+    text: str,
+    directory_info: dict[str, Any] | None,
+    *,
+    inject_missing: bool,
+) -> tuple[str, set[str]]:
+    """Collects TOC level-1 chapter norms and optionally injects missing ``# <title>`` headings.
+
+    Args:
+        text: Markdown document with ``((page))`` markers.
+        directory_info: Optional detected TOC/directory metadata dictionary.
+        inject_missing: Whether to insert TOC ``level == 1`` chapters after ``((page))``
+            when no matching ``# `` heading already appears on that page.
+
+    Returns:
+        Tuple ``(updated_text, toc_u1_title_norms)``.
+    """
+    toc_u1_norms: set[str] = set()
+    toc_entries = (directory_info or {}).get("toc_entries") or []
+    u1_by_page: dict[str, list[str]] = {}
+    for entry in toc_entries:
+        if not isinstance(entry, dict) or int(entry.get("level") or 0) != 1:
+            continue
+        raw_t = str(entry.get("title") or "").strip()
+        pg_t = str(entry.get("page") or "").strip()
+        norm_t = re.sub(r"\W+", " ", raw_t).strip().lower()
+        if norm_t:
+            toc_u1_norms.add(norm_t)
+            norm_unnum = re.sub(r"^\d+\.?\s+", "", norm_t).strip()
+            if norm_unnum:
+                toc_u1_norms.add(norm_unnum)
+        if raw_t and pg_t:
+            u1_by_page.setdefault(pg_t, []).append(raw_t)
+
+    if not inject_missing or not u1_by_page or not text:
+        return text, toc_u1_norms
+
+    segs = split_markdown_pages(text)
+    changed = False
+    for seg in segs:
+        if not seg.page or seg.page not in u1_by_page:
+            continue
+        seg_lines = seg.text.splitlines()
+        if not seg_lines:
+            continue
+        for toc_title in reversed(u1_by_page[seg.page]):
+            toc_words = {
+                w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9]{3,}", toc_title)
+            }
+            already_present = False
+            for idx_sl, raw_sl in enumerate(seg_lines):
+                m_h = re.match(r"^(#{1,3})\s+(.+)$", raw_sl.strip())
+                if not m_h:
+                    continue
+                h_words = {
+                    w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9]{3,}", m_h.group(2))
+                }
+                if toc_words and (
+                    toc_words <= h_words
+                    or len(toc_words & h_words) / len(toc_words) >= 0.75
+                ):
+                    if len(m_h.group(1)) != 1:
+                        seg_lines[idx_sl] = f"# {m_h.group(2).strip()}"
+                        changed = True
+                    already_present = True
+                    break
+            if not already_present:
+                seg_lines = [seg_lines[0], "", f"# {toc_title}", ""] + seg_lines[1:]
+                changed = True
+        if changed:
+            seg.text = re.sub(r"\n{3,}", "\n\n", "\n".join(seg_lines).rstrip()) + "\n\n"
+
+    if not changed:
+        return text, toc_u1_norms
+    return "".join(s.text for s in segs).strip(), toc_u1_norms
+
+
 def _apply_buchkonferenz_rules(
     text: str,
     custom_rules: str | None,
     ruleset_key: str = "uebertragungsregeln_09_2025",
+    directory_info: dict[str, Any] | None = None,
 ) -> str:
     """Applies generic Buchkonferenz structural and formatting directives from ``custom_rules``.
 
@@ -2436,6 +2856,7 @@ def _apply_buchkonferenz_rules(
         text: Post-processed Markdown text.
         custom_rules: Optional book-specific rules string from ``custom_ruleset.txt``.
         ruleset_key: Active FIBS ruleset identifier.
+        directory_info: Optional detected TOC/directory metadata dictionary.
 
     Returns:
         Markdown text transformed according to the detected Buchkonferenz directives.
@@ -2466,9 +2887,69 @@ def _apply_buchkonferenz_rules(
     # Global FIBS 09/2025 Ü4 captions above <Bild> with Buchkonferenz prefix priority
     text = _promote_and_clean_bild_captions(text, custom_rules=custom_rules, ruleset_key=ruleset_key)
 
+    # Normalize standalone rubric banner + heading pairs and 'material mitaufgaben' even without custom_rules
+    rubric_canon = {
+        "methode": "Methode",
+        "basiskonzept": "Basiskonzept",
+        "basiskonzepte": "Basiskonzept",
+        "exkurs": "Exkurs",
+        "praktikum": "Praktikum",
+        "streifzug": "Streifzug",
+    }
+    text = re.sub(
+        r"(?im)^#{2,4}[ \t]+(?:\*\*|_)?material[ \t]+mit[ \t]*aufgaben:?(?:\*\*|_)?[ \t]*$",
+        "### Material mit Aufgaben",
+        text,
+    )
     if not custom_rules or not custom_rules.strip():
-        return text
+        std_r_lines = text.splitlines()
+        std_out_lines: list[str] = []
+        std_in_blk = False
+        s_ri = 0
+        while s_ri < len(std_r_lines):
+            sr_ln = std_r_lines[s_ri]
+            srs = sr_ln.strip()
+            if std_in_blk:
+                if re.search(r"</(?:Bild|Tabelle|Rahmen|Anmerkung)>", srs, re.IGNORECASE):
+                    std_in_blk = False
+                std_out_lines.append(sr_ln)
+                s_ri += 1
+                continue
+            if re.match(r"^<(?:Bild|Tabelle|Rahmen|Anmerkung)\b", srs, re.IGNORECASE):
+                if not re.search(r"</(?:Bild|Tabelle|Rahmen|Anmerkung)>", srs, re.IGNORECASE):
+                    std_in_blk = True
+                std_out_lines.append(sr_ln)
+                s_ri += 1
+                continue
+            m_std_rub = re.match(
+                r"^(?:#{1,6}\s+)?(methode|basiskonzepte?|exkurs|praktikum|streifzug):?\s*$",
+                srs,
+                re.IGNORECASE,
+            )
+            if m_std_rub:
+                nxt_sri = s_ri + 1
+                while nxt_sri < len(std_r_lines) and not std_r_lines[nxt_sri].strip():
+                    nxt_sri += 1
+                if nxt_sri < len(std_r_lines):
+                    m_nxt_h = re.match(r"^#{1,5}\s+([^\n#<]+)$", std_r_lines[nxt_sri].strip())
+                    if m_nxt_h:
+                        nxt_t = re.sub(
+                            r"^(?:\*\*|_)+|(?:\*\*|_)+$", "", m_nxt_h.group(1).strip()
+                        ).strip()
+                        if nxt_t and len(nxt_t.split()) <= 14:
+                            r_lbl_s = rubric_canon[m_std_rub.group(1).lower()]
+                            std_out_lines.append(f"### {r_lbl_s}: {nxt_t}")
+                            s_ri = nxt_sri + 1
+                            continue
+            std_out_lines.append(sr_ln)
+            s_ri += 1
+        text = "\n".join(std_out_lines)
+        return re.sub(r"[ \t]*\[[123]\s*Punkte?\]", "", text, flags=re.IGNORECASE)
 
+    profile = _parse_buchkonferenz_profile(custom_rules)
+    text, toc_u1_norms = _inject_toc_u1_chapters(
+        text, directory_info, inject_missing=profile.adopt_toc_u1
+    )
     fig_pfx, explicit_bk = _resolve_figure_caption_prefix(custom_rules, ruleset_key)
 
     # 0. Format Steckbrief / biography callout boxes and deduplicate composite 'Foto mit Text' portrait summaries
@@ -2610,6 +3091,77 @@ def _apply_buchkonferenz_rules(
         flags=re.IGNORECASE,
     )
 
+    # 2. Normalize Ü3 Rubric Prefixes ('Methode:', 'Basiskonzept:', 'Exkurs:', 'Material mit Aufgaben')
+    r_lines = text.splitlines()
+    out_r_lines: list[str] = []
+    in_r_block = False
+    ri = 0
+    while ri < len(r_lines):
+        r_ln = r_lines[ri]
+        rs = r_ln.strip()
+        if in_r_block:
+            if re.search(r"</(?:Bild|Tabelle|Rahmen|Anmerkung)>", rs, re.IGNORECASE):
+                in_r_block = False
+            out_r_lines.append(r_ln)
+            ri += 1
+            continue
+        if re.match(r"^<(?:Bild|Tabelle|Rahmen|Anmerkung)\b", rs, re.IGNORECASE):
+            if not re.search(r"</(?:Bild|Tabelle|Rahmen|Anmerkung)>", rs, re.IGNORECASE):
+                in_r_block = True
+            out_r_lines.append(r_ln)
+            ri += 1
+            continue
+
+        if re.match(
+            r"^(?:#{1,6}\s+)?(?:\*\*|_)?material\s+mit\s*aufgaben:?(?:\*\*|_)?\s*$",
+            rs,
+            re.IGNORECASE,
+        ):
+            out_r_lines.append("### Material mit Aufgaben")
+            ri += 1
+            continue
+
+        m_rub_1 = re.match(
+            r"^(?:#{1,6}\s+)?(?:\*\*|_)?(methode|basiskonzepte?|exkurs|praktikum|streifzug)(?:\*\*|_)?(?:\s*[:•·\-–]\s*|\s+)([^\n]+)$",
+            rs,
+            re.IGNORECASE,
+        )
+        if m_rub_1:
+            r_lbl = rubric_canon[m_rub_1.group(1).lower()]
+            r_tit = re.sub(r"^(?:\*\*|_)+|(?:\*\*|_)+$", "", m_rub_1.group(2).strip()).strip()
+            if r_tit and len(r_tit.split()) <= 16 and not r_tit.endswith("."):
+                out_r_lines.append(f"### {r_lbl}: {r_tit}")
+                ri += 1
+                continue
+
+        m_rub_2 = re.match(
+            r"^(?:#{1,6}\s+)?(?:\*\*|_)?(methode|basiskonzepte?|exkurs|praktikum|streifzug):?(?:\*\*|_)?\s*$",
+            rs,
+            re.IGNORECASE,
+        )
+        if m_rub_2:
+            nxt_ri = ri + 1
+            while nxt_ri < len(r_lines) and not r_lines[nxt_ri].strip():
+                nxt_ri += 1
+            if nxt_ri < len(r_lines):
+                nxt_rs = r_lines[nxt_ri].strip()
+                nxt_clean = re.sub(r"^#{1,6}\s+", "", nxt_rs).strip()
+                nxt_clean = re.sub(r"^(?:\*\*|_)+|(?:\*\*|_)+$", "", nxt_clean).strip()
+                if (
+                    nxt_clean
+                    and not nxt_rs.startswith(("((", "<", "-\t", "|"))
+                    and len(nxt_clean.split()) <= 14
+                    and not (nxt_clean.endswith(".") and len(nxt_clean.split()) >= 6)
+                ):
+                    r_lbl = rubric_canon[m_rub_2.group(1).lower()]
+                    out_r_lines.append(f"### {r_lbl}: {nxt_clean}")
+                    ri = nxt_ri + 1
+                    continue
+
+        out_r_lines.append(r_ln)
+        ri += 1
+    text = "\n".join(out_r_lines)
+
     caption_h4 = bool(fig_pfx) or bool(
         re.search(
             r"Überschrift\s*4[^\n]*Abbildungsunterschriften|Abbildungsunterschriften[^\n]*Überschrift\s*4",
@@ -2618,11 +3170,10 @@ def _apply_buchkonferenz_rules(
         )
     )
 
-    # 3. Task Formatting: ##### Aufgaben + ##### <Nr> + Paragraph (4a)
-    tasks_h5 = bool(
-        re.search(r"Überschrift\s*5[\s\S]{0,120}Aufgaben", custom_rules, re.IGNORECASE)
-    )
-    if tasks_h5:
+    # 3. Task Formatting: ##### Aufgaben + ##### <Nr> (or numbers-only ##### <Nr>) + Paragraph
+    tasks_h5_any = profile.tasks_h5 or profile.tasks_h5_numbers_only
+    emit_aufgaben_hdr = profile.tasks_h5 and not profile.tasks_h5_numbers_only
+    if tasks_h5_any:
         t_lines = text.splitlines()
         out_t_lines: list[str] = []
         in_bild = False
@@ -2669,7 +3220,7 @@ def _apply_buchkonferenz_rules(
                         body_cand
                         and not body_cand.startswith(("#", "<", "(("))
                         and not _TASK_OPERATOR_VERB_RE.match(body_cand)
-                        and not body_cand.endswith("?")
+                        and not _is_question_or_lead_in_prose(body_cand)
                         and not re.search(r"\bSie\b", body_cand)
                     ):
                         cap_parts = [body_cand]
@@ -2705,7 +3256,7 @@ def _apply_buchkonferenz_rules(
                 if (
                     (cur_t_page, c_num_p) in bare_fig_line_by_page_num
                     and not _TASK_OPERATOR_VERB_RE.match(body_p)
-                    and not body_p.endswith("?")
+                    and not _is_question_or_lead_in_prose(body_p)
                     and not re.search(r"\bSie\b", body_p)
                 ):
                     target_bf_idx = bare_fig_line_by_page_num[(cur_t_page, c_num_p)]
@@ -2760,18 +3311,19 @@ def _apply_buchkonferenz_rules(
                 s,
                 re.IGNORECASE,
             ):
-                out_t_lines.append("##### Aufgaben")
+                if emit_aufgaben_hdr:
+                    out_t_lines.append("##### Aufgaben")
                 in_aufgaben = True
                 continue
 
             # Inline or standalone "Aufgaben: A1 ..." / "#### Aufgaben: A1"
             m_inline_aufg = re.match(
-                r"^(?:#{1,6}\s+)?(?:\*\*|_)?Aufgaben:?(?:\*\*|_)?\s+([A-LN-Z]?\d+)[.:]?(?:\s+(.+))?$",
+                r"^(?:#{1,6}\s+)?(?:\*\*|_)?Aufgaben:?(?:\*\*|_)?\s+([A-LN-Z]?\d+(?:\.\d+)*)[.:]?(?:\s+(.+))?$",
                 s,
                 re.IGNORECASE,
             )
             if m_inline_aufg:
-                if not in_aufgaben:
+                if emit_aufgaben_hdr and not in_aufgaben:
                     out_t_lines.append("##### Aufgaben")
                     out_t_lines.append("")
                 out_t_lines.append(f"##### {m_inline_aufg.group(1)}")
@@ -2783,7 +3335,7 @@ def _apply_buchkonferenz_rules(
 
             # Standalone "##### <Nr>", "### Aufgabe 1:", or "#### A1" sub-task heading
             m_h5_only = re.match(
-                r"^(#{1,6})\s+(?:(?:\*\*|_)?(Aufgaben?)\s+)?([A-LN-Z]?\d+)[.:]?\s*$",
+                r"^(#{1,6})\s+(?:(?:\*\*|_)?(Aufgaben?)\s+)?([A-LN-Z]?\d+(?:\.\d+)*)[.:]?\s*$",
                 s,
                 re.IGNORECASE,
             )
@@ -2808,23 +3360,24 @@ def _apply_buchkonferenz_rules(
                     )
                 )
                 if len(h_only_hashes) == 5 or h_only_kw or is_alpha_subtask:
-                    if not in_aufgaben:
+                    if emit_aufgaben_hdr and not in_aufgaben:
                         out_t_lines.append("##### Aufgaben")
                         out_t_lines.append("")
-                        in_aufgaben = True
+                    in_aufgaben = True
                     out_t_lines.append(f"##### {h_only_num}")
                     continue
 
             # Heading with task number + sentence: ### 1 Erklären Sie... or #### A1 Erläutern Sie... or ### Aufgabe 1: ...
             m_h_task = re.match(
-                r"^(#{1,6})\s+(?:(?:\*\*|_)?Aufgabe\s+)?([A-LN-Z]?\d+)(?:\s*\[[^\]]+\])?[.:]?\s+([A-ZÄÖÜ].+)$",
+                r"^(#{1,6})\s+(?:(?:\*\*|_)?Aufgabe\s+)?([A-LN-Z]?\d+(?:\.\d+)?)([ \t]*\[[^\]]+\])?[.:]?\s+([A-ZÄÖÜ].+)$",
                 s,
             )
             if m_h_task:
-                hashes_t, t_num, t_body = (
+                hashes_t, t_num, t_inline_ind, t_body = (
                     m_h_task.group(1),
                     m_h_task.group(2),
-                    m_h_task.group(3).strip(),
+                    (m_h_task.group(3) or "").strip(),
+                    m_h_task.group(4).strip(),
                 )
                 is_task_h = (
                     "aufgabe" in s.lower()
@@ -2834,13 +3387,13 @@ def _apply_buchkonferenz_rules(
                     or t_body.endswith("?")
                 )
                 if is_task_h:
-                    if not in_aufgaben:
+                    if emit_aufgaben_hdr and not in_aufgaben:
                         out_t_lines.append("##### Aufgaben")
                         out_t_lines.append("")
-                        in_aufgaben = True
+                    in_aufgaben = True
                     out_t_lines.append(f"##### {t_num}")
                     out_t_lines.append("")
-                    out_t_lines.append(t_body)
+                    out_t_lines.append(f"{t_body} {t_inline_ind}".strip() if t_inline_ind else t_body)
                     continue
 
             # Reset in_aufgaben on non-task H1..H4 headings
@@ -2861,15 +3414,16 @@ def _apply_buchkonferenz_rules(
                     bool(_TASK_OPERATOR_VERB_RE.match(t_body))
                     or t_body.endswith("?")
                     or bool(re.search(r"^[A-ZÄÖÜ][a-zäöüß]+en\s+Sie\b", t_body))
+                    or bool(fc.POINT_DIFFICULTY_TAG_RE.search(t_body))
                 )
                 if is_explicit_op_or_q or (
                     in_aufgaben
                     and bool(re.match(r"^[A-LN-Z]\d+$", t_num))
                 ):
-                    if not in_aufgaben:
+                    if emit_aufgaben_hdr and not in_aufgaben:
                         out_t_lines.append("##### Aufgaben")
                         out_t_lines.append("")
-                        in_aufgaben = True
+                    in_aufgaben = True
                     out_t_lines.append(f"##### {t_num}")
                     out_t_lines.append("")
                     out_t_lines.append(t_body)
@@ -2879,22 +3433,75 @@ def _apply_buchkonferenz_rules(
 
         text = "\n".join(out_t_lines)
 
+    # 3b. Map [1 Punkt]..[3 Punkte] to Buchkonferenz labels right beneath ##### <Nr>, or strip if unmapped
+    if profile.point_difficulty_map:
+        mapped_labels_set = set(profile.point_difficulty_map.values())
+        pt_lines = text.splitlines()
+        pt_i = 0
+        while pt_i < len(pt_lines):
+            m_th5 = re.match(
+                r"^(#####\s+[A-LN-Z]?\d+(?:\.\d+)*[a-z]?|###\s+Aufgabe\s+\d+:?[^\n]*?)(?:[ \t]+(\[[^\]]+\]))?\s*$",
+                pt_lines[pt_i].strip(),
+                re.IGNORECASE,
+            )
+            if not m_th5:
+                pt_i += 1
+                continue
+
+            base_h5 = m_th5.group(1).strip()
+            inline_br = (m_th5.group(2) or "").strip()
+            resolved_lbl = ""
+            if inline_br:
+                m_in_pt = fc.POINT_DIFFICULTY_TAG_RE.fullmatch(inline_br)
+                if m_in_pt:
+                    resolved_lbl = profile.point_difficulty_map.get(int(m_in_pt.group(1)), "")
+                elif inline_br in mapped_labels_set:
+                    resolved_lbl = inline_br
+
+            scan_end = pt_i + 1
+            while scan_end < len(pt_lines):
+                st_se = pt_lines[scan_end].strip()
+                if st_se.startswith(("#", "((")) or re.match(
+                    r"^<(?:Bild|Tabelle|Rahmen|Anmerkung)\b", st_se, re.IGNORECASE
+                ):
+                    break
+                scan_end += 1
+
+            for blk_j in range(pt_i + 1, scan_end):
+                st_bj = pt_lines[blk_j].strip()
+                if not st_bj:
+                    continue
+                if st_bj in mapped_labels_set and blk_j <= pt_i + 2:
+                    resolved_lbl = resolved_lbl or st_bj
+                    pt_lines[blk_j] = ""
+                    continue
+                m_pt_hit = fc.POINT_DIFFICULTY_TAG_RE.search(pt_lines[blk_j])
+                if m_pt_hit:
+                    pt_val = int(m_pt_hit.group(1))
+                    resolved_lbl = resolved_lbl or profile.point_difficulty_map.get(pt_val, "")
+                    cleaned_bj = fc.POINT_DIFFICULTY_TAG_RE.sub("", pt_lines[blk_j])
+                    cleaned_bj = re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned_bj)
+                    cleaned_bj = re.sub(r"[ \t]{2,}", " ", cleaned_bj).rstrip()
+                    pt_lines[blk_j] = cleaned_bj
+
+            if resolved_lbl:
+                pt_lines[pt_i] = base_h5
+                pt_lines.insert(pt_i + 1, resolved_lbl)
+                pt_i += 2
+            else:
+                pt_i = scan_end
+
+        text = re.sub(r"\n{3,}", "\n\n", "\n".join(pt_lines))
+        text = re.sub(r"[ \t]*\[[123]\s*Punkte?\]", "", text, flags=re.IGNORECASE)
+    else:
+        text = re.sub(r"[ \t]*\[[123]\s*Punkte?\]", "", text, flags=re.IGNORECASE)
+
     # 4. Heading Hierarchy Normalization (H2..H5) when custom_rules is active (1c)
-    has_buchkonferenz_hierarchy = bool(
-        re.search(
-            r"Überschrift\s*1\s*:\s*Hauptthema|Überschrift\s*3\s*:[^\n]*(?:Material|IM\s+BLICKPUNKT)|Überschrift\s*4\s*:[^\n]*Kapitelinterne",
-            custom_rules,
+    if profile.has_hierarchy:
+        u3_rubric_re = re.compile(
+            r"^(?:Methode|Basiskonzept|Exkurs|Material(?:\s+mit\s+Aufgaben|ien)?|IM\s+BLICKPUNKT|ÜBERBLICK)\b",
             re.IGNORECASE,
         )
-    )
-    material_h3_section = bool(
-        re.search(
-            r"Material\s+Ü3|Überschrift\s*3\s*:[\s\S]{0,120}\bMaterial\b",
-            custom_rules,
-            re.IGNORECASE,
-        )
-    )
-    if has_buchkonferenz_hierarchy:
         # Detect pages that contain figure M1 ('#### M1 ...') and pages that already have '###'
         pages_with_m1: set[str] = set()
         pages_with_h3: set[str] = set()
@@ -2969,7 +3576,7 @@ def _apply_buchkonferenz_rules(
                 s,
             )
             if m_mat_sub:
-                if material_h3_section and not seen_mat_h3_on_page and re.match(r"^Material\s+A\b", m_mat_sub.group(1).strip()):
+                if profile.material_h3_section and not seen_mat_h3_on_page and re.match(r"^Material\s+A\b", m_mat_sub.group(1).strip()):
                     out_h_lines.append("### Material")
                     out_h_lines.append("")
                     seen_mat_h3_on_page = True
@@ -2979,12 +3586,18 @@ def _apply_buchkonferenz_rules(
                 continue
 
             m_special_h3 = re.match(
-                r"^(?:#{1,6}\s+)?(?:\*\*|_)?(IM\s+BLICKPUNKT\b[^\n]*|Material(?:ien)?|ÜBERBLICK\b[^\n]*)(?:\*\*|_)?$",
+                r"^(?:#{1,6}\s+)?(?:\*\*|_)?(IM\s+BLICKPUNKT\b[^\n]*|Material(?:\s+mit\s*Aufgaben|ien)?|ÜBERBLICK\b[^\n]*)(?:\*\*|_)?$",
                 s,
                 re.IGNORECASE,
             )
             if m_special_h3:
                 sp_title = m_special_h3.group(1).strip()
+                sp_title = re.sub(
+                    r"^material\s+mit\s*aufgaben$",
+                    "Material mit Aufgaben",
+                    sp_title,
+                    flags=re.IGNORECASE,
+                )
                 sp_title = re.sub(
                     r"^im\s+blickpunkt\b",
                     "IM BLICKPUNKT",
@@ -3002,16 +3615,34 @@ def _apply_buchkonferenz_rules(
                 after_m1_caption = False
                 continue
 
+            # Preserve TOC Ü1 and explicit Kapitel/Chapter headings before numbered-caption check
+            m_pre_u1 = re.match(r"^(#{1,4})\s+(.+)$", s)
+            if m_pre_u1:
+                pre_title = m_pre_u1.group(2).strip()
+                pre_norm = re.sub(r"\W+", " ", pre_title).strip().lower()
+                if pre_norm in toc_u1_norms or re.match(
+                    r"^(?:Kapitel|Chapter|Teil|Part)\s+\d+", pre_title, re.IGNORECASE
+                ):
+                    out_h_lines.append(f"# {pre_title}")
+                    seen_chapter_or_h3 = True
+                    after_m1_caption = False
+                    continue
+
             # Numbered figure/table caption heading: e.g. "## 3 Ionenkonzentrationen..." -> "#### M3 ..."
             if caption_h4:
                 m_num_cap = re.match(
                     r"^#{1,4}\s+(?:[MBQ]\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n]{3,600})$",
                     s,
                 )
-                if m_num_cap and not _TASK_OPERATOR_VERB_RE.match(m_num_cap.group(2).strip()):
+                c_body_cand = m_num_cap.group(2).strip() if m_num_cap else ""
+                if (
+                    m_num_cap
+                    and not _TASK_OPERATOR_VERB_RE.match(c_body_cand)
+                    and not _is_question_or_lead_in_prose(c_body_cand)
+                    and not re.search(r"\bSie\b", c_body_cand)
+                ):
                     c_num = m_num_cap.group(1)
-                    c_body = m_num_cap.group(2).strip()
-                    out_h_lines.append(_split_long_caption_body(f"{fig_pfx}{c_num}", c_body))
+                    out_h_lines.append(_split_long_caption_body(f"{fig_pfx}{c_num}", c_body_cand))
                     if c_num == "1":
                         after_m1_caption = True
                     continue
@@ -3021,9 +3652,21 @@ def _apply_buchkonferenz_rules(
                 h_lvl = len(m_any_h.group(1))
                 h_title = m_any_h.group(2).strip()
                 if h_lvl == 3:
-                    seen_chapter_or_h3 = True
+                    if profile.text_subheadings_h4 and not u3_rubric_re.match(h_title) and not re.match(r"^\d+\.\d+\.\d+\b", h_title):
+                        out_h_lines.append(f"#### {h_title}")
+                    else:
+                        out_h_lines.append(ln)
+                        seen_chapter_or_h3 = True
                     after_m1_caption = False
-                elif h_lvl == 4 and after_m1_caption and cur_pg_h in pages_with_m1 and cur_pg_h not in pages_with_h3 and not seen_mat_h3_on_page:
+                    continue
+                if (
+                    h_lvl == 4
+                    and not profile.text_subheadings_h4
+                    and after_m1_caption
+                    and cur_pg_h in pages_with_m1
+                    and cur_pg_h not in pages_with_h3
+                    and not seen_mat_h3_on_page
+                ):
                     if not re.match(
                         rf"^(?:{re.escape(fig_pfx)}?\d|Abb(?:ildung)?\b|Bild\b|Grafik\b|Material\b|Aufgaben?\b|Worterklärung|Randspalte|{re.escape(fig_pfx)}\s+Steckbrief|Steckbrief)",
                         h_title,
@@ -3035,10 +3678,19 @@ def _apply_buchkonferenz_rules(
                         seen_chapter_or_h3 = True
                         after_m1_caption = False
                         continue
-                elif h_lvl in (1, 2):
+                if h_lvl in (1, 2):
                     if re.match(r"^\d+\.\d+\b", h_title):
                         out_h_lines.append(f"## {h_title}")
                         seen_chapter_or_h3 = True
+                        after_m1_caption = False
+                        continue
+                    if u3_rubric_re.match(h_title):
+                        out_h_lines.append(f"### {h_title}")
+                        seen_chapter_or_h3 = True
+                        after_m1_caption = False
+                        continue
+                    if profile.text_subheadings_h4:
+                        out_h_lines.append(f"#### {h_title}")
                         after_m1_caption = False
                         continue
                     target_hashes = (
@@ -3066,6 +3718,45 @@ def _apply_buchkonferenz_rules(
             r"\1\3\n\n\2",
             text,
         )
+
+    # 4b. Strip italic/underscore emphasis on introductory paragraph right after '## X.Y' or '### Rubric:'
+    if profile.plain_italic_intro:
+        intro_hdr_re = re.compile(
+            r"^(?:##\s+\d+\.\d+\b|###\s+(?:Methode|Basiskonzept|Exkurs):)",
+            re.IGNORECASE,
+        )
+        emph_under_re = re.compile(
+            r"(?<![A-Za-z0-9\\])_(?!\.\.\._)((?:(?!(?<=[A-Za-zÄÖÜäöüß0-9.,;:!?\"')\]])_(?![A-Za-z0-9\{]))[^\n])+?)"
+            r"(?<=[A-Za-zÄÖÜäöüß0-9.,;:!?\"')\]])_(?![A-Za-z0-9\{])"
+        )
+        emph_star_re = re.compile(r"(?<!\*)\*([^\*\n]+?)\*(?!\*)")
+        para_parts = re.split(r"(\n{2,})", text)
+        for p_idx in range(0, len(para_parts) - 2, 2):
+            hdr_cand = para_parts[p_idx].strip()
+            if not intro_hdr_re.match(hdr_cand):
+                continue
+            nxt_k = p_idx + 2
+            while nxt_k < len(para_parts):
+                p_body = para_parts[nxt_k].strip()
+                if not p_body:
+                    nxt_k += 2
+                    continue
+                if p_body.startswith("#### ") or p_body.startswith("<Bild"):
+                    nxt_k += 2
+                    continue
+                if not p_body.startswith(("#", "<", "((", "-\t", "|")):
+                    u_spans = [m.group(1) for m in emph_under_re.finditer(p_body)]
+                    s_spans = [m.group(1) for m in emph_star_re.finditer(p_body)]
+                    all_spans = u_spans + s_spans
+                    emph_chars = sum(len(sp) for sp in all_spans)
+                    max_span_words = max((len(sp.split()) for sp in all_spans), default=0)
+                    alpha_len = max(1, sum(1 for ch in p_body if ch.isalpha()))
+                    if max_span_words >= 4 or (emph_chars / alpha_len) >= 0.50:
+                        unwrapped_p = emph_under_re.sub(r"\1", para_parts[nxt_k])
+                        unwrapped_p = emph_star_re.sub(r"\1", unwrapped_p)
+                        para_parts[nxt_k] = unwrapped_p
+                break
+        text = "".join(para_parts)
 
     # 5. Formula & Ion Notation Refinements when custom_rules is active (5b)
     def _unwrap_simple_chem_ion(m: re.Match[str]) -> str:
@@ -3111,6 +3802,24 @@ def _apply_buchkonferenz_rules(
             text = f"<Anmerkung>\n{anm_body}\n</Anmerkung>\n\n{text.lstrip()}"
         break
 
+    if custom_rules and re.search(
+        r"Strukturformeln?\s+werden\s+nicht\s+übertragen",
+        custom_rules,
+        re.IGNORECASE,
+    ):
+        text = re.sub(
+            r"<Bild>\s*Strukturformel(?:n)?\s*:(?:(?!</Bild>)[\s\S])*?</Bild>",
+            "<Bild> Strukturformel:\nnicht übertragen\n</Bild>",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"(?m)^(#{3,5}\s+[MBQ]?\d+[a-z]?\s+Strukturformeln?\b[^\n]*\n+)<Bild>\s*([^:\n<]+):(?:(?!</Bild>)[\s\S])*?</Bild>",
+            r"\1<Bild> Strukturformel:\nnicht übertragen\n</Bild>",
+            text,
+            flags=re.IGNORECASE,
+        )
+
     return text
 
 
@@ -3141,13 +3850,18 @@ def post_process_structure(
     if not markdown_content:
         return markdown_content
 
-    from backend.services.extraction_postprocess import clean_vlm_repetition_loops
+    from backend.services.extraction_postprocess import (
+        clean_vlm_repetition_loops,
+        normalize_split_decimal_headings,
+    )
 
     markdown_content, _ = clean_vlm_repetition_loops(markdown_content)
     markdown_content = normalize_heading_page_markers(markdown_content)
+    markdown_content = normalize_split_decimal_headings(markdown_content)
     if raw_markdown:
         raw_markdown, _ = clean_vlm_repetition_loops(raw_markdown)
         raw_markdown = normalize_heading_page_markers(raw_markdown)
+        raw_markdown = normalize_split_decimal_headings(raw_markdown)
 
     hyphen_pattern = (
         r"(\w+)-[ \t]*\n+(?:(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)[ \t]*\n+)?"
@@ -3361,7 +4075,12 @@ def post_process_structure(
     )
 
     processed = normalize_bild_tags(processed)
-    processed = _apply_buchkonferenz_rules(processed, custom_rules, ruleset_key=ruleset_key)
+    processed = _apply_buchkonferenz_rules(
+        processed,
+        custom_rules,
+        ruleset_key=ruleset_key,
+        directory_info=directory_info,
+    )
     processed = _apply_linked_worterklaerungen_and_randspalten(processed, custom_rules=custom_rules)
 
     if raw_markdown:
@@ -3402,8 +4121,87 @@ def post_process_structure(
             from backend.services.directory_service import apply_directory_page_numbers
 
             processed = apply_directory_page_numbers(processed, directory_info=directory_info)
+            if custom_rules and _parse_buchkonferenz_profile(custom_rules).adopt_toc_u1:
+                processed, _ = _inject_toc_u1_chapters(
+                    processed, directory_info, inject_missing=True
+                )
         except Exception as e:
             logger.debug(f"Could not apply directory page numbers in post_process_structure: {e}")
+
+    # Deduplicate consecutive identical headings and duplicate 'Material mit Aufgaben' / decimal section headings on the same page
+    dedup_pages = split_markdown_pages(processed)
+    dedup_changed = False
+    for d_seg in dedup_pages:
+        d_lines = d_seg.text.splitlines()
+        out_d_lines: list[str] = []
+        in_d_tag = False
+        prev_h_out_idx: int | None = None
+        prev_h_key = ""
+        prev_h_lvl = 0
+        seen_page_sec_keys: dict[str, tuple[int, int]] = {}
+        for d_ln in d_lines:
+            ds = d_ln.strip()
+            if in_d_tag:
+                if re.search(r"</(?:Bild|Tabelle|Rahmen|Anmerkung|Lückentext)>", ds, re.IGNORECASE):
+                    in_d_tag = False
+                out_d_lines.append(d_ln)
+                continue
+            if re.match(r"^<(?:Bild|Tabelle|Rahmen|Anmerkung|Lückentext)\b", ds, re.IGNORECASE):
+                if not re.search(
+                    r"</(?:Bild|Tabelle|Rahmen|Anmerkung|Lückentext)>", ds, re.IGNORECASE
+                ):
+                    in_d_tag = True
+                prev_h_out_idx = None
+                out_d_lines.append(d_ln)
+                continue
+            if not ds or ds == "---" or re.match(
+                r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?$",
+                ds,
+            ):
+                out_d_lines.append(d_ln)
+                continue
+            m_dh = re.match(r"^(#{1,4})\s+(.+)$", ds)
+            if m_dh:
+                dh_hashes, dh_title = m_dh.group(1), m_dh.group(2).strip()
+                dh_lvl = len(dh_hashes)
+                dh_toks = re.findall(r"[a-zäöüß0-9]+", dh_title.lower())
+                dh_key = " ".join(dh_toks)
+                is_dec_sec = bool(
+                    re.match(r"^[1-9]\d?\.[1-9]\d?\b", dh_title) and len(dh_toks) >= 3
+                )
+                if (
+                    prev_h_out_idx is not None
+                    and dh_key
+                    and len(dh_toks) >= 2
+                    and dh_key == prev_h_key
+                ):
+                    if dh_lvl < prev_h_lvl:
+                        out_d_lines[prev_h_out_idx] = d_ln
+                        prev_h_lvl = dh_lvl
+                    dedup_changed = True
+                    continue
+                if (dh_key == "material mit aufgaben" or is_dec_sec) and dh_key in seen_page_sec_keys:
+                    first_idx_s, first_lvl_s = seen_page_sec_keys[dh_key]
+                    if dh_lvl < first_lvl_s:
+                        out_d_lines[first_idx_s] = d_ln
+                        seen_page_sec_keys[dh_key] = (first_idx_s, dh_lvl)
+                    dedup_changed = True
+                    continue
+                cur_out_idx = len(out_d_lines)
+                out_d_lines.append(d_ln)
+                prev_h_out_idx = cur_out_idx
+                prev_h_key = dh_key
+                prev_h_lvl = dh_lvl
+                if dh_key == "material mit aufgaben" or is_dec_sec:
+                    seen_page_sec_keys[dh_key] = (cur_out_idx, dh_lvl)
+                continue
+            prev_h_out_idx = None
+            out_d_lines.append(d_ln)
+        if dedup_changed:
+            trail_nl = "\n\n" if d_seg.text.endswith("\n\n") else ("\n" if d_seg.text.endswith("\n") else "")
+            d_seg.text = re.sub(r"\n{3,}", "\n\n", "\n".join(out_d_lines).rstrip("\n")) + trail_nl
+    if dedup_changed:
+        processed = "".join(s.text for s in dedup_pages)
 
     processed = restore_false_positive_trailing_asterisks(processed, raw_markdown)
     processed = deduplicate_page_numbers(processed)

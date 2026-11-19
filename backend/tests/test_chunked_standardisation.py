@@ -515,4 +515,217 @@ def test_external_neighbor_context_populates_outer_chunks_and_syncs_sidecar(monk
     assert (out_dir / "task-nb-1" / "neighbor_context.json").exists()
 
 
+def test_compact_bild_ref_placeholders_deduplication_and_zero_loss_fallback(monkeypatch):
+    """Verifies 18a Part 1: <Bild-Ref> substitution, FIBS pre-cleaning, deduplication, and zero-loss fallback."""
+    import asyncio
+
+    from backend.services.llm_service import (
+        replace_bild_blocks_with_placeholders,
+        restore_bild_placeholders,
+        standardise_markdown_async,
+    )
+
+    raw_md = (
+        "((10))\n\n"
+        "## 2.1 Grundlagen der Signalübertragung\n\n"
+        "Einleitender Fließtext auf Seite 10.\n\n"
+        "#### M1 Messaufbau der Versuchsanordnung\n\n"
+        "<Bild> Strukturdiagramm:<|image|>\n"
+        "Beschreibung mit Bildtext: Quelle $\\alpha = 30^\\circ$ bei 50% Leistung in H₂O "
+        "mit langem erklärendem Beschreibungstext zur Bauteilgeometrie und Messkette.\n"
+        "</Bild>\n\n"
+        "#### M2 Zeitverlauf der Messgröße\n\n"
+        "<Bild> Diagramm:<image|>\n"
+        "Beschreibung: Kurvenverlauf über 120 ms mit linearem Anstieg bis zum Plateauwert.\n"
+        "</Bild>\n\n"
+        "((11))\n\n"
+        "## 2.2 Auswertung der Messreihen\n\n"
+        "Weiterer Fließtext auf Seite 11.\n\n"
+        "<Bild> Foto:\n"
+        "Beschreibung: Ansicht eines digitalen Oszilloskops im Laborbetrieb.\n"
+        "</Bild>\n\n"
+        "<Bild> Grafik:\n"
+        "Beschreibung: Dekorativ – nicht übertragen.\n"
+        "</Bild>\n\n"
+        "##### Aufgaben\n\n"
+        "##### 1\n\n"
+        "Beschreiben Sie den Messaufbau.\n"
+    )
+
+    placeholder_md, bild_map, page_bild_ids = replace_bild_blocks_with_placeholders(
+        raw_md, fibs_mode=True
+    )
+
+    assert set(bild_map.keys()) == {"BILD_001", "BILD_002", "BILD_003", "BILD_004"}
+    assert page_bild_ids == {"10": ["BILD_001", "BILD_002"], "11": ["BILD_003", "BILD_004"]}
+    assert "<Bild>" not in placeholder_md
+    assert '<Bild-Ref id="BILD_001" typ="Strukturdiagramm" hinweis="' in placeholder_md
+    assert len(placeholder_md) < len(raw_md)
+    # Pre-cleaned <Bild> block already has VLM tokens stripped and FIBS math/units applied
+    assert "<|image|>" not in bild_map["BILD_001"]
+    assert "~a = 30°" in bild_map["BILD_001"]
+    assert "50 %" in bild_map["BILD_001"]
+    assert "H_2O" in bild_map["BILD_001"]
+
+    # Simulate Gemma emitting duplicate BILD_001, tolerant '<Bild-Ref BILD_002 />',
+    # and omitting BILD_003 (non-decorative -> restored before task block) & BILD_004 (decorative -> omitted)
+    simulated_gemma_out = (
+        "((10))\n\n"
+        "## 2.1 Grundlagen der Signalübertragung\n\n"
+        "Einleitender Fließtext auf Seite 10.\n\n"
+        "#### M1 Messaufbau der Versuchsanordnung\n\n"
+        '<Bild-Ref id="BILD_001" />\n\n'
+        '<Bild-Ref id="BILD_001" />\n\n'
+        "#### M2 Zeitverlauf der Messgröße\n\n"
+        "<Bild-Ref BILD_002 />\n\n"
+        "((11))\n\n"
+        "## 2.2 Auswertung der Messreihen\n\n"
+        "Weiterer Fließtext auf Seite 11.\n\n"
+        "##### Aufgaben\n\n"
+        "##### 1\n\n"
+        "Beschreiben Sie den Messaufbau.\n"
+    )
+    restored = restore_bild_placeholders(simulated_gemma_out, bild_map, page_bild_ids)
+    assert "<Bild-Ref" not in restored
+    assert restored.count("Quelle ~a = 30°") == 1
+    assert "Kurvenverlauf über 120 ms" in restored
+    assert "Ansicht eines digitalen Oszilloskops" in restored
+    assert "Dekorativ" not in restored
+    assert restored.index("Ansicht eines digitalen Oszilloskops") < restored.index("##### Aufgaben")
+
+    # End-to-end sync + async standardisation verifies Gemma receives only <Bild-Ref> placeholders
+    client = RecordingClient()
+    monkeypatch.setattr(llm, "start_rapid_mlx", lambda: client)
+
+    async def _fake_async_client():
+        return client
+
+    monkeypatch.setattr(llm, "start_rapid_mlx_async", _fake_async_client)
+
+    sync_out = standardise_markdown(raw_md, table_max_cells=0)
+    sent_sync = client.calls[0]["messages"][1]["content"]
+    assert "<Bild-Ref id=\"BILD_001\"" in sent_sync
+    assert "<Bild>" not in sent_sync
+    assert "<Bild-Ref" not in sync_out
+    assert "<Bild> Strukturdiagramm:" in sync_out
+    assert "<Bild> Foto:" in sync_out
+
+    async_out = asyncio.run(standardise_markdown_async(raw_md, table_max_cells=0))
+    assert "<Bild-Ref" not in async_out
+    assert "<Bild> Strukturdiagramm:" in async_out
+
+
+def test_deduplicate_cross_page_echoes_strips_echoed_context_and_keeps_new_content(monkeypatch):
+    """Verifies 19a: cross-page context echoes after ((p+1)) are removed in direct, sync, and async paths."""
+    import asyncio
+    from backend.services.llm_service import (
+        deduplicate_cross_page_echoes,
+        standardise_markdown_async,
+    )
+
+    assembled = (
+        "((20))\n\n"
+        "## 2.1 Zelluläre Grundlagen\n\n"
+        "#### Rezeptorstruktur an Grenzflächen\n\n"
+        "Die Lipiddoppelschicht trennt das innere Milieu zuverlässig vom Außenraum ab. "
+        "Spezifische Transportproteine ermöglichen einen selektiven Stoffaustausch über die Grenzfläche.\n\n"
+        "Bei steigender Temperatur bewegen sich gelöste Teilchen schneller durch geöffnete\n\n"
+        "((21))\n\n"
+        "#### Rezeptorstruktur an Grenzflächen\n\n"
+        "Spezifische Transportproteine ermöglichen einen selektiven Stoffaustausch über die Grenzfläche.\n\n"
+        '<Bild-Ref id="BILD_001" />\n\n'
+        "Bei steigender Temperatur bewegen sich gelöste Teilchen schneller durch geöffnete "
+        "Poren in den Innenraum der Modellzelle ein. Dadurch verändert sich das messbare Konzentrationsgefälle.\n\n"
+        "Im anschließenden Kontrollversuch bleibt die Messkurve über zehn Minuten konstant.\n"
+    )
+    cleaned = deduplicate_cross_page_echoes(assembled)
+    segs = split_markdown_pages(cleaned)
+    assert [s.page for s in segs] == ["20", "21"]
+    p21 = segs[1].text
+    assert "#### Rezeptorstruktur an Grenzflächen" not in p21
+    assert "Spezifische Transportproteine ermöglichen" not in p21
+    assert '<Bild-Ref id="BILD_001" />' in p21
+    assert "durch geöffnete" not in p21
+    assert "Poren in den Innenraum der Modellzelle ein." in p21
+    assert "Im anschließenden Kontrollversuch bleibt die Messkurve" in p21
+
+    # End-to-end sync + async chunk assembly when chunk 2 echoes page 11 tail after ((12))
+    raw_3pages = _book(
+        {
+            10: "## 1.1 Energiefluss im Modellversuch\n\nErster Absatz auf Seite zehn mit Messdaten.",
+            11: (
+                "#### Versuchsaufbau A\n\n"
+                "Die thermische Leistung wird über einen isolierten Messfühler kontinuierlich im Wasserbad erfasst."
+            ),
+            12: "Aus den aufgezeichneten Messwerten ergibt sich ein linearer Temperaturanstieg.",
+        }
+    )
+
+    class _EchoingSecondChunkClient:
+        def __init__(self):
+            self.calls = 0
+            self.chat = type("Chat", (), {"completions": self})()
+
+        def create(self, **kwargs):
+            self.calls += 1
+            if self.calls % 2 == 1:
+                out = (
+                    "((10))\n\n## 1.1 Energiefluss im Modellversuch\n\n"
+                    "Erster Absatz auf Seite zehn mit Messdaten.\n\n"
+                    "((11))\n\n#### Versuchsaufbau A\n\n"
+                    "Die thermische Leistung wird über einen isolierten Messfühler kontinuierlich im Wasserbad erfasst."
+                )
+            else:
+                out = (
+                    "((12))\n\n#### Versuchsaufbau A\n\n"
+                    "Die thermische Leistung wird über einen isolierten Messfühler kontinuierlich im Wasserbad erfasst.\n\n"
+                    "Aus den aufgezeichneten Messwerten ergibt sich ein linearer Temperaturanstieg."
+                )
+            return [_Chunk(out)]
+
+    class _AsyncEchoingClient:
+        def __init__(self):
+            self.calls = 0
+            self.chat = type("Chat", (), {"completions": self})()
+
+        async def create(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                out = (
+                    "((10))\n\n## 1.1 Energiefluss im Modellversuch\n\n"
+                    "Erster Absatz auf Seite zehn mit Messdaten.\n\n"
+                    "((11))\n\n#### Versuchsaufbau A\n\n"
+                    "Die thermische Leistung wird über einen isolierten Messfühler kontinuierlich im Wasserbad erfasst."
+                )
+            else:
+                out = (
+                    "((12))\n\n#### Versuchsaufbau A\n\n"
+                    "Die thermische Leistung wird über einen isolierten Messfühler kontinuierlich im Wasserbad erfasst.\n\n"
+                    "Aus den aufgezeichneten Messwerten ergibt sich ein linearer Temperaturanstieg."
+                )
+
+            async def _gen():
+                yield _Chunk(out)
+
+            return _gen()
+
+    sync_client = _EchoingSecondChunkClient()
+    monkeypatch.setattr(llm, "start_rapid_mlx", lambda: sync_client)
+    sync_res = standardise_markdown(raw_3pages, table_max_cells=0)
+    assert sync_res.count("isolierten Messfühler kontinuierlich im Wasserbad") == 1
+    assert "linearer Temperaturanstieg" in sync_res
+
+    async_client = _AsyncEchoingClient()
+
+    async def _start_async():
+        return async_client
+
+    monkeypatch.setattr(llm, "start_rapid_mlx_async", _start_async)
+    async_res = asyncio.run(standardise_markdown_async(raw_3pages, table_max_cells=0))
+    assert async_res.count("isolierten Messfühler kontinuierlich im Wasserbad") == 1
+    assert "linearer Temperaturanstieg" in async_res
+
+
+
+
 
