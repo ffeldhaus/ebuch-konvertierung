@@ -248,3 +248,19 @@ class CharSuggestResponse(DomainModel):
     """Mapping from input character to suggested short LaTeX or German replacement."""
 
 
+class StageProgressBudget(DomainModel):
+    """Proportional percentage bounds allocated across extraction, VLM, and Gemma stages."""
+
+    extraction_end_percent: int = Field(ge=0, le=99)
+    """Inclusive percentage ceiling reached when Stage 1 extraction completes."""
+    vlm_start_percent: int = Field(ge=0, le=99)
+    """Starting percentage when Stage 2 VLM image description begins."""
+    vlm_end_percent: int = Field(ge=0, le=99)
+    """Inclusive percentage ceiling reached when Stage 2 VLM image description finishes."""
+    gemma_start_percent: int = Field(ge=0, le=99)
+    """Starting percentage when Stage 3 Gemma text standardisation begins."""
+    gemma_end_percent: int = Field(default=99, ge=0, le=99)
+    """Inclusive percentage ceiling reached before final DOCX export."""
+
+
+

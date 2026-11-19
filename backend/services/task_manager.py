@@ -56,7 +56,7 @@ class Task:
     pages: str | None = None
     method: str | None = None
     lang: str | None = None
-    engine: str | None = "infinity"
+    engine: str | None = "lightonocr"
     physical_start_page: int = 1
     page_labels: list[str] = field(default_factory=list)
     directory_info: dict | None = None
@@ -481,7 +481,7 @@ class TaskManager:
             pages=meta.get("pages"),
             method=meta.get("method"),
             lang=meta.get("lang"),
-            engine=meta.get("engine", "infinity"),
+            engine=meta.get("engine", "lightonocr"),
             page_count=meta.get("page_count", 0),
             physical_start_page=meta.get("physical_start_page", 1),
             page_labels=list(

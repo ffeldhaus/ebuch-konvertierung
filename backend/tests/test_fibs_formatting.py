@@ -127,7 +127,9 @@ def test_parse_vlm_description_unstructured_fallback():
 def test_vlm_prompt_contains_structural_rules():
     p = VLM_IMAGE_PROMPT
     assert "BILDART:" in p and "TEXT_IM_BILD:" in p and "DEKORATIV:" in p and "BESCHREIBUNG:" in p
-    assert "\\to" in p  # diagram arrows
+    assert "\\to" in p  # unlabeled diagram arrows
+    assert "\\xra{" in p  # labeled diagram arrows
+    assert "~a" in p and "~m" in p  # FIBS tilde Greek/micro notation
     assert "Aufzählung" in p  # avoid bullet lists
 
 
@@ -231,6 +233,51 @@ def test_normalize_versalien_skips_protected_spans():
     assert ff.normalize_versalien(md) == md
 
 
+def test_normalize_versalien_person_surnames_and_emphasis_without_doc_evidence():
+    """Verifies 4b: person surnames and multi-syllable emphasis words convert while acronyms stay."""
+    md = (
+        "## STECKBRIEF\n\n"
+        "### ÜBERBLICK\n\n"
+        "Christoph KOLUMBUS erreichte Amerika. Charles BEST und Frederick G. BANTING "
+        "behandelten Theodore RYDER. Sir Frederick BANTING und der Philosoph SOKRATES "
+        "werden genannt.\n\n"
+        "ACHTUNG: MERKE dir dieses MATERIAL.\n\n"
+        "Akronyme wie DNA, RNA, ATP, ADP, GTP, GDP, GABA, EPSP, IPSP, CAMP, UNESCO, "
+        "NATO, AIDS, LKW, PKW, ZNS, PNS, MRT, EEG, EKG, GHS, MMS, AFB, FIBS, JAWS, ISBN "
+        "und IUPAC bleiben unverändert."
+    )
+    out = ff.normalize_versalien(md)
+    assert out.splitlines()[0] == "## Steckbrief"
+    assert out.splitlines()[2] == "### Überblick"
+    assert "Christoph _Kolumbus_" in out
+    assert "Charles _Best_" in out
+    assert "Frederick G. _Banting_" in out
+    assert "Theodore _Ryder_" in out
+    assert "Sir Frederick _Banting_" in out
+    assert "Philosoph _Sokrates_" in out
+    assert "_Achtung_: _Merke_ dir dieses _Material_." in out
+    for acr in (
+        "DNA", "RNA", "ATP", "ADP", "GTP", "GDP", "GABA", "EPSP", "IPSP", "CAMP",
+        "UNESCO", "NATO", "AIDS", "LKW", "PKW", "ZNS", "PNS", "MRT", "EEG", "EKG",
+        "GHS", "MMS", "AFB", "FIBS", "JAWS", "ISBN", "IUPAC",
+    ):
+        assert acr in out and f"_{acr.capitalize()}_" not in out
+
+
+def test_normalize_fibs_units_and_percent_helper():
+    """Verifies 3b: deterministic °C, °, and % spacing while protecting code and URLs."""
+    src = (
+        "Temperatur 33°C bis -196 ° C und 451°F; Winkel 45 ° und 90°-Stellung.\n"
+        "Anteil 50% (aber 5%-Hürde und 100%ig) sowie `50%` und https://example.org/50%20test."
+    )
+    out = ff.normalize_fibs_units_and_percent(src)
+    assert "33 °C bis -196 °C und 451 °F" in out
+    assert "Winkel 45° und 90°-Stellung." in out
+    assert "Anteil 50 % (aber 5%-Hürde und 100%ig)" in out
+    assert "`50%`" in out
+    assert "https://example.org/50%20test" in out
+
+
 # ---------------------------------------------------------------------------
 # Pipeline integration
 # ---------------------------------------------------------------------------
@@ -268,6 +315,10 @@ def test_system_prompt_contains_new_fibs_rules():
     assert "Beschreibung mit Bildtext:" in prompt
     assert "dekorativ" in prompt.lower()
     assert "\\\\to" in prompt or "\\to" in prompt
+    assert "\\xra{" in prompt
+    assert "~a" in prompt and "~m" in prompt
+    assert "#### M" in prompt
+    assert "Verwende NIEMALS Überschriften (#, ##, ###) für Bildunterschriften" not in prompt
     assert "Versalien" in prompt
     assert "Unicode" in prompt
 
@@ -696,6 +747,23 @@ def test_trailing_asterisk_preservation_and_shared_golden_helpers():
     )
     assert OCR_RAW_GOLDEN_RULES in prompt
     assert "FIBS 09/2025" in prompt
+
+
+def test_person_surname_versalien_inside_bild_blocks():
+    """Verifies ALL-CAPS person surnames preceded by given names/titles convert inside <Bild>, while acronyms stay."""
+    md = (
+        "<Bild> Foto:\n"
+        "Beschreibung mit Bildtext: Die Physiker Isaac NEWTON und Marie CURIE neben einem DNA-Modell "
+        "und einer LED-Anzeige im SCHEMA A.\n"
+        "</Bild>"
+    )
+    res = ff.normalize_versalien(md)
+    assert "Isaac _Newton_" in res
+    assert "Marie _Curie_" in res
+    assert "DNA-Modell" in res
+    assert "LED-Anzeige" in res
+    assert "SCHEMA A" in res
+
 
 
 

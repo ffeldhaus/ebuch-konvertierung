@@ -39,8 +39,8 @@ _Useful Phrases: Expressing Opinions and Making Suggestions_
 
 <Rahmen>
 _Grammar Box: Conditional Sentences Type I and Type II_
--	Type I (real/likely): if + Simple Present → will-future (If we join on Saturday, we will help.)
--	Type II (unreal/hypothetical): if + Simple Past → would + infinitive (If more students had reusable bottles, there would be far less waste.)
+-	Type I (real/likely): if + Simple Present \to will-future (If we join on Saturday, we will help.)
+-	Type II (unreal/hypothetical): if + Simple Past \to would + infinitive (If more students had reusable bottles, there would be far less waste.)
 -	Watch out: Never use 'will' or 'would' inside the if-clause itself!
 </Rahmen>
 
@@ -77,7 +77,7 @@ Deine Klasse plant eine Umwelt-Projektwoche und hat den Artikel aus dem St Ives 
 <Rahmen>
 _Study Skills: Working with an English-German Dictionary & IPA Phonetics_
 -	_1. Word class abbreviations:_ Always check whether a headword is a noun (n.), verb (v.), or adjective (adj.). Many English words like 'volunteer' can be used both as a noun and a verb.
--	_2. Word stress in IPA:_ The vertical mark [ˈ] in phonetic transcription always stands directly before the main stressed syllable (e.g. [/səˈsteɪnəbl/] -> stress on '-stain-').
+-	_2. Word stress in IPA:_ The vertical mark [ˈ] in phonetic transcription always stands directly before the main stressed syllable (e.g. [/səˈsteɪnəbl/] \to stress on '-stain-').
 -	_3. British vs. American English:_ Note British spelling '-our' in 'harbour' (AE: 'harbor') and the optional final r-sound [ə(r)] in British Received Pronunciation.
 -	_Tip for Mediation:_ Never translate sentence by sentence—summarise the key facts in your own words!
 </Rahmen>

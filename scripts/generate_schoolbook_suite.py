@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Deterministic Generator for the German Schoolbook Benchmark & Test Suite.
+"""Deterministic Generator for the German Schoolbook Benchmark & Test Suite.
 
 Generates 12 realistic, single-subject, single-language German & English schoolbook PDFs across
 Grundschule, Sekundarstufe I, and Sekundarstufe II in 4 authentic book geometries
@@ -29,10 +28,10 @@ import math
 import os
 import random
 import urllib.request
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
@@ -53,7 +52,7 @@ PAGE_W, PAGE_H = A4  # 595.27559 x 841.88976 pt
 # Font Registration (DejaVu TrueType with full Unicode / IPA / Math coverage)
 # ---------------------------------------------------------------------------
 
-def _find_font_file(candidates: List[str]) -> Optional[str]:
+def _find_font_file(candidates: list[str]) -> str | None:
     """Returns the first existing TrueType font path across Linux, macOS, and Windows."""
     search_dirs = [
         "/usr/share/fonts/truetype/dejavu",
@@ -83,7 +82,7 @@ def _find_font_file(candidates: List[str]) -> Optional[str]:
     return None
 
 
-def register_fonts() -> Dict[str, str]:
+def register_fonts() -> dict[str, str]:
     """Registers DejaVu / system TrueType fonts across Linux, macOS, and Windows with safe fallbacks."""
     ttf_map = {
         "Sans": ("DejaVuSans", ["DejaVuSans.ttf", "Arial Unicode.ttf", "Arial.ttf"], "Helvetica"),
@@ -94,7 +93,7 @@ def register_fonts() -> Dict[str, str]:
         "SerifItalic": ("DejaVuSerif-Italic", ["DejaVuSerif-Italic.ttf", "Times New Roman Italic.ttf", "timesi.ttf"], "Times-Italic"),
         "Mono": ("DejaVuSansMono", ["DejaVuSansMono.ttf", "Courier New.ttf", "cour.ttf"], "Courier"),
     }
-    resolved: Dict[str, str] = {}
+    resolved: dict[str, str] = {}
     for key, (name, candidates, fallback) in ttf_map.items():
         path = _find_font_file(candidates)
         if path:
@@ -148,7 +147,7 @@ def compute_image_meta_entry(
     px_h: int,
     page_w: float = PAGE_W,
     page_h: float = PAGE_H,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Computes golden_image_metadata.json entry from ReportLab bottom-left coordinates."""
     y_top_pt = page_h - (y_bottom_pt + h_pt)
     y_bot_from_top_pt = page_h - y_bottom_pt
@@ -177,7 +176,7 @@ def compute_image_meta_entry(
 # OpenStreetMap (ODbL 1.0) Cartography & Texture Helpers
 # ---------------------------------------------------------------------------
 
-def deg2tile_float(lat_deg: float, lon_deg: float, zoom: int) -> Tuple[float, float]:
+def deg2tile_float(lat_deg: float, lon_deg: float, zoom: int) -> tuple[float, float]:
     """Converts (lat, lon) in degrees to fractional Web Mercator tile coordinates at `zoom`."""
     lat_rad = math.radians(lat_deg)
     n = float(2 ** zoom)
@@ -186,7 +185,7 @@ def deg2tile_float(lat_deg: float, lon_deg: float, zoom: int) -> Tuple[float, fl
     return xtile, ytile
 
 
-def fetch_osm_tile(z: int, x: int, y: int) -> Optional[Image.Image]:
+def fetch_osm_tile(z: int, x: int, y: int) -> Image.Image | None:
     """Fetches a single 256x256 OpenStreetMap tile with persistent local caching in OSM_CACHE_DIR."""
     os.makedirs(OSM_CACHE_DIR, exist_ok=True)
     cache_path = os.path.join(OSM_CACHE_DIR, f"osm_{z}_{x}_{y}.png")
@@ -222,9 +221,8 @@ def stitch_osm_bbox(
     zoom: int,
     target_w: int,
     target_h: int,
-) -> Tuple[Image.Image, Any]:
-    """
-    Stitches OpenStreetMap tiles covering the bounding box (lat_north, lon_west, lat_south, lon_east),
+) -> tuple[Image.Image, Any]:
+    """Stitches OpenStreetMap tiles covering the bounding box (lat_north, lon_west, lat_south, lon_east),
     crops to the exact geographic bounding box, and resizes to (target_w, target_h).
     Returns (image, project_fn) where project_fn(lat, lon) -> (px_x, px_y) in target image coordinates.
     """
@@ -260,7 +258,7 @@ def stitch_osm_bbox(
         arr[:, :] = (218, 242, 208)
         resized = Image.fromarray(arr, mode="RGB")
 
-    def project(lat: float, lon: float) -> Tuple[int, int]:
+    def project(lat: float, lon: float) -> tuple[int, int]:
         xf, yf = deg2tile_float(lat, lon, zoom)
         u = (xf - x_min_f) / max(1e-6, (x_max_f - x_min_f))
         v = (yf - y_min_f) / max(1e-6, (y_max_f - y_min_f))
@@ -269,7 +267,7 @@ def stitch_osm_bbox(
     return resized, project
 
 
-def make_vertical_gradient(w: int, h: int, top_rgb: Tuple[int, int, int], bot_rgb: Tuple[int, int, int], grain: float = 0.0) -> Image.Image:
+def make_vertical_gradient(w: int, h: int, top_rgb: tuple[int, int, int], bot_rgb: tuple[int, int, int], grain: float = 0.0) -> Image.Image:
     """Creates a smooth vertical gradient image with optional deterministic paper/surface micro-texture."""
     y_t = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None, None]
     top = np.array(top_rgb, dtype=np.float32)[None, None, :]
@@ -285,12 +283,12 @@ def make_vertical_gradient(w: int, h: int, top_rgb: Tuple[int, int, int], bot_rg
 
 def paste_with_drop_shadow(
     base: Image.Image,
-    box: Tuple[int, int, int, int],
+    box: tuple[int, int, int, int],
     radius: int,
-    fill_rgb: Tuple[int, int, int],
-    outline_rgb: Tuple[int, int, int],
+    fill_rgb: tuple[int, int, int],
+    outline_rgb: tuple[int, int, int],
     outline_w: int = 3,
-    shadow_offset: Tuple[int, int] = (6, 8),
+    shadow_offset: tuple[int, int] = (6, 8),
     shadow_alpha: int = 52,
 ) -> None:
     """Draws a rounded card with a soft Gaussian drop shadow onto `base`."""
@@ -311,10 +309,10 @@ def paste_with_drop_shadow(
 # Programmatic High-Resolution Figure Generators
 # ---------------------------------------------------------------------------
 
-def generate_gs_figures() -> Dict[str, str]:
+def generate_gs_figures() -> dict[str, str]:
     """Generates richly textured, 2x-supersampled illustrations for Document 1 (Grundschule Mathe & Sachkunde)."""
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    paths: Dict[str, str] = {}
+    paths: dict[str, str] = {}
 
     # -------------------------------------------------------------------------
     # 1. Number line (Zahlenstrahl bis 1000) with 3D Dienes Blocks - 1800x520 -> 900x260
@@ -325,7 +323,6 @@ def generate_gs_figures() -> Dict[str, str]:
     paste_with_drop_shadow(img, (16, 16, W - 16, H - 16), radius=26, fill_rgb=(252, 250, 242), outline_rgb=(37, 99, 235), outline_w=5)
     d = ImageDraw.Draw(img)
     f_bold = load_pil_font(36, bold=True)
-    f_reg = load_pil_font(28)
     f_small = load_pil_font(24, bold=True)
 
     # Top-right mini-legend showing 3D Dienes Base-10 Blocks (Hunderterplatte, Zehnerstange, Einerwürfel)
@@ -663,7 +660,7 @@ def generate_gs_figures() -> Dict[str, str]:
     return paths
 
 
-def generate_sek1_lang_figures() -> Dict[str, str]:
+def generate_sek1_lang_figures() -> dict[str, str]:
     """Generates Youth Eco-Magazine Collage with textured Cornwall coast + real OpenStreetMap St Ives inset."""
     os.makedirs(FIGURES_DIR, exist_ok=True)
     p1 = os.path.join(FIGURES_DIR, "sek1_cornwall_coastal_action.png")
@@ -762,10 +759,10 @@ def generate_sek1_lang_figures() -> Dict[str, str]:
     return {"fig_s1_lang_1": p1}
 
 
-def generate_sek1_geo_hist_figures() -> Dict[str, str]:
+def generate_sek1_geo_hist_figures() -> dict[str, str]:
     """Generates OpenStreetMap-based Upper Rhine Graben cartography, Walter-Lieth climate diagrams, and timeline."""
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    paths: Dict[str, str] = {}
+    paths: dict[str, str] = {}
 
     # -------------------------------------------------------------------------
     # 1. OpenStreetMap & Physical/Thematic Map of Oberrheingraben - 1800x960 -> 900x480
@@ -1053,10 +1050,10 @@ def generate_sek1_geo_hist_figures() -> Dict[str, str]:
     return paths
 
 
-def generate_sek2_chem_bio_figures() -> Dict[str, str]:
+def generate_sek2_chem_bio_figures() -> dict[str, str]:
     """Generates 2x-supersampled chemical structural formulas (with stereo-wedged Haworth ring) and Michaelis-Menten curve."""
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    paths: Dict[str, str] = {}
+    paths: dict[str, str] = {}
     f_title = load_pil_font(32, bold=True)
     f_bold = load_pil_font(28, bold=True)
     f_reg = load_pil_font(25)
@@ -1384,7 +1381,7 @@ def draw_scissors_glue_pictogram(c: canvas.Canvas, x: float, y: float) -> None:
     c.restoreState()
 
 
-def draw_ghs_diamond(c: canvas.Canvas, cx: float, cy: float, r: float, symbol: str, fonts: Dict[str, str]) -> None:
+def draw_ghs_diamond(c: canvas.Canvas, cx: float, cy: float, r: float, symbol: str, fonts: dict[str, str]) -> None:
     """Draws a red-bordered GHS hazard diamond with inner vector hazard pictogram (flame, corrosive, exclamation)."""
     c.saveState()
     p = c.beginPath()
@@ -1431,7 +1428,7 @@ def draw_book_header_footer(
     page_num: int,
     chapter_title: str,
     subject_label: str,
-    fonts: Dict[str, str],
+    fonts: dict[str, str],
     accent_hex: str = "#1E40AF",
 ) -> None:
     """Draws alternating even/odd textbook running headers, decorative margin accent strip, and printed page numbers."""
@@ -1468,7 +1465,7 @@ def draw_styled_emphasis_sentence(
     mid_text: str,
     italic_phrase: str,
     underlined_phrase: str,
-    fonts: Dict[str, str],
+    fonts: dict[str, str],
     size: float = 9.4,
 ) -> None:
     """Draws a sentence with real bold, italic, and underlined spans in ReportLab."""
@@ -1507,15 +1504,14 @@ def draw_styled_emphasis_sentence(
 def draw_two_column_section(
     c: canvas.Canvas,
     y_top: float,
-    left_lines: List[str],
-    right_lines: List[str],
-    fonts: Dict[str, str],
+    left_lines: list[str],
+    right_lines: list[str],
+    fonts: dict[str, str],
     font_key: str = "Serif",
     font_size: float = 8.8,
     line_h: float = 13.5,
 ) -> float:
-    """
-    Renders a 2-column scientific textbook prose block (x_col1=48..286, x_col2=308..547)
+    """Renders a 2-column scientific textbook prose block (x_col1=48..286, x_col2=308..547)
     with a subtle vertical column rule at x=297 pt. Returns the bottom y coordinate.
     """
     c.saveState()
@@ -1538,11 +1534,11 @@ def draw_two_column_section(
 # PDF Builders for the 8 Single-Subject Schoolbooks (85%–92% Page Density)
 # ---------------------------------------------------------------------------
 
-def build_grundschule_mathe_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]) -> List[Dict[str, Any]]:
+def build_grundschule_mathe_pdf(pdf_path: str, fonts: dict[str, str], figs: dict[str, str]) -> list[dict[str, Any]]:
     """Builds 3-page Grundschule Klasse 3 Mathematik PDF (pages 14–16) with □/◩/■ difficulty icons."""
     c = canvas.Canvas(pdf_path, pagesize=A4)
     c.setTitle("Zahlenreise 3: Mathematik für die Grundschule")
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 14 ====================
     draw_book_header_footer(c, 14, "Kapitel 1: Orientierung im Zahlenraum bis 1000", "Mathematik · Klasse 3", fonts, "#2563EB")
@@ -1607,7 +1603,7 @@ def build_grundschule_mathe_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict
     c.setFont(fonts["Sans"], 9.8)
     c.drawString(48, fig1_y - 184, "Zerlege die Zahlen in Hunderter (H), Zehner (Z) und Einer (E):")
 
-    def draw_line_with_boxes(y_line: float, segments: List[str]) -> None:
+    def draw_line_with_boxes(y_line: float, segments: list[str]) -> None:
         cx_pos = 48.0
         c.setFont(fonts["Sans"], 9.8)
         for seg_idx, seg in enumerate(segments):
@@ -1832,11 +1828,11 @@ def build_grundschule_mathe_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict
     return meta_entries
 
 
-def build_grundschule_sachkunde_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]) -> List[Dict[str, Any]]:
+def build_grundschule_sachkunde_pdf(pdf_path: str, fonts: dict[str, str], figs: dict[str, str]) -> list[dict[str, Any]]:
     """Builds 2-page Grundschule Klasse 3 Sachunterricht PDF (pages 24–25) with NO difficulty indicators."""
     c = canvas.Canvas(pdf_path, pagesize=A4)
     c.setTitle("Natur-Entdecker 3: Sachunterricht für die Grundschule")
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 24 ====================
     draw_book_header_footer(c, 24, "Kapitel 2: Lebensraum Streuobstwiese im Jahreslauf", "Sachunterricht · Klasse 3", fonts, "#059669")
@@ -2017,11 +2013,11 @@ def build_grundschule_sachkunde_pdf(pdf_path: str, fonts: Dict[str, str], figs: 
     return meta_entries
 
 
-def build_sek1_deutsch_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]) -> List[Dict[str, Any]]:
+def build_sek1_deutsch_pdf(pdf_path: str, fonts: dict[str, str], figs: dict[str, str]) -> list[dict[str, Any]]:
     """Builds 2-page Sekundarstufe I Klasse 7 Deutsch PDF (pages 112–113) with NO difficulty indicators."""
     c = canvas.Canvas(pdf_path, pagesize=A4)
     c.setTitle("Sprachfenster 7: Deutsch für die Sekundarstufe I")
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 112 ====================
     draw_book_header_footer(c, 112, "Kapitel 5: Erzähltexte und Medienberichte", "Deutsch · Klasse 7", fonts, "#9333EA")
@@ -2235,11 +2231,11 @@ def build_sek1_deutsch_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str,
     return meta_entries
 
 
-def build_sek1_englisch_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]) -> List[Dict[str, Any]]:
+def build_sek1_englisch_pdf(pdf_path: str, fonts: dict[str, str], figs: dict[str, str]) -> list[dict[str, Any]]:
     """Builds 2-page Sekundarstufe I Klasse 7/8 Englisch PDF (pages 64–65) with ★/★★/★★★ difficulty icons."""
     c = canvas.Canvas(pdf_path, pagesize=A4)
     c.setTitle("Bridge 7/8: English for Sekundarstufe I")
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 64 ====================
     draw_book_header_footer(c, 64, "Unit 4: Protecting Our Coasts and Oceans", "Englisch · Klasse 7/8", fonts, "#0284C7")
@@ -2428,11 +2424,11 @@ def build_sek1_englisch_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str
     return meta_entries
 
 
-def build_sek1_geographie_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]) -> List[Dict[str, Any]]:
+def build_sek1_geographie_pdf(pdf_path: str, fonts: dict[str, str], figs: dict[str, str]) -> list[dict[str, Any]]:
     """Builds 2-page Sekundarstufe I Klasse 9/10 Geographie PDF (pages 204–205) with NO difficulty indicators."""
     c = canvas.Canvas(pdf_path, pagesize=A4)
     c.setTitle("Erdkunde 9/10: Naturraum und Klima in Mitteleuropa")
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 204 ====================
     draw_book_header_footer(c, 204, "Kapitel 2: Naturraum und Klima in Mitteleuropa", "Geographie · Klasse 9/10", fonts, "#15803D")
@@ -2598,11 +2594,11 @@ def build_sek1_geographie_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[s
     return meta_entries
 
 
-def build_sek1_geschichte_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]) -> List[Dict[str, Any]]:
+def build_sek1_geschichte_pdf(pdf_path: str, fonts: dict[str, str], figs: dict[str, str]) -> list[dict[str, Any]]:
     """Builds 2-page Sekundarstufe I Klasse 9/10 Geschichte PDF (pages 246–247) with ◇/◈/◆ difficulty icons."""
     c = canvas.Canvas(pdf_path, pagesize=A4)
     c.setTitle("Zeitenwandel 9/10: Geschichte für die Sekundarstufe I")
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 246 ====================
     draw_book_header_footer(c, 246, "Kapitel 3: Industrialisierung und Soziale Frage", "Geschichte · Klasse 9/10", fonts, "#B45309")
@@ -2791,11 +2787,11 @@ def build_sek1_geschichte_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[s
     return meta_entries
 
 
-def build_sek2_chemie_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]) -> List[Dict[str, Any]]:
+def build_sek2_chemie_pdf(pdf_path: str, fonts: dict[str, str], figs: dict[str, str]) -> list[dict[str, Any]]:
     """Builds 2-page Sekundarstufe II Klasse 11–12 Chemie PDF (pages 310–311) with 2-column Lehrtext and ○/◐/● difficulty icons."""
     c = canvas.Canvas(pdf_path, pagesize=A4)
     c.setTitle("Chemie Oberstufe Q1/Q2: Chemisches Gleichgewicht und Redoxreaktionen")
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 310 ====================
     draw_book_header_footer(c, 310, "Kapitel 4: Chemisches Gleichgewicht und Redoxreaktionen", "Chemie · Sekundarstufe II", fonts, "#0F766E")
@@ -3015,11 +3011,11 @@ def build_sek2_chemie_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str, 
     return meta_entries
 
 
-def build_sek2_biologie_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]) -> List[Dict[str, Any]]:
+def build_sek2_biologie_pdf(pdf_path: str, fonts: dict[str, str], figs: dict[str, str]) -> list[dict[str, Any]]:
     """Builds 2-page Sekundarstufe II Klasse 11–12 Biologie PDF (pages 412–413) with 2-column Lehrtext and NO difficulty icons."""
     c = canvas.Canvas(pdf_path, pagesize=A4)
     c.setTitle("Biologie Oberstufe Q1/Q2: Stoffwechselphysiologie und Enzymkinetik")
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 412 ====================
     draw_book_header_footer(c, 412, "Kapitel 6: Stoffwechselphysiologie und Enzymkinetik", "Biologie · Sekundarstufe II", fonts, "#0F766E")
@@ -3210,10 +3206,9 @@ def build_sek2_biologie_pdf(pdf_path: str, fonts: Dict[str, str], figs: Dict[str
 
 
 def build_sek2_physik_verzeichnisse_pdf(
-    pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]
-) -> List[Dict[str, Any]]:
-    """
-    Document 9: Sekundarstufe II (Klasse 11–12) — Physik: Wellenoptik und Quantenphysik (4 pages, pp. 44–47).
+    pdf_path: str, fonts: dict[str, str], figs: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Document 9: Sekundarstufe II (Klasse 11–12) — Physik: Wellenoptik und Quantenphysik (4 pages, pp. 44–47).
     Specifically designed to test fast post-upload directory detection and directory-assisted
     page number & heading hierarchy reconstruction:
       - Page 1 (p. 44): Contains Inhaltsverzeichnis (with H1..H4 hierarchy including unnumbered
@@ -3224,7 +3219,7 @@ def build_sek2_physik_verzeichnisse_pdf(
         from the directories.
     """
     c = canvas.Canvas(pdf_path, pagesize=A4)
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 44 (Directories Page) ====================
     c.setStrokeColor(colors.HexColor("#1E3A8A"))
@@ -3576,10 +3571,10 @@ B5_WIDE_SIZE = (552.76, 737.01)      # 195 x 260 mm (Sek II wide textbook format
 SPREAD_LANDSCAPE_SIZE = (680.31, 481.89)  # 240 x 170 mm (Grundschule Lesebuch Doppelseiten-Spread)
 
 
-def generate_multi_format_figures() -> Dict[str, str]:
+def generate_multi_format_figures() -> dict[str, str]:
     """Generates high-resolution figures for the 3 multi-format schoolbooks and the CC0 Indus-Mesopotamia map."""
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    figs: Dict[str, str] = {}
+    figs: dict[str, str] = {}
 
     # 1. Informatik Flowchart (Programmablaufplan): 880 x 340 px
     inf_path = os.path.join(FIGURES_DIR, "informatik_programmablaufplan.png")
@@ -3787,20 +3782,12 @@ def generate_multi_format_figures() -> Dict[str, str]:
 
 
 def build_sek1_informatik_pdf(
-    pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]
-) -> List[Dict[str, Any]]:
-    """
-    Document 10: Sekundarstufe I (Klasse 7/8) — Informatik & Medienbildung (2 pages, pp. 18–19).
-    Physical format: B5+ Standard-Schulbuchformat (190 x 260 mm = 538.58 x 737.01 pt).
-    Tests:
-      - Non-A4 B5+ page dimensions
-      - Flowchart diagram (Abb. 1.1), Mediencode/QR margin box, and Merksatz callout box
-      - Truth table (Tabelle 1.1) and self-assessment competency check ('Teste dich!')
-      - PDF text-layer soft hyphens (\u00ad) and InDesign print-production slug line (.indd) at bottom edge
-    """
+    pdf_path: str, fonts: dict[str, str], figs: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Builds Document 10: Sekundarstufe I (Klasse 7/8) — Informatik & Medienbildung (pp. 18–19)."""
     pw, ph = B5_PLUS_SIZE
     c = canvas.Canvas(pdf_path, pagesize=B5_PLUS_SIZE)
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 18 ====================
     c.setStrokeColor(colors.HexColor("#1D4ED8"))
@@ -3995,20 +3982,12 @@ def build_sek1_informatik_pdf(
 
 
 def build_sek2_mathematik_analysis_pdf(
-    pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]
-) -> List[Dict[str, Any]]:
-    """
-    Document 11: Sekundarstufe II (EF / Q1) — Mathematik: Analysis (2 pages, pp. 50–51).
-    Physical format: B5-Breitformat (195 x 260 mm = 552.76 x 737.01 pt).
-    Tests:
-      - B5-wide page dimensions
-      - Polynomial analysis, limits, derivatives, and definite integrals in display/inline math
-      - Function plot with extrema H/T, inflection point W, and shaded integral area (Abb. 2.1)
-      - Merksatz box, Example box, characteristic table (Tabelle 2.1), and square difficulty icons (□, ◩, ■)
-    """
+    pdf_path: str, fonts: dict[str, str], figs: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Builds Document 11: Sekundarstufe II (EF / Q1) — Mathematik: Analysis (pp. 50–51)."""
     pw, ph = B5_WIDE_SIZE
     c = canvas.Canvas(pdf_path, pagesize=B5_WIDE_SIZE)
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== PAGE 50 ====================
     c.setStrokeColor(colors.HexColor("#0F172A"))
@@ -4173,19 +4152,12 @@ def build_sek2_mathematik_analysis_pdf(
 
 
 def build_grundschule_lesebuch_doppelseite_pdf(
-    pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]
-) -> List[Dict[str, Any]]:
-    """
-    Document 12: Grundschule (Klasse 2/3) — Deutsch / Lesebuch im Querformat-Doppelseiten-Spread (2 spreads: pp. 18/19 and 20/21).
-    Physical format: Landscape Double-Page Spread (240 x 170 mm = 680.31 x 481.89 pt).
-    Tests:
-      - Landscape spread page dimensions (width > height)
-      - FIBS Rule 1 double-page markers: ((18)) / ((19)) and ((20)) / ((21))
-      - Literary story with line numbers (5, 10, 15), Wortbausteine callout box, comparison table, and reading tasks
-    """
+    pdf_path: str, fonts: dict[str, str], figs: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Builds Document 12: Grundschule — Deutsch Lesebuch Querformat-Doppelseiten (pp. 18/19, 20/21)."""
     pw, ph = SPREAD_LANDSCAPE_SIZE
     c = canvas.Canvas(pdf_path, pagesize=SPREAD_LANDSCAPE_SIZE)
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
 
     # ==================== SPREAD 1: ((18)) / ((19)) ====================
     c.setStrokeColor(colors.HexColor("#0284C7"))
@@ -4352,14 +4324,14 @@ def build_grundschule_lesebuch_doppelseite_pdf(
     return meta_entries
 
 
-def sanitize_openstax_history_cc0_map(fonts: Dict[str, str], cc0_map_path: str) -> None:
-    """
-    Replaces Page 2 (physical page 102) of `testdata/openstax_history_sample.pdf` so that
+def sanitize_openstax_history_cc0_map(fonts: dict[str, str], cc0_map_path: str) -> None:
+    """Replaces Page 2 (physical page 102) of `testdata/openstax_history_sample.pdf` so that
     `FIGURE 3.26` (which previously carried a third-party `CC BY NC-SA 4.0` attribution)
     is replaced with our 100% CC0 1.0 Public Domain trade-routes map (`cc0_map_path`)
     and pure CC0 1.0 / CC BY 4.0 attribution. Also regenerates `openstax_history_sample_scanned.pdf`.
     """
     import io
+
     import pypdfium2 as pdfium
 
     hist_pdf_path = os.path.join(TEST_DATA_DIR, "openstax_history_sample.pdf")
@@ -4490,7 +4462,7 @@ def sanitize_openstax_history_cc0_map(fonts: Dict[str, str], cc0_map_path: str) 
     generate_scanned_pdf(hist_pdf_path, hist_scan_path, seed=503)
 
 
-def _get_sek2_physik_gesamtwerk_pages() -> List[Dict[str, Any]]:
+def _get_sek2_physik_gesamtwerk_pages() -> list[dict[str, Any]]:
     """Returns the structured 20-page specification (Roman I–V front matter + Arabic 1–15 chapters 1 & 2)
     for `sek2_physik_gesamtwerk.pdf` so PDF text and Golden Markdown are 100% synchronized.
     """
@@ -5137,10 +5109,9 @@ def _get_sek2_physik_gesamtwerk_pages() -> List[Dict[str, Any]]:
 
 
 def build_sek2_physik_gesamtwerk_pdf(
-    pdf_path: str, fonts: Dict[str, str], figs: Dict[str, str]
-) -> List[Dict[str, Any]]:
-    """
-    Document 13: Sekundarstufe II (Klasse 11–13) — Physik Oberstufe Gesamtband (20 pages: I–V, 1–15).
+    pdf_path: str, fonts: dict[str, str], figs: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Document 13: Sekundarstufe II (Klasse 11–13) — Physik Oberstufe Gesamtband (20 pages: I–V, 1–15).
     Complete multi-chapter schoolbook with Roman front-matter (Pages I–V: Title, Preface,
     Inhaltsverzeichnis, Abbildungsverzeichnis, Bildverzeichnis, Tabellenverzeichnis) and two
     full chapters (Kapitel 1 on pp. 1–9, Kapitel 2 on pp. 10–15) plus embedded PDF /PageLabels.
@@ -5150,7 +5121,7 @@ def build_sek2_physik_gesamtwerk_pdf(
     c.addPageLabel(0, style="ROMAN_UPPER", start=1)
     c.addPageLabel(5, style="ARABIC", start=1)
 
-    meta_entries: List[Dict[str, Any]] = []
+    meta_entries: list[dict[str, Any]] = []
     pages_spec = _get_sek2_physik_gesamtwerk_pages()
 
     for page_idx, p_spec in enumerate(pages_spec):
@@ -5307,16 +5278,56 @@ def build_sek2_physik_gesamtwerk_pdf(
     return meta_entries
 
 
-def _render_sek2_physik_gesamtwerk_markdown() -> Tuple[str, str]:
+def _fibs_gesamtwerk_text(txt: str) -> str:
+    """Normalizes spelled-out Greek/math tokens in `sek2_physik_gesamtwerk` FIBS ground truth."""
+    import re
+
+    out = txt
+    out = re.sub(r"\bsqrt\(([^()\n]+)\)", r"\\sqrt{\1}", out)
+    out = re.sub(r"\bDelta\s+phi\b", "~D ~f", out)
+    out = re.sub(r"\bDelta\s+([A-Za-z])\b", r"~D \1", out)
+    out = re.sub(r"\bomega(?=[_\^]|\b)", "~w", out)
+    out = re.sub(r"\bpi(?=[_\^]|\b)", "~p", out)
+    out = re.sub(r"\btheta\b", "~q", out)
+    out = re.sub(r"\bkappa(?=[_\^]|\b)", "~k", out)
+    out = re.sub(r"\brho\b", "~r", out)
+    out = re.sub(r"\b(?:eta)(?=[_\^]|\b)", "~h", out)
+    out = re.sub(r"\bOmega\b", "~W", out)
+    out = out.replace(" >= ", r" \ge ")
+    out = out.replace(" * ", r" \cdot ")
+    return out
+
+
+def _join_gesamtwerk_lines(lines_seq: list[str]) -> str:
+    """Joins wrapped PDF lines while preserving suspended hyphens ('Lehr- und') and minus signs (' - ')."""
+    out = ""
+    for ln in lines_seq:
+        if not out:
+            out = ln
+            continue
+        if out.endswith("-") and not out.endswith(" -"):
+            first_next = ln.split(" ", 1)[0].lower().rstrip(".,;:")
+            if first_next in {"und", "oder", "bzw", "sowie", "bis"}:
+                out = f"{out} {ln}"
+            else:
+                out = f"{out[:-1]}{ln}"
+        else:
+            out = f"{out} {ln}"
+    return out
+
+
+def _render_sek2_physik_gesamtwerk_markdown() -> tuple[str, str]:
     """Generates `(raw_golden_md, uebertragungsregeln_09_2025_golden_md)` from `_get_sek2_physik_gesamtwerk_pages()`."""
+    import re
+
     pages_spec = _get_sek2_physik_gesamtwerk_pages()
-    raw_chunks: List[str] = []
-    ueb_chunks: List[str] = []
+    raw_chunks: list[str] = []
+    ueb_chunks: list[str] = []
 
     for p_spec in pages_spec:
         lbl = p_spec["label"]
-        raw_lines: List[str] = [f"(({lbl}))"]
-        ueb_lines: List[str] = [f"(({lbl}))"]
+        raw_lines: list[str] = [f"(({lbl}))"]
+        ueb_lines: list[str] = [f"(({lbl}))"]
 
         for blk in p_spec["blocks"]:
             b_kind = blk[0]
@@ -5333,9 +5344,10 @@ def _render_sek2_physik_gesamtwerk_markdown() -> Tuple[str, str]:
                 raw_lines.append(f"#### {blk[1]}")
                 ueb_lines.append(f"#### {blk[1]}")
             elif b_kind == "p":
-                para = " ".join(blk[1]).replace("- ", "")
-                raw_lines.append(para)
-                ueb_lines.append(para)
+                para_raw = " ".join(blk[1]).replace("- ", "")
+                para_ueb = _fibs_gesamtwerk_text(_join_gesamtwerk_lines(blk[1]))
+                raw_lines.append(para_raw)
+                ueb_lines.append(para_ueb)
             elif b_kind == "dir_toc":
                 raw_lines.append(f"# {blk[1]}")
                 ueb_lines.append(f"# {blk[1]}")
@@ -5352,7 +5364,7 @@ def _render_sek2_physik_gesamtwerk_markdown() -> Tuple[str, str]:
                 r_list = []
                 u_list = []
                 for row_txt in blk[2]:
-                    clean_row = " ".join(row_txt.replace("..", " ").split())
+                    clean_row = " ".join(re.sub(r"\.{2,}", " ", row_txt).split())
                     r_list.append(f"- {row_txt}")
                     u_list.append(f"-\t{clean_row}")
                 raw_lines.append("\n".join(r_list))
@@ -5361,11 +5373,11 @@ def _render_sek2_physik_gesamtwerk_markdown() -> Tuple[str, str]:
                 _fig_key, _phys_pg, rel_fn, cap_txt, img_type, desc = blk[1], blk[2], blk[3], blk[4], blk[5], blk[6]
                 raw_lines.append(f"![{cap_txt}]({rel_fn})\n\n{cap_txt}")
                 ueb_lines.append(
-                    f"#### {cap_txt}\n\n<Bild> {img_type}:\nBeschreibung mit Bildtext: {desc}\n</Bild>"
+                    f"#### {cap_txt}\n\n<Bild> {img_type}:\nBeschreibung mit Bildtext: {_fibs_gesamtwerk_text(desc)}\n</Bild>"
                 )
             elif b_kind == "fig_text":
                 raw_lines.append(f"#### {blk[1]}\n\n{blk[2]}")
-                ueb_lines.append(f"#### {blk[1]}\n\n{blk[2]}")
+                ueb_lines.append(f"#### {blk[1]}\n\n{_fibs_gesamtwerk_text(blk[2])}")
             elif b_kind == "table":
                 hdr = blk[2][0]
                 rows = blk[2][1:]
@@ -5379,19 +5391,29 @@ def _render_sek2_physik_gesamtwerk_markdown() -> Tuple[str, str]:
                     raw_tab.append("| " + " | ".join(r) + " |")
                 raw_lines.append("\n".join(raw_tab))
 
-                ueb_tab = [f"### {blk[1]}", "", "<Tabelle>", "\t".join(hdr)]
+                ueb_tab = [
+                    f"### {blk[1]}",
+                    "",
+                    "<Tabelle>",
+                    "\t".join(_fibs_gesamtwerk_text(c) for c in hdr),
+                ]
                 for r in rows:
-                    ueb_tab.append("\t".join(r))
+                    ueb_tab.append("\t".join(_fibs_gesamtwerk_text(c) for c in r))
                 ueb_tab.append("</Tabelle>")
                 ueb_lines.append("\n".join(ueb_tab))
             elif b_kind == "task":
-                para = " ".join(blk[2]).replace("- ", "")
-                raw_lines.append(f"### {blk[1]}\n\n{para}")
-                ueb_lines.append(f"### {blk[1]}\n\n{para}")
+                para_raw = " ".join(blk[2]).replace("- ", "")
+                para_ueb = _fibs_gesamtwerk_text(_join_gesamtwerk_lines(blk[2]))
+                raw_lines.append(f"### {blk[1]}\n\n{para_raw}")
+                ueb_lines.append(f"### {blk[1]}\n\n{para_ueb}")
             elif b_kind == "box":
                 box_title, bullets = blk[1], blk[2]
                 r_box = [f"**{box_title}**"] + [f"- {b}" for b in bullets]
-                u_box = ["<Rahmen>", f"_{box_title}_"] + [f"-\t{b}" for b in bullets] + ["</Rahmen>"]
+                u_box = (
+                    ["<Rahmen>", f"_{box_title}_"]
+                    + [f"-\t{_fibs_gesamtwerk_text(b)}" for b in bullets]
+                    + ["</Rahmen>"]
+                )
                 raw_lines.append("\n".join(r_box))
                 ueb_lines.append("\n".join(u_box))
 
@@ -5407,8 +5429,7 @@ def _render_sek2_physik_gesamtwerk_markdown() -> Tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def generate_scanned_pdf(digital_pdf_path: str, scanned_pdf_path: str, seed: int = 42) -> None:
-    """
-    Renders each page of `digital_pdf_path` at 300 DPI via pypdfium2 and applies
+    """Renders each page of `digital_pdf_path` at 300 DPI via pypdfium2 and applies
     realistic textbook scan artifacts (warm paper tint, deterministic subtle skew,
     slight optical blur, and subtle sensor grain) before saving as a multi-page PDF.
     """
@@ -5416,7 +5437,7 @@ def generate_scanned_pdf(digital_pdf_path: str, scanned_pdf_path: str, seed: int
 
     rng = random.Random(seed)
     pdf = pypdfium2.PdfDocument(digital_pdf_path)
-    scanned_pages: List[Image.Image] = []
+    scanned_pages: list[Image.Image] = []
 
     for page_idx, page in enumerate(pdf):
         # 300 DPI: 300 / 72 = 4.1666667
@@ -5457,9 +5478,8 @@ def generate_scanned_pdf(digital_pdf_path: str, scanned_pdf_path: str, seed: int
 # Golden Ground Truth Generators (Raw & FIBS Übertragungsregeln 09/2025)
 # ---------------------------------------------------------------------------
 
-def get_golden_ground_truths() -> Dict[str, Tuple[str, str]]:
+def get_golden_ground_truths() -> dict[str, tuple[str, str]]:
     """Returns (raw_md, uebertragungsregeln_09_2025_md) for each of the 8 single-subject schoolbooks."""
-
     # -------------------- 1. GRUNDSCHULE MATHEMATIK --------------------
     gs_mathe_raw = """((14))
 
@@ -6033,6 +6053,10 @@ Am nächsten Morgen glitzerte der nasse Schlick in der Wintersonne, und die Seev
 
 ### Aufgabe 2: Hervorhebungen bestimmen (fett, kursiv, unterstrichen)
 
+<Anmerkung>
+In der folgenden Aufgabe bedeuten: *Wort* = fett, %Wort% = kursiv, #Wort# = unterstrichen.
+</Anmerkung>
+
 Bestimme in den drei Beispielsätzen die Wortart der fett gedruckten Wörter, die Funktion der kursiv gesetzten Ausdrücke und das Satzglied der unterstrichenen Wortgruppen:
 a) Der *erfahrene* Kapitän steuert das Rettungsboot %trotz der Dunkelheit% #durch die enge Fahrrinne#.
 b) Viele *wachsame* Inselbewohner sichern %vor dem nahenden Hochwasser% #alle Fenster und Türen#.
@@ -6180,8 +6204,8 @@ _Useful Phrases: Expressing Opinions and Making Suggestions_
 
 <Rahmen>
 _Grammar Box: Conditional Sentences Type I and Type II_
--\tType I (real/likely): if + Simple Present → will-future (If we join on Saturday, we will help.)
--\tType II (unreal/hypothetical): if + Simple Past → would + infinitive (If more students had reusable bottles, there would be far less waste.)
+-\tType I (real/likely): if + Simple Present \\to will-future (If we join on Saturday, we will help.)
+-\tType II (unreal/hypothetical): if + Simple Past \\to would + infinitive (If more students had reusable bottles, there would be far less waste.)
 -\tWatch out: Never use 'will' or 'would' inside the if-clause itself!
 </Rahmen>
 
@@ -6218,7 +6242,7 @@ Deine Klasse plant eine Umwelt-Projektwoche und hat den Artikel aus dem St Ives 
 <Rahmen>
 _Study Skills: Working with an English-German Dictionary & IPA Phonetics_
 -\t_1. Word class abbreviations:_ Always check whether a headword is a noun (n.), verb (v.), or adjective (adj.). Many English words like 'volunteer' can be used both as a noun and a verb.
--\t_2. Word stress in IPA:_ The vertical mark [ˈ] in phonetic transcription always stands directly before the main stressed syllable (e.g. [/səˈsteɪnəbl/] -> stress on '-stain-').
+-\t_2. Word stress in IPA:_ The vertical mark [ˈ] in phonetic transcription always stands directly before the main stressed syllable (e.g. [/səˈsteɪnəbl/] \\to stress on '-stain-').
 -\t_3. British vs. American English:_ Note British spelling '-our' in 'harbour' (AE: 'harbor') and the optional final r-sound [ə(r)] in British Received Pronunciation.
 -\t_Tip for Mediation:_ Never translate sentence by sentence—summarise the key facts in your own words!
 </Rahmen>
@@ -6594,42 +6618,42 @@ $$K_c = \frac{c(\text{CH}_3\text{COOC}_2\text{H}_5) \cdot c(\text{H}_2\text{O})}
 
 ## 4.1 Säurekatalysierte Veresterung und dynamisches Gleichgewicht
 
-Carbonsäuren reagieren mit Alkoholen unter Säurekatalyse zu fruchtig riechenden Estern und Wasser. Im Gegensatz zu vielen Fällungsreaktionen verläuft diese Kondensation unvollständig: Gleichzeitig spaltet das gebildete Wasser den Ester in einer Rückreaktion (Hydrolyse) wieder in Säure und Alkohol. Sobald die Reaktionsgeschwindigkeiten von Hin- und Rückreaktion exakt übereinstimmen ($v_{\\text{hin}} = v_{\\text{rück}}$), befindet sich das geschlossene System im dynamischen chemischen Gleichgewicht. Die Stoffmengenkonzentrationen bleiben konstant.
+Carbonsäuren reagieren mit Alkoholen unter Säurekatalyse zu fruchtig riechenden Estern und Wasser. Im Gegensatz zu vielen Fällungsreaktionen verläuft diese Kondensation unvollständig: Gleichzeitig spaltet das gebildete Wasser den Ester in einer Rückreaktion (Hydrolyse) wieder in Säure und Alkohol. Sobald die Reaktionsgeschwindigkeiten von Hin- und Rückreaktion exakt übereinstimmen (v_{hin} = v_{rück}), befindet sich das geschlossene System im dynamischen chemischen Gleichgewicht. Die Stoffmengenkonzentrationen bleiben konstant.
 
 <Rahmen>
 _Versuchsprotokoll V4.1 – Gefahrstoffhinweise:_ [Gefahrstoffsymbol: Entzündbar] [Gefahrstoffsymbol: Ätzend] [Gefahrstoffsymbol: Achtung]
--\t_Materialien & Chemikalien:_ Reagenzgläser, Wasserbad ($80\\,^\\circ\\text{C}$), Ethansäure ($\\text{CH}_3\\text{COOH}$), Ethanol ($\\text{C}_2\\text{H}_5\\text{OH}$), konzentrierte Schwefelsäure ($\\text{H}_2\\text{SO}_4$, Katalysator), Kaliumdichromat-Lösung ($\\text{K}_2\\text{Cr}_2\\text{O}_7$).
--\t_Durchführung:_ 3 mL Ethansäure und 3 mL Ethanol werden mit 5 Tropfen konz. $\\text{H}_2\\text{SO}_4$ vorsichtig im Wasserbad erwärmt. Anschließend wird das Gemisch auf Eiswasser gegeben.
+-\t_Materialien & Chemikalien:_ Reagenzgläser, Wasserbad (80 °C), Ethansäure (CH_3COOH), Ethanol (C_2H_5OH), konzentrierte Schwefelsäure (H_2SO_4, Katalysator), Kaliumdichromat-Lösung (K_2Cr_2O_7).
+-\t_Durchführung:_ 3 mL Ethansäure und 3 mL Ethanol werden mit 5 Tropfen konz. H_2SO_4 vorsichtig im Wasserbad erwärmt. Anschließend wird das Gemisch auf Eiswasser gegeben.
 -\t_Beobachtung:_ Es bildet sich eine obere, fruchtig nach Klebstoff riechende organische Phase.
 -\t_Auswertung:_ Es stellt sich ein dynamisches Veresterungsgleichgewicht ein.
 </Rahmen>
 
 ### Reaktionsgleichungen, Ionenladungen und Oxidationszahlen
 
-1.\tVeresterungsgleichgewicht (Katalyse durch Oxonium-Ionen $\\text{H}_3\\text{O}^+$):
+1.\tVeresterungsgleichgewicht (Katalyse durch Oxonium-Ionen H_3O^+):
 
-$$\\text{CH}_3\\text{COOH} + \\text{C}_2\\text{H}_5\\text{OH} \\rightleftharpoons \\text{CH}_3\\text{COOC}_2\\text{H}_5 + \\text{H}_2\\text{O} \\quad (\\Delta H^\\circ \\approx -4\\,\\text{kJ/mol})$$
+CH_3COOH + C_2H_5OH \\lra CH_3COOC_2H_5 + H_2O (~D H° \\approx -4 kJ/mol)
 
 2.\tRedoxreaktion von Dichromat-Ionen mit Eisen(II)-Ionen in saurer Lösung:
 
-$$\\overset{+\\text{VI}}{\\text{Cr}}_2\\overset{-\\text{II}}{\\text{O}}_7^{2-} + 14\\,\\text{H}_3\\text{O}^+ + 6\\,\\overset{+\\text{II}}{\\text{Fe}}^{2+} \\longrightarrow 2\\,\\overset{+\\text{III}}{\\text{Cr}}^{3+} + 6\\,\\overset{+\\text{III}}{\\text{Fe}}^{3+} + 21\\,\\text{H}_2\\text{O}$$
+\\overset{+VI}{Cr}_2\\overset{-II}{O}_7^{2-} + 14 H_3O^+ + 6 \\overset{+II}{Fe}^{2+} \\to 2 \\overset{+III}{Cr}^{3+} + 6 \\overset{+III}{Fe}^{3+} + 21 H_2O
 
 3.\tGroßtechnische Gleichgewichtsreaktion (Kontaktverfahren):
 
-$$2\\,\\text{SO}_2\\text{(g)} + \\text{O}_2\\text{(g)} \\xrightarrow{\\text{Kat., } 450\\,^\\circ\\text{C}} 2\\,\\text{SO}_3\\text{(g)}$$
+2 SO_2(g) + O_2(g) \\xra{Kat., 450 °C} 2 SO_3(g)
 
 ### Reaktionsmechanismus der säurekatalysierten Veresterung (Addition-Eliminierung)
 
--\t_Schritt 1 (Protonierung):_ Ein Oxonium-Ion ($\\text{H}_3\\text{O}^+$) überträgt ein Proton auf den Carbonylsauerstoff der Ethansäure. Dadurch erhöht sich die positive Teilladung am Carbonyl-C-Atom.
+-\t_Schritt 1 (Protonierung):_ Ein Oxonium-Ion (H_3O^+) überträgt ein Proton auf den Carbonylsauerstoff der Ethansäure. Dadurch erhöht sich die positive Teilladung am Carbonyl-C-Atom.
 -\t_Schritt 2 (Nukleophiler Angriff):_ Das freie Elektronenpaar des Ethanol-Sauerstoffatoms greift das elektrophile Carbonyl-C-Atom unter Bildung einer tetraedrischen Zwischenstufe an.
--\t_Schritt 3 (Eliminierung):_ Nach Protonenwanderung wird $\\text{H}_2\\text{O}$ abgespalten ($\\text{H}^+$-Regeneration).
+-\t_Schritt 3 (Eliminierung):_ Nach Protonenwanderung wird H_2O abgespalten (H^+-Regeneration).
 
 <Rahmen>
 _Sicherheit im Chemielabor: Umgang mit Mineralsäuren und Oxidationsmitteln_
--\t_Schutzkleidung:_ Bei allen Experimenten mit konzentrierter Schwefelsäure ($\\text{H}_2\\text{SO}_4$) und Dichromaten sind Schutzbrille, Laborkittel und Schutzhandschuhe zwingend zu tragen.
--\t_Verdünnungsregel für konzentrierte Schwefelsäure:_ „Erst das Wasser, dann die Säure, sonst geschieht das Ungeheure!“ Wegen der stark exothermen Hydratation niemals Wasser in konz. $\\text{H}_2\\text{SO}_4$ gießen.
--\t_Brandschutz:_ Ethanol und Ethylethanoat sind leicht entzündbare Flüssigkeiten (GHS02); daher erfolgt das Erwärmen im Schülerversuch ausschließlich im elektrisch beheizten Wasserbad ($80\\,^\\circ\\text{C}$).
--\t_Fachgerechte Entsorgung:_ Chrom(VI)-haltige Lösungen ($\\text{K}_2\\text{Cr}_2\\text{O}_7$) müssen im sauren Medium vollständig zu Chrom(III)-Ionen reduziert und im Sammelbehälter für Schwermetallsalze entsorgt werden.
+-\t_Schutzkleidung:_ Bei allen Experimenten mit konzentrierter Schwefelsäure (H_2SO_4) und Dichromaten sind Schutzbrille, Laborkittel und Schutzhandschuhe zwingend zu tragen.
+-\t_Verdünnungsregel für konzentrierte Schwefelsäure:_ „Erst das Wasser, dann die Säure, sonst geschieht das Ungeheure!“ Wegen der stark exothermen Hydratation niemals Wasser in konz. H_2SO_4 gießen.
+-\t_Brandschutz:_ Ethanol und Ethylethanoat sind leicht entzündbare Flüssigkeiten (GHS02); daher erfolgt das Erwärmen im Schülerversuch ausschließlich im elektrisch beheizten Wasserbad (80 °C).
+-\t_Fachgerechte Entsorgung:_ Chrom(VI)-haltige Lösungen (K_2Cr_2O_7) müssen im sauren Medium vollständig zu Chrom(III)-Ionen reduziert und im Sammelbehälter für Schwermetallsalze entsorgt werden.
 -\t_Erste Hilfe:_ Säurespritzer auf der Haut sofort mit reichlich fließendem Wasser abspülen.
 </Rahmen>
 
@@ -6637,37 +6661,37 @@ _Sicherheit im Chemielabor: Umgang mit Mineralsäuren und Oxidationsmitteln_
 
 ## 4.2 Strukturformeln und Massenwirkungsgesetz (MWG)
 
-#### Abb. 4.1: Strukturformeln der säurekatalysierten Veresterung und der $\\alpha$-D-Glucopyranose
+#### Abb. 4.1: Strukturformeln der säurekatalysierten Veresterung und der ~a-D-Glucopyranose
 
 <Bild> Strukturformel:
-Beschreibung mit Bildtext: Zweiteilige Darstellung organischer Strukturformeln. Teil A zeigt die säurekatalysierte Veresterung in Skelettformeln mit farbig hervorgehobenen funktionellen Gruppen: Ethansäure ($\\text{CH}_3\\text{COOH}$) + Ethanol ($\\text{C}_2\\text{H}_5\\text{OH}$) $\\rightleftharpoons$ Ethylethanoat ($\\text{CH}_3\\text{COOC}_2\\text{H}_5$) + $\\text{H}_2\\text{O}$ unter $\\text{H}^+$-Katalyse ($K_c \\approx 4{,}0$). Teil B zeigt die Haworth-Ringformel der $\\alpha$-D-Glucopyranose mit sechsgliedrigem Pyranosering, Ringsauerstoffatom, axialer OH-Gruppe an C1 ($\\alpha$-Stellung) und $\\text{CH}_2\\text{OH}$-Gruppe an C6.
+Beschreibung mit Bildtext: Zweiteilige Darstellung organischer Strukturformeln. Teil A zeigt die säurekatalysierte Veresterung in Skelettformeln mit farbig hervorgehobenen funktionellen Gruppen: Ethansäure (CH_3COOH) + Ethanol (C_2H_5OH) \\lra Ethylethanoat (CH_3COOC_2H_5) + H_2O unter H^+-Katalyse (K_c \\approx 4,0). Teil B zeigt die Haworth-Ringformel der ~a-D-Glucopyranose mit sechsgliedrigem Pyranosering, Ringsauerstoffatom, axialer OH-Gruppe an C1 (~a-Stellung) und CH_2OH-Gruppe an C6.
 </Bild>
 
-Im dynamischen Gleichgewicht ist der Quotient aus dem Produkt der Gleichgewichtskonzentrationen der Produkte und dem Produkt der Eduktkonzentrationen bei konstanter Temperatur unveränderlich. Diese quantitative Beziehung heißt Massenwirkungsgesetz (MWG): Für die Veresterung von Ethansäure mit Ethanol beträgt die Gleichgewichtskonstante bei Raumtemperatur $K_c \\approx 4{,}0$. Durch gezieltes Entfernen eines Reaktionsprodukts aus dem Gleichgewichtsgemisch lässt sich die Ausbeute an Ethylethanoat im Labor deutlich steigern.
+Im dynamischen Gleichgewicht ist der Quotient aus dem Produkt der Gleichgewichtskonzentrationen der Produkte und dem Produkt der Eduktkonzentrationen bei konstanter Temperatur unveränderlich. Diese quantitative Beziehung heißt Massenwirkungsgesetz (MWG): Für die Veresterung von Ethansäure mit Ethanol beträgt die Gleichgewichtskonstante bei Raumtemperatur K_c \\approx 4,0. Durch gezieltes Entfernen eines Reaktionsprodukts aus dem Gleichgewichtsgemisch lässt sich die Ausbeute an Ethylethanoat im Labor deutlich steigern.
 
-$$K_c = \\frac{c(\\text{CH}_3\\text{COOC}_2\\text{H}_5) \\cdot c(\\text{H}_2\\text{O})}{c(\\text{CH}_3\\text{COOH}) \\cdot c(\\text{C}_2\\text{H}_5\\text{OH})} \\approx 4{,}0$$
+K_c = \\frac{c(CH_3COOC_2H_5) \\cdot c(H_2O)}{c(CH_3COOH) \\cdot c(C_2H_5OH)} \\approx 4,0
 
 ### Aufgaben zur Redoxchemie und zum chemischen Gleichgewicht
 
--\t[leicht] Aufgabe 1: Bestimmen Sie alle Oxidationszahlen in $\\text{Cr}_2\\text{O}_7^{2-}$, $\\text{SO}_2$ und $\\text{SO}_3$.
+-\t[leicht] Aufgabe 1: Bestimmen Sie alle Oxidationszahlen in Cr_2O_7^{2-}, SO_2 und SO_3.
 -\t[mittel] Aufgabe 2: Formulieren Sie die Teilgleichungen der Oxidation und Reduktion für Versuch V4.1.
--\t[schwer] Aufgabe 3: Berechnen Sie die Gleichgewichtskonzentration an Ethylethanoat bei einem Ausgangsansatz von jeweils $1{,}0\\,\\text{mol}$ Ethansäure und $1{,}0\\,\\text{mol}$ Ethanol ($K_c = 4{,}0$).
+-\t[schwer] Aufgabe 3: Berechnen Sie die Gleichgewichtskonzentration an Ethylethanoat bei einem Ausgangsansatz von jeweils 1,0 mol Ethansäure und 1,0 mol Ethanol (K_c = 4,0).
 
 <Rahmen>
 _Beispielrechnung: Gleichgewichtskonstante Kc und Gleichgewichtsausbeute_
--\tAnsatz im geschlossenen System: $n_0(\\text{CH}_3\\text{COOH}) = 1{,}0\\,\\text{mol}$ und $n_0(\\text{C}_2\\text{H}_5\\text{OH}) = 1{,}0\\,\\text{mol}$ (Volumen $V$ kürzt sich heraus).
--\tIm Gleichgewicht seien $x\\,\\text{mol}$ Ester und $x\\,\\text{mol}$ Wasser entstanden; es verbleiben $(1{,}0 - x)\\,\\text{mol}$ Säure und Alkohol.
--\tEinsetzen in das Massenwirkungsgesetz: $K_c = \\frac{x^2}{(1{,}0 - x)^2} = 4{,}0$.
--\tZiehen der Quadratwurzel auf beiden Seiten: $\\frac{x}{1{,}0 - x} = 2{,}0 \\implies x = 2{,}0 - 2{,}0x \\implies 3{,}0x = 2{,}0$.
--\tErgebnis: Im Gleichgewicht liegen $n(\\text{Ester}) = n(\\text{H}_2\\text{O}) = \\frac{2}{3}\\,\\text{mol} \\approx 0{,}67\\,\\text{mol}$ (Ausbeute 66,7 %) sowie jeweils $0{,}33\\,\\text{mol}$ unverbrauchte Ethansäure und Ethanol vor.
--\tAusbeutesteigerung im Labor: Durch kontinuierliches Abdestillieren des leichtflüchtigen Esters (Siedepunkt $77\\,^\\circ\\text{C}$).
+-\tAnsatz im geschlossenen System: n_0(CH_3COOH) = 1,0 mol und n_0(C_2H_5OH) = 1,0 mol (Volumen V kürzt sich heraus).
+-\tIm Gleichgewicht seien x mol Ester und x mol Wasser entstanden; es verbleiben (1,0 - x) mol Säure und Alkohol.
+-\tEinsetzen in das Massenwirkungsgesetz: K_c = \\frac{x^2}{(1,0 - x)^2} = 4,0.
+-\tZiehen der Quadratwurzel auf beiden Seiten: \\frac{x}{1,0 - x} = 2,0 \\implies x = 2,0 - 2,0x \\implies 3,0x = 2,0.
+-\tErgebnis: Im Gleichgewicht liegen n(Ester) = n(H_2O) = \\frac{2}{3} mol \\approx 0,67 mol (Ausbeute 66,7 %) sowie jeweils 0,33 mol unverbrauchte Ethansäure und Ethanol vor.
+-\tAusbeutesteigerung im Labor: Durch kontinuierliches Abdestillieren des leichtflüchtigen Esters (Siedepunkt 77 °C).
 </Rahmen>
 
 <Rahmen>
 _Merksatz: Prinzip von Le Chatelier (Prinzip vom kleinsten Zwang)_
 -\tÜbt man auf ein chemisches System im Gleichgewicht durch Änderung von Konzentration, Druck oder Temperatur einen äußeren Zwang aus, so verschiebt sich die Gleichgewichtslage so, dass die Wirkung des äußeren Zwangs minimiert wird.
--\tTemperaturerhöhung begünstigt stets die endotherme Teilreaktion; Temperaturerniedrigung begünstigt die exotherme Teilreaktion (z. B. $\\text{SO}_3$-Bildung im Kontaktverfahren bei $450\\,^\\circ\\text{C}$).
--\tEin Katalysator setzt die Aktivierungsenergie $E_A$ herab, verändert aber niemals die Gleichgewichtskonstante $K_c$!
+-\tTemperaturerhöhung begünstigt stets die endotherme Teilreaktion; Temperaturerniedrigung begünstigt die exotherme Teilreaktion (z. B. SO_3-Bildung im Kontaktverfahren bei 450 °C).
+-\tEin Katalysator setzt die Aktivierungsenergie E_A herab, verändert aber niemals die Gleichgewichtskonstante K_c!
 </Rahmen>
 """
 
@@ -6739,26 +6763,26 @@ Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche 
 #### Abb. 6.1: Michaelis-Menten-Kinetik und Kompetitive Hemmung
 
 <Bild> Diagramm:
-Beschreibung mit Bildtext: Koordinatensystem mit der Substratkonzentration $[S]$ in mmol/L auf der Rechtsachse und der Reaktionsgeschwindigkeit $v$ auf der Hochachse sowie einem schematischen Schlüssel-Schloss-Modell der kompetitiven Hemmung rechts. Die grüne Sättigungskurve (ohne Hemmstoff) erreicht bei niedriger Substratkonzentration $K_M$ die halbe Maximalgeschwindigkeit $\\frac{1}{2}\\,v_{\\max}$ und nähert sich asymptotisch $v_{\\max}$ an; die orangefarbene Kurve (kompetitive Hemmung) erreicht $\\frac{1}{2}\\,v_{\\max}$ erst bei einer höheren Konzentration $K_M'$, strebt bei hohem $[S]$ aber derselben Maximalgeschwindigkeit $v_{\\max}$ zu.
+Beschreibung mit Bildtext: Koordinatensystem mit der Substratkonzentration [S] in mmol/L auf der Rechtsachse und der Reaktionsgeschwindigkeit v auf der Hochachse sowie einem schematischen Schlüssel-Schloss-Modell der kompetitiven Hemmung rechts. Die grüne Sättigungskurve (ohne Hemmstoff) erreicht bei niedriger Substratkonzentration K_M die halbe Maximalgeschwindigkeit \\frac{1}{2} v_{\\max} und nähert sich asymptotisch v_{\\max} an; die orangefarbene Kurve (kompetitive Hemmung) erreicht \\frac{1}{2} v_{\\max} erst bei einer höheren Konzentration K_M', strebt bei hohem [S] aber derselben Maximalgeschwindigkeit v_{\\max} zu.
 </Bild>
 
-Enzyme wirken als hochspezifische Biokatalysatoren, indem sie das Substrat im aktiven Zentrum nach dem Induced-Fit-Modell binden und die Aktivierungsenergie $E_A$ über einen Enzym-Substrat-Komplex $[ES]$ herabsetzen. Die Abhängigkeit der Reaktionsgeschwindigkeit $v$ von der Substratkonzentration $[S]$ folgt der Michaelis-Menten-Gleichung. Bei niedrigen Konzentrationen steigt $v$ nahezu linear an, während bei hohen Substratkonzentrationen alle aktiven Zentren der Enzymmoleküle gesättigt sind und $v_{\\max}$ asymptotisch erreicht wird:
+Enzyme wirken als hochspezifische Biokatalysatoren, indem sie das Substrat im aktiven Zentrum nach dem Induced-Fit-Modell binden und die Aktivierungsenergie E_A über einen Enzym-Substrat-Komplex [ES] herabsetzen. Die Abhängigkeit der Reaktionsgeschwindigkeit v von der Substratkonzentration [S] folgt der Michaelis-Menten-Gleichung. Bei niedrigen Konzentrationen steigt v nahezu linear an, während bei hohen Substratkonzentrationen alle aktiven Zentren der Enzymmoleküle gesättigt sind und v_{\\max} asymptotisch erreicht wird:
 
-$$v = \\frac{v_{\\max} \\cdot [S]}{K_M + [S]}$$
+v = \\frac{v_{\\max} \\cdot [S]}{K_M + [S]}
 
 <Rahmen>
 _Bio-Kompakt: Bedeutung der Michaelis-Konstante K_M und Formen der Enzymhemmung_
--\t_Michaelis-Konstante $K_M$:_ Gibt genau diejenige Substratkonzentration $[S]$ (in mmol/L) an, bei der die Hälfte der Maximalgeschwindigkeit ($v = \\frac{1}{2}\\,v_{\\max}$) erreicht wird. Ein kleiner $K_M$-Wert bedeutet eine hohe Affinität (Bindungsstärke) des Enzyms zu seinem Substrat.
--\t_Kompetitive Hemmung (Verdrängungshemmung):_ Der Inhibitor ähnelt strukturell dem Substrat und konkurriert um das aktive Zentrum. Die scheinbare Michaelis-Konstante $K_M'$ ist erhöht; durch hohe Substratkonzentrationen $[S]$ lässt sich der Hemmstoff jedoch verdrängen ($v_{\\max}$ bleibt gleich).
--\t_Allosterische (nicht-kompetitive) Hemmung:_ Der Effektor bindet außerhalb des aktiven Zentrums an ein allosterisches Zentrum und verändert die räumliche Konformation des Enzyms. Dadurch sinkt die Maximalgeschwindigkeit $v_{\\max}$, während $K_M$ unverändert bleibt.
--\t_Irreversible Hemmung (Enzymgifte):_ Schwermetall-Ionen (z. B. $\\text{Pb}^{2+}$, $\\text{Hg}^{2+}$, $\\text{Cu}^{2+}$) bilden kovalente Bindungen mit Schwefelgruppen (-SH) der Aminosäure Cystein und inaktivieren das Enzym dauerhaft.
--\t_Beispiel Katalase:_ Spaltet Wasserstoffperoxid ($2\\,\\text{H}_2\\text{O}_2 \\longrightarrow 2\\,\\text{H}_2\\text{O} + \\text{O}_2$) mit hoher Wechselzahl.
+-\t_Michaelis-Konstante K_M:_ Gibt genau diejenige Substratkonzentration [S] (in mmol/L) an, bei der die Hälfte der Maximalgeschwindigkeit (v = \\frac{1}{2} v_{\\max}) erreicht wird. Ein kleiner K_M-Wert bedeutet eine hohe Affinität (Bindungsstärke) des Enzyms zu seinem Substrat.
+-\t_Kompetitive Hemmung (Verdrängungshemmung):_ Der Inhibitor ähnelt strukturell dem Substrat und konkurriert um das aktive Zentrum. Die scheinbare Michaelis-Konstante K_M' ist erhöht; durch hohe Substratkonzentrationen [S] lässt sich der Hemmstoff jedoch verdrängen (v_{\\max} bleibt gleich).
+-\t_Allosterische (nicht-kompetitive) Hemmung:_ Der Effektor bindet außerhalb des aktiven Zentrums an ein allosterisches Zentrum und verändert die räumliche Konformation des Enzyms. Dadurch sinkt die Maximalgeschwindigkeit v_{\\max}, während K_M unverändert bleibt.
+-\t_Irreversible Hemmung (Enzymgifte):_ Schwermetall-Ionen (z. B. Pb^{2+}, Hg^{2+}, Cu^{2+}) bilden kovalente Bindungen mit Schwefelgruppen (-SH) der Aminosäure Cystein und inaktivieren das Enzym dauerhaft.
+-\t_Beispiel Katalase:_ Spaltet Wasserstoffperoxid (2 H_2O_2 \\to 2 H_2O + O_2) mit hoher Wechselzahl.
 </Rahmen>
 
 ### Tabelle 6.1: Messreihe zur Substratabhängigkeit der Katalase-Aktivität
 
 <Tabelle>
-Substrat $[S]$ (mmol/L)\t$v$ ohne Hemmstoff ($\\mu\\text{mol/min}$)\t$v$ mit Hemmstoff ($\\mu\\text{mol/min}$)\tSättigungsgrad (%)
+Substrat [S] (mmol/L)\tv ohne Hemmstoff (~mmol/min)\tv mit Hemmstoff (~mmol/min)\tSättigungsgrad (%)
 0,5\t18,2\t8,4\t22,8 %
 1,0\t32,0\t15,1\t40,0 %
 2,0\t48,0\t25,6\t60,0 %
@@ -6772,22 +6796,22 @@ Substrat $[S]$ (mmol/L)\t$v$ ohne Hemmstoff ($\\mu\\text{mol/min}$)\t$v$ mit Hem
 
 ## 6.2 Abhängigkeit der Enzymaktivität von Temperatur und pH-Wert
 
-Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche Tertiärstruktur von Enzymproteinen. Nach der RGT-Regel (Reaktionsgeschwindigkeit-Temperatur-Regel) erhöht eine Temperatursteigerung um $10\\,^\\circ\\text{C}$ die Umsatzrate zunächst um das 2- bis 3-Fache ($Q_{10} \\approx 2\\text{–}3$), da die kinetische Energie der Teilchen zunimmt. Oberhalb des Temperaturoptimums (beim Menschen ca. $37\\,^\\circ\\text{C}$ bis $40\\,^\\circ\\text{C}$) zerstört die Wärmebewegung jedoch Wasserstoffbrücken und führt zur irreversiblen Denaturierung. Ebenso besitzt jedes Enzym ein spezifisches pH-Optimum (Pepsin im Magen $\\text{pH} \\approx 2{,}0$; Speichel-Amylase $\\text{pH} \\approx 7{,}0$; Trypsin im Dünndarm $\\text{pH} \\approx 8{,}5$). Änderungen der Oxonium-Ionenkonzentration verändern die Ladung saurer ($-\\text{COO}^-$) und basischer ($-\\text{NH}_3^+$) Seitenketten, sodass Ionenbindungen im aktiven Zentrum gelöst werden und die Substratbindung drastisch abnimmt.
+Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche Tertiärstruktur von Enzymproteinen. Nach der RGT-Regel (Reaktionsgeschwindigkeit-Temperatur-Regel) erhöht eine Temperatursteigerung um 10 °C die Umsatzrate zunächst um das 2- bis 3-Fache (Q_{10} \\approx 2–3), da die kinetische Energie der Teilchen zunimmt. Oberhalb des Temperaturoptimums (beim Menschen ca. 37 °C bis 40 °C) zerstört die Wärmebewegung jedoch Wasserstoffbrücken und führt zur irreversiblen Denaturierung. Ebenso besitzt jedes Enzym ein spezifisches pH-Optimum (Pepsin im Magen pH \\approx 2,0; Speichel-Amylase pH \\approx 7,0; Trypsin im Dünndarm pH \\approx 8,5). Änderungen der Oxonium-Ionenkonzentration verändern die Ladung saurer (-COO^-) und basischer (-NH_3^+) Seitenketten, sodass Ionenbindungen im aktiven Zentrum gelöst werden und die Substratbindung drastisch abnimmt.
 
 ### Auswertungs- und Vertiefungsaufgaben zur Enzymkinetik
 
--\tAufgabe 1: Ermitteln Sie aus Abb. 6.1 und Tabelle 6.1 näherungsweise $v_{\\max}$ sowie $K_M$.
--\tAufgabe 2: Begründen Sie auf molekularer Ebene, warum bei kompetitiver Hemmung zwar die scheinbare Michaelis-Konstante $K_M'$ steigt, $v_{\\max}$ bei hohem $[S]$ jedoch erreicht wird.
--\tAufgabe 3: Berechnen Sie aus Tabelle 6.1 die prozentuale Hemmung bei $[S] = 1{,}0\\,\\text{mmol/L}$ im Vergleich zu $[S] = 32{,}0\\,\\text{mmol/L}$ und erläutern Sie das Ergebnis.
--\tAufgabe 4: Vergleichen Sie einen anorganischen Katalysator (z. B. $\\text{H}_3\\text{O}^+$) mit einem Enzym hinsichtlich Spezifität und Temperaturstabilität und erklären Sie, warum Fieber über $42\\,^\\circ\\text{C}$ lebensbedrohlich ist.
+-\tAufgabe 1: Ermitteln Sie aus Abb. 6.1 und Tabelle 6.1 näherungsweise v_{\\max} sowie K_M.
+-\tAufgabe 2: Begründen Sie auf molekularer Ebene, warum bei kompetitiver Hemmung zwar die scheinbare Michaelis-Konstante K_M' steigt, v_{\\max} bei hohem [S] jedoch erreicht wird.
+-\tAufgabe 3: Berechnen Sie aus Tabelle 6.1 die prozentuale Hemmung bei [S] = 1,0 mmol/L im Vergleich zu [S] = 32,0 mmol/L und erläutern Sie das Ergebnis.
+-\tAufgabe 4: Vergleichen Sie einen anorganischen Katalysator (z. B. H_3O^+) mit einem Enzym hinsichtlich Spezifität und Temperaturstabilität und erklären Sie, warum Fieber über 42 °C lebensbedrohlich ist.
 
 <Rahmen>
 _Zusammenfassung Abiturwissen: Biokatalyse, Enzymkinetik und Stoffwechselregulation_
 -\t_Aktives Zentrum & Induced-Fit-Modell:_ Bei der Anlagerung des Substrats passt sich die Raumstruktur des aktiven Zentrums dynamisch an (Substrat- und Wirkungsspezifität).
--\t_Energetische Wirkung:_ Enzyme senken ausschließlich die Aktivierungsenergie $E_A$ über den Enzym-Substrat-Komplex $[ES]$, verändern jedoch weder die Reaktionsenthalpie $\\Delta H$ noch die Gleichgewichtslage einer reversiblen Stoffwechselreaktion.
--\t_Michaelis-Konstante $K_M$ als Affinitätsmaß:_ Kleines $K_M$ kennzeichnet hohe Substrataffinität; kompetitive Inhibitoren erhöhen scheinbar $K_M'$ ohne $v_{\\max}$ zu senken, während allosterische Hemmstoffe $v_{\\max}$ herabsetzen.
+-\t_Energetische Wirkung:_ Enzyme senken ausschließlich die Aktivierungsenergie E_A über den Enzym-Substrat-Komplex [ES], verändern jedoch weder die Reaktionsenthalpie ~D H noch die Gleichgewichtslage einer reversiblen Stoffwechselreaktion.
+-\t_Michaelis-Konstante K_M als Affinitätsmaß:_ Kleines K_M kennzeichnet hohe Substrataffinität; kompetitive Inhibitoren erhöhen scheinbar K_M' ohne v_{\\max} zu senken, während allosterische Hemmstoffe v_{\\max} herabsetzen.
 -\t_Negative Rückkopplung (Endprodukthemmung):_ In mehrschrittigen Stoffwechselketten wirkt das Endprodukt häufig als allosterischer Inhibitor des Schrittmacherenzyms und verhindert Überproduktion.
--\t_Kofaktoren und Koenzyme:_ Viele Enzyme benötigen für ihre katalytische Aktivität zusätzliche Metall-Ionen (z. B. $\\text{Mg}^{2+}$, $\\text{Zn}^{2+}$, $\\text{Fe}^{2+}$) oder organische Überträgermoleküle ($\\text{NAD}^+$, FAD, ATP, Coenzym A).
+-\t_Kofaktoren und Koenzyme:_ Viele Enzyme benötigen für ihre katalytische Aktivität zusätzliche Metall-Ionen (z. B. Mg^{2+}, Zn^{2+}, Fe^{2+}) oder organische Überträgermoleküle (NAD^+, FAD, ATP, Coenzym A).
 -\t_Kompartimentierung:_ Durch Reaktionsräume (Mitochondrien, Chloroplasten, Lysosomen) können unterschiedliche pH-Werte und Enzymgarnituren gleichzeitig in derselben Zelle arbeiten.
 </Rahmen>
 """
@@ -6945,7 +6969,7 @@ Vakuum-Photozelle mit bestrahlter Kalium-Kathode, Ringanode, einstellbarer Gegen
 _Lernwegweiser zu Kapitel 5: Vom Wellenmodell zum Quantenobjekt Photon_
 -\tIn Abschnitt 5.1 untersuchen Sie die Kohärenz und Interferenz von Licht am Doppelspalt und leiten die Bedingung für konstruktive und destruktive Interferenz geometrisch her.
 -\tIn Abschnitt 5.2 nutzen Sie optische Mehrfachspalt-Gitter zur präzisen Wellenlängenbestimmung atomarer Spektrallinien (Fraunhofer-Linien und Quecksilber-Dampflampe).
--\tAbschließend zeigt der äußere lichtelektrische Effekt (Hallwachs- und Photoeffekt), dass Energie im elektromagnetischen Strahlungsfeld nur in Lichtquanten $E = h \\cdot f$ übertragen wird. Alle Abbildungen, Tabellen und Bilder sind oben mit Seitenzahl verzeichnet.
+-\tAbschließend zeigt der äußere lichtelektrische Effekt (Hallwachs- und Photoeffekt), dass Energie im elektromagnetischen Strahlungsfeld nur in Lichtquanten E = h \\cdot f übertragen wird. Alle Abbildungen, Tabellen und Bilder sind oben mit Seitenzahl verzeichnet.
 </Rahmen>
 
 ((45))
@@ -6954,98 +6978,98 @@ _Lernwegweiser zu Kapitel 5: Vom Wellenmodell zum Quantenobjekt Photon_
 
 ## 5.1 Interferenz und Beugung am Doppelspalt
 
-Im Jahr 1802 gelang dem englischen Naturforscher Thomas Young mit dem Doppelspaltversuch der entscheidende experimentelle Nachweis für die Wellennatur des Lichts. Trifft monochromatisches, kohärentes Licht der Wellenlänge $\\lambda$ auf zwei eng benachbarte parallele Spalte mit dem Spaltmittenabstand $d$, so gehen von beiden Öffnungen nach dem Huygens’schen Prinzip zylindrische Elementarwellen aus, die sich im Raum hinter der Blende ungestört überlagern.
+Im Jahr 1802 gelang dem englischen Naturforscher Thomas Young mit dem Doppelspaltversuch der entscheidende experimentelle Nachweis für die Wellennatur des Lichts. Trifft monochromatisches, kohärentes Licht der Wellenlänge ~l auf zwei eng benachbarte parallele Spalte mit dem Spaltmittenabstand d, so gehen von beiden Öffnungen nach dem Huygens’schen Prinzip zylindrische Elementarwellen aus, die sich im Raum hinter der Blende ungestört überlagern.
 
 ### Versuchsaufbau mit dem Doppelspalt
 
 #### Abb. 5.1: Interferenzmuster und Intensitätsverteilung am Doppelspalt
 
 <Bild> Diagramm:
-Beschreibung mit Bildtext: Schematische Darstellung der Doppelspalt-Interferenz links mit einfallendem Laserstrahl ($\\lambda = 632{,}8\\,\\text{nm}$), Doppelspaltblende ($S_1$, $S_2$), halbkreisförmigen Huygens’schen Elementarwellen und den Interferenzmaxima $k = -2, -1, 0, 1, 2$ auf dem Beobachtungsschirm sowie dem zugehörigen Intensitätsverlauf $I(y)$ rechts mit dem Hauptmaximum bei $k = 0$ und der Bedingung $\\Delta s = k \\cdot \\lambda$.
+Beschreibung mit Bildtext: Schematische Darstellung der Doppelspalt-Interferenz links mit einfallendem Laserstrahl (~l = 632,8 nm), Doppelspaltblende (S_1, S_2), halbkreisförmigen Huygens’schen Elementarwellen und den Interferenzmaxima k = -2, -1, 0, 1, 2 auf dem Beobachtungsschirm sowie dem zugehörigen Intensitätsverlauf I(y) rechts mit dem Hauptmaximum bei k = 0 und der Bedingung ~D s = k \\cdot ~l.
 </Bild>
 
-Auf dem Beobachtungsschirm im Abstand $L \\gg d$ entsteht ein charakteristisches Streifenmuster aus abwechselnd hellen Interferenzmaxima und dunklen Interferenzminima. Ein helles Maximum $k$-ter Ordnung tritt immer dort auf, wo der Gangunterschied $\\Delta s$ der beiden Teilwellen ein ganzzahliges Vielfaches der Wellenlänge $\\lambda$ beträgt ($\\Delta s = k \\cdot \\lambda$ mit $k = 0, 1, 2, \\dots$). Beträgt der Gangunterschied hingegen ein ungeradzahliges Vielfaches einer halben Wellenlänge, löschen sich Wellenberg und Wellental durch destruktive Interferenz gegenseitig aus.
+Auf dem Beobachtungsschirm im Abstand L \\gg d entsteht ein charakteristisches Streifenmuster aus abwechselnd hellen Interferenzmaxima und dunklen Interferenzminima. Ein helles Maximum k-ter Ordnung tritt immer dort auf, wo der Gangunterschied ~D s der beiden Teilwellen ein ganzzahliges Vielfaches der Wellenlänge ~l beträgt (~D s = k \\cdot ~l mit k = 0, 1, 2, \\dots). Beträgt der Gangunterschied hingegen ein ungeradzahliges Vielfaches einer halben Wellenlänge, löschen sich Wellenberg und Wellental durch destruktive Interferenz gegenseitig aus.
 
 <Rahmen>
 _Bild 5.1: Historisches Doppelspalt-Interferenzmuster nach Thomas Young_
--\t_Kohärenzbedingung:_ Zeitlich und räumlich konstante Phasenbeziehung zwischen beiden Elementarwellenzügen; im modernen Schulexperiment durch einen He-Ne-Laser ($\\lambda = 632{,}8\\,\\text{nm}$).
--\t_Konstruktive Interferenz (Verstärkung):_ $\\Delta s = d \\cdot \\sin(\\alpha_k) = k \\cdot \\lambda$ (für $k = 0, 1, 2, \\dots$).
--\t_Destruktive Interferenz (Auslöschung):_ $\\Delta s = d \\cdot \\sin(\\alpha_k) = (k + \\frac{1}{2}) \\cdot \\lambda$.
--\t_Kleinwinkelnäherung (für kleine Winkel $\\alpha < 10^\\circ$ gilt $\\sin(\\alpha) \\approx \\tan(\\alpha) = \\frac{y_k}{L}$):_ Der Streifenabstand benachbarter Maxima auf dem Schirm beträgt $\\Delta y = \\frac{\\lambda \\cdot L}{d}$.
--\tJe kleiner der Spaltabstand $d$ gewählt wird, desto weiter rücken die Maxima auseinander.
+-\t_Kohärenzbedingung:_ Zeitlich und räumlich konstante Phasenbeziehung zwischen beiden Elementarwellenzügen; im modernen Schulexperiment durch einen He-Ne-Laser (~l = 632,8 nm).
+-\t_Konstruktive Interferenz (Verstärkung):_ ~D s = d \\cdot \\sin(~a_k) = k \\cdot ~l (für k = 0, 1, 2, \\dots).
+-\t_Destruktive Interferenz (Auslöschung):_ ~D s = d \\cdot \\sin(~a_k) = (k + \\frac{1}{2}) \\cdot ~l.
+-\t_Kleinwinkelnäherung (für kleine Winkel ~a < 10° gilt \\sin(~a) \\approx \\tan(~a) = \\frac{y_k}{L}):_ Der Streifenabstand benachbarter Maxima auf dem Schirm beträgt ~D y = \\frac{~l \\cdot L}{d}.
+-\tJe kleiner der Spaltabstand d gewählt wird, desto weiter rücken die Maxima auseinander.
 </Rahmen>
 
 ((46))
 
 #### Herleitung der Gangunterschiedsformel
 
-Da der Schirmabstand $L$ im Experiment sehr viel größer als der Spaltmittenabstand $d$ ist (Fraunhofer-Näherung), verlaufen die beiden Strahlen von den Spalten $S_1$ und $S_2$ zu einem Schirmpunkt $P$ nahezu parallel unter demselben Beugungswinkel $\\alpha$. Fällen wir vom oberen Spalt $S_1$ das Lot auf den unteren Strahl, entsteht ein rechtwinkliges Dreieck mit der Hypotenuse $d$ und der Gegenkathete $\\Delta s$. Daraus folgt unmittelbar $\\Delta s = d \\cdot \\sin(\\alpha)$.
+Da der Schirmabstand L im Experiment sehr viel größer als der Spaltmittenabstand d ist (Fraunhofer-Näherung), verlaufen die beiden Strahlen von den Spalten S_1 und S_2 zu einem Schirmpunkt P nahezu parallel unter demselben Beugungswinkel ~a. Fällen wir vom oberen Spalt S_1 das Lot auf den unteren Strahl, entsteht ein rechtwinkliges Dreieck mit der Hypotenuse d und der Gegenkathete ~D s. Daraus folgt unmittelbar ~D s = d \\cdot \\sin(~a).
 
 ## 5.2 Optisches Gitter und hochauflösende Spektroskopie
 
-Ersetzt man den Doppelspalt durch ein optisches Transmissionsgitter mit $N \\gg 100$ äquidistanten Spalten (Gitterkonstante $g = \\frac{1}{n}$), so bleibt die Lage der Hauptmaxima bei $g \\cdot \\sin(\\alpha_k) = k \\cdot \\lambda$ erhalten. Durch die Vielstrahlinterferenz aller $N$ Elementarwellen werden die Hauptmaxima jedoch extrem scharf und lichtstark, während zwischen zwei Hauptmaxima jeweils $N - 1$ Nebenminima nahezu vollständige Dunkelheit erzeugen.
+Ersetzt man den Doppelspalt durch ein optisches Transmissionsgitter mit N \\gg 100 äquidistanten Spalten (Gitterkonstante g = \\frac{1}{n}), so bleibt die Lage der Hauptmaxima bei g \\cdot \\sin(~a_k) = k \\cdot ~l erhalten. Durch die Vielstrahlinterferenz aller N Elementarwellen werden die Hauptmaxima jedoch extrem scharf und lichtstark, während zwischen zwei Hauptmaxima jeweils N - 1 Nebenminima nahezu vollständige Dunkelheit erzeugen.
 
 #### Abb. 5.2: Beugung am optischen Gitter und Linienspektrum
 
-Schematischer Strahlengang am Mehrfachspalt (Gitterkonstante $g = 1{,}67\\,\\mu\\text{m}$, entsprechend 600 Linien/mm): Kurzwelliges violettes Licht (405 nm) wird weniger stark gebeugt als langwelliges rotes Licht (656 nm).
+Schematischer Strahlengang am Mehrfachspalt (Gitterkonstante g = 1,67 ~mm, entsprechend 600 Linien/mm): Kurzwelliges violettes Licht (405 nm) wird weniger stark gebeugt als langwelliges rotes Licht (656 nm).
 
 ### Tab. 5.1: Wellenlängen und Beugungswinkel ausgewählter Spektrallinien
 
 <Tabelle>
-Spektrallinie / Element\tFarbeindruck\tWellenlänge $\\lambda$ (nm)\tWinkel $\\alpha_1$ (1. Ordnung)
-Quecksilber (Hg-Linie h)\tViolett\t404,7 nm\t$14{,}1^\\circ$
-Wasserstoff (H-beta)\tBlaugrün (Cyan)\t486,1 nm\t$17{,}0^\\circ$
-Natrium-Doppellinie (Na-D)\tGelb-Orange\t589,3 nm\t$20{,}7^\\circ$
-Helium-Neon-Laser\tHellrot\t632,8 nm\t$22{,}3^\\circ$
-Wasserstoff (H-alpha)\tTiefrot\t656,3 nm\t$23{,}2^\\circ$
+Spektrallinie / Element\tFarbeindruck\tWellenlänge ~l (nm)\tWinkel ~a_1 (1. Ordnung)
+Quecksilber (Hg-Linie h)\tViolett\t404,7 nm\t14,1°
+Wasserstoff (H-beta)\tBlaugrün (Cyan)\t486,1 nm\t17,0°
+Natrium-Doppellinie (Na-D)\tGelb-Orange\t589,3 nm\t20,7°
+Helium-Neon-Laser\tHellrot\t632,8 nm\t22,3°
+Wasserstoff (H-alpha)\tTiefrot\t656,3 nm\t23,2°
 </Tabelle>
 
 <Rahmen>
 _Methoden-Kasten: Gitter-Spektroskopie in Astrophysik und Labor_
--\t_Auflösungsvermögen eines Gitters:_ $R = \\frac{\\lambda}{\\Delta\\lambda} = k \\cdot N$ (wächst mit der beleuchteten Spaltzahl $N$).
--\t_Beispiel Natrium-D-Doppellinie ($\\lambda_1 = 589{,}0\\,\\text{nm}$ und $\\lambda_2 = 589{,}6\\,\\text{nm}$):_ Um beide Linien in der ersten Beugungsordnung ($k = 1$) getrennt aufzulösen, müssen mindestens $N \\approx 983$ Gitterfurchen kohärent ausgeleuchtet werden.
--\t_Maximal beobachtbare Beugungsordnung:_ Da $\\sin(\\alpha_k) \\le 1$ gelten muss, folgt $k_{\\max} = \\lfloor \\frac{g}{\\lambda} \\rfloor$.
+-\t_Auflösungsvermögen eines Gitters:_ R = \\frac{~l}{~D~l} = k \\cdot N (wächst mit der beleuchteten Spaltzahl N).
+-\t_Beispiel Natrium-D-Doppellinie (~l_1 = 589,0 nm und ~l_2 = 589,6 nm):_ Um beide Linien in der ersten Beugungsordnung (k = 1) getrennt aufzulösen, müssen mindestens N \\approx 983 Gitterfurchen kohärent ausgeleuchtet werden.
+-\t_Maximal beobachtbare Beugungsordnung:_ Da \\sin(~a_k) \\le 1 gelten muss, folgt k_{\\max} = \\lfloor \\frac{g}{~l} \\rfloor.
 -\t_Chemische Spektralanalyse (Bunsen & Kirchhoff):_ Jedes chemische Element besitzt ein unverwechselbares Linienspektrum als optischen Fingerabdruck elektronischer Übergänge.
 -\tIn der Astrophysik ermöglicht die Verschiebung der Fraunhofer’schen Absorptionslinien (Doppler-Effekt) die exakte Bestimmung der Radialgeschwindigkeit ferner Galaxien.
 -\t_Unterschied zum Dispersionsprisma:_ Beim optischen Gitter wird langwelliges rotes Licht stärker abgelenkt als kurzwelliges blaues Licht (Normaldispersion beim Prisma ist umgekehrt).
--\t_Eichung im Schülerexperiment:_ Mit der bekannten He-Ne-Laserwellenlänge $\\lambda = 632{,}8\\,\\text{nm}$ lässt sich zunächst die Gitterkonstante $g$ eines unbekannten optischen Gitters bestimmen.
+-\t_Eichung im Schülerexperiment:_ Mit der bekannten He-Ne-Laserwellenlänge ~l = 632,8 nm lässt sich zunächst die Gitterkonstante g eines unbekannten optischen Gitters bestimmen.
 </Rahmen>
 
 ((47))
 
 ### Photoelektrischer Effekt und Lichtquantenhypothese
 
-Bestrahlt man eine metallische Photokathode (z. B. Cäsium oder Kalium) mit kurzwelligem ultraviolettem oder blauem Licht, so werden augenblicklich Leitungselektronen aus der Metalloberfläche ausgelöst (äußerer lichtelektrischer Effekt). Nach der klassischen Wellentheorie müsste die maximale kinetische Energie $E_{\\text{kin,max}}$ der Photoelektronen von der Bestrahlungsstärke (Intensität) des Lichts abhängen. Das Experiment mit der Gegenspannungsmethode zeigt jedoch: $E_{\\text{kin,max}}$ hängt ausschließlich linear von der Lichtfrequenz $f$ ab! Albert Einstein deutete diesen Befund 1905 mit seiner Lichtquantenhypothese: Elektromagnetische Strahlung der Frequenz $f$ besteht aus einzelnen Energiequanten (Photonen) der Energie $E_{\\text{Photon}} = h \\cdot f$ mit dem Planck’schen Wirkungsquantum $h = 6{,}626 \\cdot 10^{-34}\\,\\text{J}\\cdot\\text{s}$.
+Bestrahlt man eine metallische Photokathode (z. B. Cäsium oder Kalium) mit kurzwelligem ultraviolettem oder blauem Licht, so werden augenblicklich Leitungselektronen aus der Metalloberfläche ausgelöst (äußerer lichtelektrischer Effekt). Nach der klassischen Wellentheorie müsste die maximale kinetische Energie E_{kin,max} der Photoelektronen von der Bestrahlungsstärke (Intensität) des Lichts abhängen. Das Experiment mit der Gegenspannungsmethode zeigt jedoch: E_{kin,max} hängt ausschließlich linear von der Lichtfrequenz f ab! Albert Einstein deutete diesen Befund 1905 mit seiner Lichtquantenhypothese: Elektromagnetische Strahlung der Frequenz f besteht aus einzelnen Energiequanten (Photonen) der Energie E_{Photon} = h \\cdot f mit dem Planck’schen Wirkungsquantum h = 6,626 \\cdot 10^{-34} J \\cdot s.
 
 #### Bild 5.2: Schematische Darstellung einer Photozelle zur Gegenspannung
 
-Vakuum-Photozelle mit bestrahlter Kalium-Kathode, Ringanode, einstellbarer Gegenspannung $U_G$ und Picoamperemeter: Bei $e \\cdot U_G = E_{\\text{kin,max}} = h \\cdot f - W_A$ sinkt der Photostrom exakt auf null.
+Vakuum-Photozelle mit bestrahlter Kalium-Kathode, Ringanode, einstellbarer Gegenspannung U_G und Picoamperemeter: Bei e \\cdot U_G = E_{kin,max} = h \\cdot f - W_A sinkt der Photostrom exakt auf null.
 
 ### Tab. 5.2: Austrittsarbeit ausgewählter Metalle beim Photoeffekt
 
 <Tabelle>
-Kathodenmetall\tAustrittsarbeit $W_A$ (eV)\tGrenzfrequenz $f_G$ ($10^{14}\\,\\text{Hz}$)\tGrenzwellenlänge $\\lambda_G$ (nm)
-Cäsium (Cs)\t1,94 eV\t$4{,}69 \\cdot 10^{14}\\,\\text{Hz}$\t639 nm (Rot)
-Kalium (K)\t2,25 eV\t$5{,}44 \\cdot 10^{14}\\,\\text{Hz}$\t551 nm (Grün)
-Natrium (Na)\t2,28 eV\t$5{,}51 \\cdot 10^{14}\\,\\text{Hz}$\t544 nm (Grün)
-Zink (Zn)\t4,31 eV\t$10{,}4 \\cdot 10^{14}\\,\\text{Hz}$\t288 nm (UV)
-Platin (Pt)\t5,32 eV\t$12{,}9 \\cdot 10^{14}\\,\\text{Hz}$\t233 nm (UV)
+Kathodenmetall\tAustrittsarbeit W_A (eV)\tGrenzfrequenz f_G (10^{14} Hz)\tGrenzwellenlänge ~l_G (nm)
+Cäsium (Cs)\t1,94 eV\t4,69 \\cdot 10^{14} Hz\t639 nm (Rot)
+Kalium (K)\t2,25 eV\t5,44 \\cdot 10^{14} Hz\t551 nm (Grün)
+Natrium (Na)\t2,28 eV\t5,51 \\cdot 10^{14} Hz\t544 nm (Grün)
+Zink (Zn)\t4,31 eV\t10,4 \\cdot 10^{14} Hz\t288 nm (UV)
+Platin (Pt)\t5,32 eV\t12,9 \\cdot 10^{14} Hz\t233 nm (UV)
 </Tabelle>
 
 ### Übungsaufgaben zu Wellenoptik und Quantenphysik
 
--\tAufgabe 1: Berechnen Sie aus Tab. 5.1 die Gitterkonstante $g$ des verwendeten optischen Gitters.
--\tAufgabe 2: Begründen Sie mithilfe von Tab. 5.2, warum rotes Laserlicht ($\\lambda = 632{,}8\\,\\text{nm}$) zwar an einer Cäsium-Kathode, nicht aber an einer Kalium- oder Zink-Kathode Photoelektronen auslöst.
--\tAufgabe 3: Bestimmen Sie die maximale kinetische Energie und Geschwindigkeit der Photoelektronen beim Bestrahlen einer Kalium-Kathode mit violettem Quecksilberlicht ($\\lambda = 404{,}7\\,\\text{nm}$).
+-\tAufgabe 1: Berechnen Sie aus Tab. 5.1 die Gitterkonstante g des verwendeten optischen Gitters.
+-\tAufgabe 2: Begründen Sie mithilfe von Tab. 5.2, warum rotes Laserlicht (~l = 632,8 nm) zwar an einer Cäsium-Kathode, nicht aber an einer Kalium- oder Zink-Kathode Photoelektronen auslöst.
+-\tAufgabe 3: Bestimmen Sie die maximale kinetische Energie und Geschwindigkeit der Photoelektronen beim Bestrahlen einer Kalium-Kathode mit violettem Quecksilberlicht (~l = 404,7 nm).
 
 <Rahmen>
 _Merksatz: Einstein’sche Gleichung des Photoeffekts und Welle-Teilchen-Dualismus_
--\t_Energiebilanz beim Photoeffekt:_ $E_{\\text{kin,max}} = h \\cdot f - W_A = e \\cdot U_G$.
--\t_Grenzfrequenz $f_G = \\frac{W_A}{h}$:_ Unterhalb von $f_G$ werden selbst bei höchster Lichtintensität keine Elektronen ausgelöst; oberhalb von $f_G$ setzt der Photostrom verzögerungsfrei ein.
--\t_Bedeutung der Lichtintensität:_ Eine höhere Bestrahlungsstärke bedeutet mehr Photonen pro Sekunde und erhöht die Stromstärke $I_{\\text{Photo}}$, nicht jedoch die Einzelenergie $h \\cdot f$.
+-\t_Energiebilanz beim Photoeffekt:_ E_{kin,max} = h \\cdot f - W_A = e \\cdot U_G.
+-\t_Grenzfrequenz f_G = \\frac{W_A}{h}:_ Unterhalb von f_G werden selbst bei höchster Lichtintensität keine Elektronen ausgelöst; oberhalb von f_G setzt der Photostrom verzögerungsfrei ein.
+-\t_Bedeutung der Lichtintensität:_ Eine höhere Bestrahlungsstärke bedeutet mehr Photonen pro Sekunde und erhöht die Stromstärke I_{Photo}, nicht jedoch die Einzelenergie h \\cdot f.
 -\t_Welle-Teilchen-Dualismus:_ Bei der Ausbreitung im Raum (Beugung am Doppelspalt und Gitter) zeigt Licht Welleneigenschaften; bei der Wechselwirkung mit Materie (Emission und Absorption) tritt sein Teilchencharakter in Form unteilbarer Lichtquanten (Photonen) hervor.
--\t_Umrechnung der Energieeinheit Elektronenvolt:_ $1\\,\\text{eV} = 1{,}602 \\cdot 10^{-19}\\,\\text{J}$.
--\t_Impuls eines Photons:_ $p = \\frac{E}{c} = \\frac{h}{\\lambda}$ (experimentell bestätigt durch den Compton-Effekt).
+-\t_Umrechnung der Energieeinheit Elektronenvolt:_ 1 eV = 1,602 \\cdot 10^{-19} J.
+-\t_Impuls eines Photons:_ p = \\frac{E}{c} = \\frac{h}{~l} (experimentell bestätigt durch den Compton-Effekt).
 </Rahmen>
 """
 
@@ -7121,14 +7145,14 @@ Ein Algorithmus ist eine eindeutige, ausführbare und endliche Handlungsvorschri
 
 <Bild> Strukturdiagramm:
 Beschreibung mit Bildtext: Programmablaufplan (PAP) zur Hinderniserkennung und Ausweichsteuerung eines Roboters in einer Endlosschleife (alle 50 ms):
-Start \\to Ultraschallsensor: Messe Abstand $d$ (cm) \\to Entscheidung: $d < 25\\,\\text{cm}$?
-Ja \\to Stoppe Motoren und drehe $90^\\circ$ nach rechts.
-Nein \\to Fahre geradeaus (Geschwindigkeit $v = 50\\,\\%$).
+Start \\to Ultraschallsensor: Messe Abstand d (cm) \\to Entscheidung: d < 25 cm?
+Ja \\to Stoppe Motoren und drehe 90° nach rechts.
+Nein \\to Fahre geradeaus (Geschwindigkeit v = 50 %).
 </Bild>
 
 <Rahmen>
 _Mediencode 74108-18: Interaktive Simulation Labyrinth-Roboter_
--\tTeste den Programmablaufplan aus Abb. 1.1 im virtuellen 2D-Parcours mit verschiedenen Schwellenwerten ($d < 15\\,\\text{cm}$, $d < 25\\,\\text{cm}$, $d < 40\\,\\text{cm}$) und beobachte die Fahrspur des Roboters.
+-\tTeste den Programmablaufplan aus Abb. 1.1 im virtuellen 2D-Parcours mit verschiedenen Schwellenwerten (d < 15 cm, d < 25 cm, d < 40 cm) und beobachte die Fahrspur des Roboters.
 </Rahmen>
 
 <Rahmen>
@@ -7145,25 +7169,25 @@ _Merksatz: Algorithmus und Grundstrukturen nach Böhm und Jacopini_
 
 ### Logische Verknüpfungen und Sensordaten-Auswertung
 
-Damit ein autonomer Transportroboter in einer Werkhalle nicht mit Regalen oder Personen kollidiert, kombiniert seine Steuerung oft mehrere Sensoren über boolesche Operatoren (_UND_, _ODER_, _NICHT_). Ein Ausweichmanöver wird genau dann eingeleitet, wenn der vordere Ultraschallsensor ein Hindernis meldet ($A = 1$) _oder_ der Stoßfänger-Taster ausgelöst wird ($B = 1$).
+Damit ein autonomer Transportroboter in einer Werkhalle nicht mit Regalen oder Personen kollidiert, kombiniert seine Steuerung oft mehrere Sensoren über boolesche Operatoren (_UND_, _ODER_, _NICHT_). Ein Ausweichmanöver wird genau dann eingeleitet, wenn der vordere Ultraschallsensor ein Hindernis meldet (A = 1) _oder_ der Stoßfänger-Taster ausgelöst wird (B = 1).
 
 ### Tabelle 1.1: Wahrheitstabelle und Aktor-Reaktion der Robotersteuerung
 
 <Tabelle>
 Sensor A (Abstand < 25 cm)\tSensor B (Taster vorn)\tVerknüpfung A ODER B\tAktor-Befehl (Fahrmotoren)
-0 (frei)\t0 (nicht gedrückt)\t0 (falsch)\tGeradeaus fahren ($v = 50\\,\\%$)
+0 (frei)\t0 (nicht gedrückt)\t0 (falsch)\tGeradeaus fahren (v = 50 %)
 0 (frei)\t1 (gedrückt)\t1 (wahr)\tSofort stoppen & zurücksetzen
-1 (Hindernis nah)\t0 (nicht gedrückt)\t1 (wahr)\tStoppen & $90^\\circ$ rechts drehen
+1 (Hindernis nah)\t0 (nicht gedrückt)\t1 (wahr)\tStoppen & 90° rechts drehen
 1 (Hindernis nah)\t1 (gedrückt)\t1 (wahr)\tNot-Stopp & Warnsignalton
 </Tabelle>
 
 ### Aufgabe 1: Programmablaufplan nachvollziehen (Trace-Tabelle)
 
-Der Ultraschallsensor liefert nacheinander die Messwerte $d = 62\\,\\text{cm}$, $d = 38\\,\\text{cm}$, $d = 19\\,\\text{cm}$ und $d = 45\\,\\text{cm}$. Gib für jeden Messwert an, welchen Zweig der Roboter in Abb. 1.1 durchläuft.
+Der Ultraschallsensor liefert nacheinander die Messwerte d = 62 cm, d = 38 cm, d = 19 cm und d = 45 cm. Gib für jeden Messwert an, welchen Zweig der Roboter in Abb. 1.1 durchläuft.
 
 ### Aufgabe 2: Erweiterung um einen linken und rechten Seitensensor
 
-Formuliere eine geschachtelte Wenn-Dann-Sonst-Bedingung, mit der der Roboter vor einer Drehung prüft, ob rechts mehr Platz ist als links ($d_{\\text{rechts}} > d_{\\text{links}}$).
+Formuliere eine geschachtelte Wenn-Dann-Sonst-Bedingung, mit der der Roboter vor einer Drehung prüft, ob rechts mehr Platz ist als links (d_{rechts} > d_{links}).
 
 ### Aufgabe 3: Boolesche Algebra im Alltag
 
@@ -7246,23 +7270,23 @@ Hinweis zur Selbstkontrolle: Nutzen Sie für Teilaufgabe b) die Differenzfunktio
 
 ## 2.1 Charakteristische Punkte, Ableitungsfunktion und Integralfläche
 
-Eine ganzrationale Funktion $n$-ten Grades besitzt die allgemeine Funktionsgleichung $f(x) = a_n \\cdot x^n + a_{n-1} \\cdot x^{n-1} + \\dots + a_1 \\cdot x + a_0$ mit $a_n \\neq 0$. Ihr globales Verhalten für betragsgroße Werte von $x$ wird ausschließlich vom Leitkoeffizienten $a_n$ und dem höchsten Exponenten $n$ bestimmt. Mithilfe der ersten und zweiten Ableitungsfunktion $f'(x)$ und $f''(x)$ lassen sich lokale Extrempunkte sowie Wendepunkte exakt berechnen.
+Eine ganzrationale Funktion n-ten Grades besitzt die allgemeine Funktionsgleichung f(x) = a_n \\cdot x^n + a_{n-1} \\cdot x^{n-1} + \\dots + a_1 \\cdot x + a_0 mit a_n \\neq 0. Ihr globales Verhalten für betragsgroße Werte von x wird ausschließlich vom Leitkoeffizienten a_n und dem höchsten Exponenten n bestimmt. Mithilfe der ersten und zweiten Ableitungsfunktion f'(x) und f''(x) lassen sich lokale Extrempunkte sowie Wendepunkte exakt berechnen.
 
 #### Abb. 2.1: Funktionsgraph von f(x) und Ableitungsgraph f'(x) mit Extrem-, Wende- und Integralbereich
 
 <Bild> Diagramm:
-Beschreibung mit Bildtext: Koordinatensystem mit dem blauen Funktionsgraphen $f(x) = \\frac{1}{4}x^3 - 1{,}5x^2 + 2x + 1$, dem roten Ableitungsgraphen $f'(x) = 0{,}75x^2 - 3x + 2$, den markierten Punkten Hochpunkt $H(0{,}85 \\mid 1{,}77)$, Wendepunkt $W(2 \\mid 1)$ und Tiefpunkt $T(3{,}15 \\mid 0{,}23)$ sowie der hellblau schraffierten Integralfläche $A = 4\\,\\text{FE}$ zwischen Graph und $x$-Achse im Intervall $[0; 4]$.
+Beschreibung mit Bildtext: Koordinatensystem mit dem blauen Funktionsgraphen f(x) = \\frac{1}{4}x^3 - 1,5x^2 + 2x + 1, dem roten Ableitungsgraphen f'(x) = 0,75x^2 - 3x + 2, den markierten Punkten Hochpunkt H(0,85 \\mid 1,77), Wendepunkt W(2 \\mid 1) und Tiefpunkt T(3,15 \\mid 0,23) sowie der hellblau schraffierten Integralfläche A = 4 FE zwischen Graph und x-Achse im Intervall [0; 4].
 </Bild>
 
 <Rahmen>
 _Merksatz: Notwendige und hinreichende Kriterien der Differential- und Integralrechnung_
--\t_Potenz- und Summenregel der Ableitung:_ Für $f(x) = c \\cdot x^n$ gilt $f'(x) = c \\cdot n \\cdot x^{n-1}$.
--\t_Notwendige Bedingung für lokale Extremstellen:_ $f'(x_E) = 0$ (waagerechte Tangente).
--\t_Hinreichende Bedingung für lokale Extremstellen:_ Gilt $f'(x_E) = 0$ und $f''(x_E) < 0$, so liegt bei $x_E$ ein lokales Maximum (Hochpunkt $H$) vor. Gilt $f'(x_E) = 0$ und $f''(x_E) > 0$, so liegt bei $x_E$ ein lokales Minimum (Tiefpunkt $T$) vor.
--\t_Notwendige und hinreichende Bedingung für Wendestellen (Krümmungswechsel):_ Gilt $f''(x_W) = 0$ und $f'''(x_W) \\neq 0$, so besitzt der Graph bei $W(x_W \\mid f(x_W))$ einen Wendepunkt.
--\t_Hauptsatz der Differential- und Integralrechnung (Bestimmtes Integral):_ Ist $F(x)$ eine Stammfunktion von $f(x)$ mit $F'(x) = f(x)$, so gilt auf dem Intervall $[a; b]$: $\\int_a^b f(x)\\,dx = [F(x)]_a^b = F(b) - F(a)$.
--\t_Symmetrieverhalten ganzrationaler Funktionen:_ Nur gerade Exponenten ($f(-x) = f(x)$): Achsensymmetrie zur $y$-Achse. Nur ungerade Exponenten ($f(-x) = -f(x)$): Punktsymmetrie zum Koordinatenursprung $O(0 \\mid 0)$.
--\t_Tangentensteigung $m_t$ in einem Kurvenpunkt $P(x_0 \\mid f(x_0))$:_ $t(x) = f'(x_0) \\cdot (x - x_0) + f(x_0)$.
+-\t_Potenz- und Summenregel der Ableitung:_ Für f(x) = c \\cdot x^n gilt f'(x) = c \\cdot n \\cdot x^{n-1}.
+-\t_Notwendige Bedingung für lokale Extremstellen:_ f'(x_E) = 0 (waagerechte Tangente).
+-\t_Hinreichende Bedingung für lokale Extremstellen:_ Gilt f'(x_E) = 0 und f''(x_E) < 0, so liegt bei x_E ein lokales Maximum (Hochpunkt H) vor. Gilt f'(x_E) = 0 und f''(x_E) > 0, so liegt bei x_E ein lokales Minimum (Tiefpunkt T) vor.
+-\t_Notwendige und hinreichende Bedingung für Wendestellen (Krümmungswechsel):_ Gilt f''(x_W) = 0 und f'''(x_W) \\neq 0, so besitzt der Graph bei W(x_W \\mid f(x_W)) einen Wendepunkt.
+-\t_Hauptsatz der Differential- und Integralrechnung (Bestimmtes Integral):_ Ist F(x) eine Stammfunktion von f(x) mit F'(x) = f(x), so gilt auf dem Intervall [a; b]: \\int_a^b f(x) dx = [F(x)]_a^b = F(b) - F(a).
+-\t_Symmetrieverhalten ganzrationaler Funktionen:_ Nur gerade Exponenten (f(-x) = f(x)): Achsensymmetrie zur y-Achse. Nur ungerade Exponenten (f(-x) = -f(x)): Punktsymmetrie zum Koordinatenursprung O(0 \\mid 0).
+-\t_Tangentensteigung m_t in einem Kurvenpunkt P(x_0 \\mid f(x_0)):_ t(x) = f'(x_0) \\cdot (x - x_0) + f(x_0).
 </Rahmen>
 
 ((51))
@@ -7270,43 +7294,43 @@ _Merksatz: Notwendige und hinreichende Kriterien der Differential- und Integralr
 ### Tabelle 2.1: Charakteristische Punkte von f(x) = 0,25 x^3 - 1,5 x^2 + 2 x + 1
 
 <Tabelle>
-Merkmal / Punkt\tx-Wert\tFunktionswert $f(x)$\tAbleitungswerte & Begründung
-y-Achsenabschnitt $S_y$\t$x = 0$\t$f(0) = 1{,}00$\t$f'(0) = 2{,}00$ (steigend)
-Hochpunkt $H$ (Maximum)\t$x_H \\approx 0{,}85$\t$f(x_H) \\approx 1{,}77$\t$f'(x_H) = 0$ und $f''(x_H) \\approx -1{,}73 < 0$
-Wendepunkt $W$\t$x_W = 2{,}00$\t$f(2) = 1{,}00$\t$f''(2) = 0$ und $f'''(2) = 1{,}50 \\neq 0$
-Tiefpunkt $T$ (Minimum)\t$x_T \\approx 3{,}15$\t$f(x_T) \\approx 0{,}23$\t$f'(x_T) = 0$ und $f''(x_T) \\approx +1{,}73 > 0$
-Randpunkt im Intervall\t$x = 4{,}00$\t$f(4) = 1{,}00$\t$f'(4) = 2{,}00$ (punktsymmetrisch zu $W$)
+Merkmal / Punkt\tx-Wert\tFunktionswert f(x)\tAbleitungswerte & Begründung
+y-Achsenabschnitt S_y\tx = 0\tf(0) = 1,00\tf'(0) = 2,00 (steigend)
+Hochpunkt H (Maximum)\tx_H \\approx 0,85\tf(x_H) \\approx 1,77\tf'(x_H) = 0 und f''(x_H) \\approx -1,73 < 0
+Wendepunkt W\tx_W = 2,00\tf(2) = 1,00\tf''(2) = 0 und f'''(2) = 1,50 \\neq 0
+Tiefpunkt T (Minimum)\tx_T \\approx 3,15\tf(x_T) \\approx 0,23\tf'(x_T) = 0 und f''(x_T) \\approx +1,73 > 0
+Randpunkt im Intervall\tx = 4,00\tf(4) = 1,00\tf'(4) = 2,00 (punktsymmetrisch zu W)
 </Tabelle>
 
 <Rahmen>
 _Tipp: Musterlösung zur Berechnung des bestimmten Integrals auf [0; 4]_
--\tGegeben ist $f(x) = 0{,}25 x^3 - 1{,}5 x^2 + 2 x + 1$ mit den Ableitungen $f'(x) = 0{,}75 x^2 - 3 x + 2$ und $f''(x) = 1{,}5 x - 3$. Da $f(x) > 0$ für alle $x \\in [0; 4]$ gilt, liegt der Graph vollständig über der $x$-Achse.
--\t_Bildung einer Stammfunktion $F(x)$:_ $F(x) = \\frac{1}{16} x^4 - 0{,}5 x^3 + x^2 + x$.
--\t_Einsetzen der Integrationsgrenzen $a = 0$ und $b = 4$ nach dem Hauptsatz:_ $A = \\int_0^4 f(x)\\,dx = F(4) - F(0) = (16 - 32 + 16 + 4) - 0 = 4$ Flächeneinheiten (FE).
--\t_Kontrolle durch Punktsymmetrie zu $W(2 \\mid 1)$:_ Das Rechteck der Breite 4 und Höhe 1 hat genau $A = 4\\,\\text{FE}$.
+-\tGegeben ist f(x) = 0,25 x^3 - 1,5 x^2 + 2 x + 1 mit den Ableitungen f'(x) = 0,75 x^2 - 3 x + 2 und f''(x) = 1,5 x - 3. Da f(x) > 0 für alle x \\in [0; 4] gilt, liegt der Graph vollständig über der x-Achse.
+-\t_Bildung einer Stammfunktion F(x):_ F(x) = \\frac{1}{16} x^4 - 0,5 x^3 + x^2 + x.
+-\t_Einsetzen der Integrationsgrenzen a = 0 und b = 4 nach dem Hauptsatz:_ A = \\int_0^4 f(x) dx = F(4) - F(0) = (16 - 32 + 16 + 4) - 0 = 4 Flächeneinheiten (FE).
+-\t_Kontrolle durch Punktsymmetrie zu W(2 \\mid 1):_ Das Rechteck der Breite 4 und Höhe 1 hat genau A = 4 FE.
 </Rahmen>
 
 ### Aufgabe 1: Ableitungsfunktionen und Steigung bestimmen
 [leicht]
 
-Bilden Sie zu den folgenden ganzrationalen Funktionen jeweils die erste und zweite Ableitung und berechnen Sie die Steigung des Graphen an der Stelle $x_0 = 2$:
-a) $g(x) = x^3 - 6 x^2 + 9 x - 2$
-b) $h(x) = -0{,}5 x^4 + 3 x^2 - 4$
-c) $k(x) = 2 x^3 + 4 x - 7$
+Bilden Sie zu den folgenden ganzrationalen Funktionen jeweils die erste und zweite Ableitung und berechnen Sie die Steigung des Graphen an der Stelle x_0 = 2:
+a) g(x) = x^3 - 6 x^2 + 9 x - 2
+b) h(x) = -0,5 x^4 + 3 x^2 - 4
+c) k(x) = 2 x^3 + 4 x - 7
 
 ### Aufgabe 2: Vollständige Kurvendiskussion und Wendetangente
 [mittel]
 
-Gegeben ist die Funktion $f(x) = x^3 - 3 x^2 - 9 x + 11$. Bestimmen Sie rechnerisch die Koordinaten aller lokalen Extrempunkte sowie des Wendepunkts $W$. Stellen Sie anschließend die Gleichung der Wendetangente $t_W(x)$ auf und prüfen Sie die Symmetrie zum Wendepunkt.
+Gegeben ist die Funktion f(x) = x^3 - 3 x^2 - 9 x + 11. Bestimmen Sie rechnerisch die Koordinaten aller lokalen Extrempunkte sowie des Wendepunkts W. Stellen Sie anschließend die Gleichung der Wendetangente t_W(x) auf und prüfen Sie die Symmetrie zum Wendepunkt.
 
 ### Aufgabe 3: Steckbriefaufgabe und Flächeninhalt zwischen zwei Graphen
 [schwer]
 
-Der Graph einer ganzrationalen Funktion 3. Grades verläuft durch den Ursprung $O(0 \\mid 0)$, besitzt im Punkt $W(2 \\mid 4)$ einen Wendepunkt und hat dort die Steigung $m = -3$.
-a) Stellen Sie das lineare Gleichungssystem auf und weisen Sie nach, dass $p(x) = 0{,}5 x^3 - 3 x^2 + 3 x + 0$ bzw. mit angepasstem Koeffizienten die Bedingungen erfüllt.
-b) Ermitteln Sie das Flächenmaß des Gebiets, welches der Graph von $f(x)$ aus Abb. 2.1 mit der Wendetangente und der $y$-Achse im ersten Quadranten einschließt.
+Der Graph einer ganzrationalen Funktion 3. Grades verläuft durch den Ursprung O(0 \\mid 0), besitzt im Punkt W(2 \\mid 4) einen Wendepunkt und hat dort die Steigung m = -3.
+a) Stellen Sie das lineare Gleichungssystem auf und weisen Sie nach, dass p(x) = 0,5 x^3 - 3 x^2 + 3 x + 0 bzw. mit angepasstem Koeffizienten die Bedingungen erfüllt.
+b) Ermitteln Sie das Flächenmaß des Gebiets, welches der Graph von f(x) aus Abb. 2.1 mit der Wendetangente und der y-Achse im ersten Quadranten einschließt.
 
-Hinweis zur Selbstkontrolle: Nutzen Sie für Teilaufgabe b) die Differenzfunktion $d(x) = f(x) - t_W(x)$ und bestimmen Sie vor der Integration die Schnittstellen im Intervall $[0; 4]$.
+Hinweis zur Selbstkontrolle: Nutzen Sie für Teilaufgabe b) die Differenzfunktion d(x) = f(x) - t_W(x) und bestimmen Sie vor der Integration die Schnittstellen im Intervall [0; 4].
 """
 
     # -------------------- 12. GRUNDSCHULE LESEBUCH DOPPELSEITE (240x170 mm) --------------------
@@ -7541,7 +7565,7 @@ def cleanup_legacy_combined_files() -> None:
                 os.remove(gold_cand)
 
 
-def write_golden_files_and_metadata(meta_by_doc: Dict[str, Dict[str, Any]]) -> None:
+def write_golden_files_and_metadata(meta_by_doc: dict[str, dict[str, Any]]) -> None:
     """Writes canonical golden files (*.raw.golden.md and *.uebertragungsregeln_09_2025.golden.md) and updates golden_image_metadata.json."""
     os.makedirs(GOLDEN_DIR, exist_ok=True)
     cleanup_legacy_combined_files()
@@ -7563,9 +7587,9 @@ def write_golden_files_and_metadata(meta_by_doc: Dict[str, Dict[str, Any]]) -> N
         with open(ueb_path, "w", encoding="utf-8") as f:
             f.write(ueb_md)
 
-    existing_meta: Dict[str, Any] = {}
+    existing_meta: dict[str, Any] = {}
     if os.path.exists(GOLDEN_META_PATH):
-        with open(GOLDEN_META_PATH, "r", encoding="utf-8") as f:
+        with open(GOLDEN_META_PATH, encoding="utf-8") as f:
             existing_meta = json.load(f)
 
     for legacy_base in LEGACY_COMBINED_DOCS:
@@ -7577,7 +7601,7 @@ def write_golden_files_and_metadata(meta_by_doc: Dict[str, Dict[str, Any]]) -> N
         f.write("\n")
 
 
-def generate_schoolbook_suite() -> Dict[str, Any]:
+def generate_schoolbook_suite() -> dict[str, Any]:
     """Main entry point to build all 12 single-subject digital PDFs, 12 scanned PDFs, figures, and golden ground truths."""
     os.makedirs(TEST_DATA_DIR, exist_ok=True)
     os.makedirs(FIGURES_DIR, exist_ok=True)
@@ -7687,8 +7711,8 @@ def generate_schoolbook_suite() -> Dict[str, Any]:
         ),
     ]
 
-    meta_by_doc: Dict[str, Dict[str, Any]] = {}
-    generated_pdfs: List[str] = []
+    meta_by_doc: dict[str, dict[str, Any]] = {}
+    generated_pdfs: list[str] = []
 
     for base_name, desc, builder_fn, fig_dict, scan_seed in specs:
         digital_pdf = os.path.join(TEST_DATA_DIR, f"{base_name}.pdf")
@@ -7707,7 +7731,13 @@ def generate_schoolbook_suite() -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    summary = generate_schoolbook_suite()
-    print(f"Generated {len(summary['pdfs'])} schoolbook PDFs and updated golden ground truths.")
+    import sys
+
+    if "--markdown-only" in sys.argv:
+        write_golden_files_and_metadata({})
+        print("Updated golden ground-truth Markdown files and rules.")
+    else:
+        summary = generate_schoolbook_suite()
+        print(f"Generated {len(summary['pdfs'])} schoolbook PDFs and updated golden ground truths.")
 
 

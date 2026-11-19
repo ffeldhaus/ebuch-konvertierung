@@ -1,13 +1,27 @@
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import (
-    BaseDocTemplate, SimpleDocTemplate, PageTemplate, Frame, Paragraph, Spacer, 
-    Table, TableStyle, PageBreak, FrameBreak, NextPageTemplate
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
+"""Generates synthetic multi-column and scanned textbook PDFs for integration testing."""
+
 import os
 
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.platypus import (
+    BaseDocTemplate,
+    Frame,
+    FrameBreak,
+    NextPageTemplate,
+    PageBreak,
+    PageTemplate,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+
+
 def draw_page_number_alternating(canvas, doc):
+    """Draws running header and alternating odd/even page numbers."""
     page_num = doc.page + 84 # starts at 85
     canvas.saveState()
     canvas.setFont("Helvetica-Bold", 8)
@@ -33,6 +47,7 @@ def draw_page_number_alternating(canvas, doc):
     canvas.restoreState()
 
 def draw_page_number_centered(canvas, doc):
+    """Draws running header and centered page numbers."""
     page_num = doc.page # starts at 1
     canvas.saveState()
     canvas.setFont("Helvetica-Bold", 8)
@@ -72,6 +87,7 @@ for font_path, font_name in [
             pass
 
 def make_callout_box(title_text, desc_text, content_flowable, bg_color="#F0F9FF", border_color="#0284C7", icon_char="4"):
+    """Builds a styled ReportLab Table callout box flowable."""
     styles = getSampleStyleSheet()
     box_title_style = ParagraphStyle(
         "BoxTitle",
@@ -126,6 +142,7 @@ def make_callout_box(title_text, desc_text, content_flowable, bg_color="#F0F9FF"
     return container
 
 def create_deutsch_textanalyse():
+    """Creates the multi-column German literary analysis test PDF."""
     pdf_path = "testdata/deutsch_textanalyse.pdf"
     doc = BaseDocTemplate(
         pdf_path,
@@ -344,6 +361,7 @@ def create_deutsch_textanalyse():
     print(f"Created {pdf_path}")
 
 def create_mathe_grade3():
+    """Creates the elementary grade 3 mathematics test PDF."""
     pdf_path = "testdata/mathe_grade3.pdf"
     doc = SimpleDocTemplate(
         pdf_path,
@@ -643,8 +661,8 @@ def create_mathe_grade3():
     print(f"Created {pdf_path}")
 
 def rasterize_to_scanned_pdf(input_pdf_path: str, output_pdf_path: str):
+    """Renders a vector PDF at 300 DPI into a rasterized scanned PDF."""
     import pypdfium2
-    from PIL import Image
     
     pdf = pypdfium2.PdfDocument(input_pdf_path)
     images = []

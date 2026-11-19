@@ -15,6 +15,7 @@ from backend.services import fibs_constants as fc
 from backend.services.fibs_formatting import (
     convert_unicode_scripts,
     normalize_bild_tags,
+    normalize_fibs_units_and_percent,
     normalize_versalien,
 )
 from backend.services.models import PageSegment
@@ -285,15 +286,37 @@ def restore_false_positive_trailing_asterisks(
     if not fibs_md:
         return fibs_md
     if raw_md:
-        starred_tokens = set(
-            re.findall(r"(?<![\w\*])([A-Za-z0-9äöüÄÖÜß]+)\*(?![\w\*])", raw_md)
+        # Strip balanced **...** and *...* spans first so closing italic asterisks
+        # (e.g. '*Atropa belladonna*', '*T-Tubuli*') are never misidentified as footnote markers.
+        raw_unpaired = re.sub(
+            r"\*\*[^*\n]+\*\*|(?<![\w\*\\])\*(?![\*\s])[^*\n]+?(?<![\*\s])\*(?![\w\*])",
+            " ",
+            raw_md,
         )
-        for tok in starred_tokens:
-            fibs_md = re.sub(
-                rf"(?<![_\w\*]){re.escape(tok)}_(?![_\w\*])",
-                f"{tok}*",
+        starred_tokens = sorted(
+            set(re.findall(r"(?<![\w\*])([A-Za-z0-9äöüÄÖÜß]+)\*(?![\w\*])", raw_unpaired))
+        )
+        if starred_tokens:
+            bal_spans: list[str] = []
+
+            def _mask_bal_und(m_b: re.Match[str]) -> str:
+                bal_spans.append(m_b.group(0))
+                return f"\x00BALUND{len(bal_spans) - 1}\x00"
+
+            fibs_masked = re.sub(
+                r"(?<![\w\*])_(?![_\s])[^_\n]+?(?<![_\s])_(?![\w\*])",
+                _mask_bal_und,
                 fibs_md,
             )
+            for tok in starred_tokens:
+                fibs_masked = re.sub(
+                    rf"(?<![_\w\*]){re.escape(tok)}_(?![_\w\*])",
+                    f"{tok}*",
+                    fibs_masked,
+                )
+            for idx_b, span_b in enumerate(bal_spans):
+                fibs_masked = fibs_masked.replace(f"\x00BALUND{idx_b}\x00", span_b)
+            fibs_md = fibs_masked
     fibs_md = re.sub(
         r"(?<![_\w])(\d{4})_(\s+)(\d{4})_(?![_\w])",
         r"\1*\2\3*",
@@ -1213,12 +1236,16 @@ def _recover_dropped_rahmen_blocks(processed: str, raw_markdown: str) -> str:
         p_words = set(_sig_words(p_text))
         p_box_bodies = re.findall(r"<Rahmen>\s*([\s\S]*?)\s*</Rahmen>", p_text, flags=re.IGNORECASE)
         p_box_words = set(_sig_words(" ".join(p_box_bodies)))
+        wk_sec_m = re.search(r"####\s+Worterklärungen\b([\s\S]*)$", p_text, flags=re.IGNORECASE)
+        p_wk_words = set(_sig_words(wk_sec_m.group(1))) if wk_sec_m else set()
 
         for r_body in r_boxes:
             b_words = _sig_words(r_body)
             if len(b_words) < 3:
                 continue
             unique_b = set(b_words)
+            if p_wk_words and len(unique_b & p_wk_words) / len(unique_b) >= 0.55:
+                continue
             page_recall = len(unique_b & p_words) / len(unique_b)
             doc_recall = len(unique_b & all_proc_words) / len(unique_b)
             box_recall = len(unique_b & p_box_words) / len(unique_b)
@@ -1364,10 +1391,40 @@ def deduplicate_page_numbers(markdown_content: str) -> str:
     return result.strip()
 
 
+_LEADING_CLAUSE_VERB_SET = frozenset({
+    "registrieren", "regulieren", "aktivieren", "stimulieren", "hemmen", "steigen", "sinken",
+    "führen", "bewirken", "zeigen", "entstehen", "bilden", "werden", "haben", "sind", "können",
+    "müssen", "sollen", "dürfen", "nehmen", "geben", "lassen", "machen", "stehen", "liegen",
+})
+
+
 def _split_run_in_bullet_subheadings(text: str) -> str:
-    """Normalizes bullet separators in headings and splits run-in bullet subheadings outside blocks."""
-    if not text or "•" not in text:
+    """Normalizes bullet separators in headings and splits run-in bullet subheadings outside blocks.
+
+    Guards against leading ``• Verb...`` bullet items so lines starting with ``•``
+    or single-word conjugated clause verbs are never turned into bogus ``####`` headings.
+
+    Args:
+        text: Input Markdown text.
+
+    Returns:
+        Markdown text with run-in noun-phrase bullet subheadings split cleanly.
+    """
+    if not text or ("•" not in text and "·" not in text):
         return text
+
+    def _repl_run_in_bullet(m: re.Match[str]) -> str:
+        prefix = m.group(1).strip()
+        rest = m.group(2).strip()
+        if not prefix or _TASK_OPERATOR_VERB_RE.match(prefix):
+            return m.group(0)
+        if " " not in prefix and (
+            prefix.lower() in _LEADING_CLAUSE_VERB_SET
+            or (len(prefix) >= 8 and prefix.lower().endswith("ieren"))
+        ):
+            return m.group(0)
+        return f"#### {prefix}\n\n{rest}"
+
     parts = re.split(
         r"(<(?:Bild|Tabelle)\b[^>]*>[\s\S]*?</(?:Bild|Tabelle)>)",
         text,
@@ -1375,11 +1432,19 @@ def _split_run_in_bullet_subheadings(text: str) -> str:
     )
     for idx in range(0, len(parts), 2):
         seg = parts[idx]
-        seg = re.sub(r"(?m)^#{1,6}\s+([^\n•]+?)[ \t]*•[ \t]*$", r"#### \1", seg)
-        seg = re.sub(r"(?m)^(#{1,6}\s+[^\n•]+?)[ \t]+•[ \t]+([^\n]+)$", r"\1: \2", seg)
+        # Heading followed by a single run-in separator dot '• Prose...' (not a multi-item bullet list)
         seg = re.sub(
-            r"(?m)^[ \t]*(?:\*\*|_)?([A-ZÄÖÜ][A-Za-zäöüÄÖÜß0-9\s,\-\(\)/]{2,55}?)(?:\*\*|_)?[ \t]+•[ \t]+([A-ZÄÖÜ][^\n]+)$",
+            r"(?m)^#{1,6}\s+([^\n•·]+?)[ \t]*\n+[ \t]*[•·][ \t]+([A-ZÄÖÜ][^\n•·]{25,})(?=(?:\n\s*\n(?![ \t]*[•·][ \t])|\Z))",
             r"#### \1\n\n\2",
+            seg,
+        )
+        seg = re.sub(r"(?m)^#{1,6}[ \t]*•[ \t]+([^\n]+)$", r"-\t\1", seg)
+        seg = re.sub(r"(?m)^[ \t]*•[ \t]+([^\n•]+)$", r"-\t\1", seg)
+        seg = re.sub(r"(?m)^(#{1,6}\s+[^\n•·]+?)[ \t]*[•·][ \t]*$", r"\1", seg)
+        seg = re.sub(r"(?m)^(#{1,6}\s+[^\n•·]+?)[ \t]+[•·][ \t]+([^\n]+)$", r"\1: \2", seg)
+        seg = re.sub(
+            r"(?m)^[ \t]*(?![•·\-*#\d])(?:\*\*|_)?([A-ZÄÖÜ][A-Za-zäöüÄÖÜß0-9\s,\-\(\)/]{2,55}?)(?:\*\*|_)?[ \t]+[•·][ \t]+([A-ZÄÖÜ][^\n]+)$",
+            _repl_run_in_bullet,
             seg,
         )
         parts[idx] = seg
@@ -1390,16 +1455,987 @@ _TASK_OPERATOR_VERB_RE = re.compile(
     r"^(?:Erklären|Erläutern|Beschreiben|Nennen|Vergleichen|Begründen|Stellen|Zeichnen|"
     r"Berechnen|Entwickeln|Formulieren|Ordnen|Werten|Überprüfen|Skizzieren|Diskutieren|"
     r"Analysieren|Leiten|Geben|Fassen|Ermitteln|Prüfen|Untersuchen|Benennen|Deuten|"
-    r"Interpretieren|ermitteln|erklären|erläutern|beschreiben)\b"
+    r"Interpretieren|Erstellen|Planen|Recherchieren|Bestimmen|Entwerfen|Charakterisieren|"
+    r"Bewerten|Beurteilen|ermitteln|erklären|erläutern|beschreiben)\b"
+)
+
+_EMPHASIS_LEGEND_ANM_RE = re.compile(
+    r"<Anmerkung\b[^>]*>(?:(?!</Anmerkung>)[\s\S])*?"
+    r"(?:kursiv|\*[^\n<]*fett|#[^\n<]*unterstrichen|Hervorhebung\w*[^\n<]*(?:%|\*|#)|%[^\n<]*(?:kursiv|Hervorhebung))"
+    r"(?:(?!</Anmerkung>)[\s\S])*?</Anmerkung>",
+    re.IGNORECASE,
+)
+
+_UNANNOUNCED_PCT_EMPH_RE = re.compile(
+    r"(?<![0-9\\])(?<!\d )%([A-Za-zÄÖÜäöüß][^%\t\n]{0,80}?[A-Za-zÄÖÜäöüß.!?:;')])%(?![A-Za-zÄÖÜäöüß])"
 )
 
 
-def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
+def _resolve_figure_caption_prefix(
+    custom_rules: str | None,
+    ruleset_key: str = "uebertragungsregeln_09_2025",
+) -> tuple[str, bool]:
+    """Resolves the figure-number prefix with strict Buchkonferenz priority over FIBS defaults.
+
+    Args:
+        custom_rules: Optional book-specific rules string from ``custom_ruleset.txt``.
+        ruleset_key: Active FIBS ruleset identifier.
+
+    Returns:
+        Tuple ``(prefix, explicit_from_custom_rules)`` where ``prefix`` is e.g. ``"M"``,
+        ``"B"``, or ``""``, and ``explicit_from_custom_rules`` indicates an explicit
+        Buchkonferenz directive overriding FIBS defaults.
+    """
+    if custom_rules and custom_rules.strip():
+        if re.search(
+            r"(?:Abbildungs|Bild|Material)nummern?\b[^\n.]*?(?:kein\w*\s+(?:Buchstabe|Präfix|Zusatz|[A-Z]\b)|"
+            r"ohne\s+(?:vorangestellte[nsm]?|Zusatz|Präfix|[A-Z]\b)|nicht\s+vorangestellt)"
+            r"|kein\s+[A-Z]\s+vorangestellt",
+            custom_rules,
+            re.IGNORECASE,
+        ):
+            return "", True
+
+        m_letter = re.search(
+            r"(?:Abbildungs|Bild|Material)nummern?\s+(?:wird\s+)?(?:jeweils\s+)?ein\s+[\"'„“]?([A-Z])[\"'“”]?\s+vorangestellt"
+            r"|\bein\s+[\"'„“]?([A-Z])[\"'“”]?\s+vorangestellt",
+            custom_rules,
+        )
+        if not m_letter:
+            m_letter = re.search(
+                r"(?:Abbildungs|Bild|Material)nummern?\s+(?:wird\s+)?(?:jeweils\s+)?ein\s+[\"'„“]?([a-zA-Z])[\"'“”]?\s+vorangestellt",
+                custom_rules,
+                re.IGNORECASE,
+            )
+        if m_letter:
+            letter = (m_letter.group(1) or m_letter.group(2) or "").upper()
+            return letter, True
+
+        if re.search(r"\b(?:Grundschule|Primarstufe)\b", custom_rules, re.IGNORECASE):
+            return "", False
+
+    if "grundschule" in (ruleset_key or "").lower() or "primarstufe" in (ruleset_key or "").lower():
+        return "", False
+
+    return "M", False
+
+
+def _split_long_caption_body(label_part: str, body_str: str) -> str:
+    """Formats a ``Ü4`` figure caption, splitting captions > 140 chars per FIBS §7.1.1.2."""
+    if len(body_str) > 140:
+        for m_sent in re.finditer(r"([.!?])\s+([A-ZÄÖÜ0-9\"'(].+)$", body_str):
+            head_cand = body_str[: m_sent.start()].strip()
+            punct = m_sent.group(1)
+            rest_cand = m_sent.group(2).strip()
+            if not (10 <= len(head_cand) <= 140) or not rest_cand:
+                continue
+            if punct == "." and re.search(
+                r"\b(?:Abb|Tab|Fig|Nr|S|Bd|Aufl|vgl|bzw|ca|Dr|Prof|[A-Z])$|(?:\bz\.\s*B|\bu\.\s*a|\bd\.\s*h)$",
+                head_cand,
+            ):
+                continue
+            head_final = head_cand if punct == "." else f"{head_cand}{punct}"
+            return f"#### {label_part} {head_final}\n\n{rest_cand}"
+
+        m_col = re.match(r"^([^:\n]{10,140}):\s+(.+)$", body_str)
+        if m_col and m_col.group(2).strip():
+            return f"#### {label_part} {m_col.group(1).strip()}\n\n{m_col.group(2).strip()}"
+
+    return f"#### {label_part} {body_str}"
+
+
+def _promote_and_clean_bild_captions(
+    text: str,
+    custom_rules: str | None = None,
+    ruleset_key: str = "uebertragungsregeln_09_2025",
+) -> str:
+    """Promotes figure captions above ``<Bild>`` as ``Ü4`` with FIBS/Buchkonferenz prefix and cleans echoes.
+
+    Applies Buchkonferenz-priority prefixing (``M``, ``B``, or ``""``), supports long-caption
+    splitting (> 140 chars), converts misclassified adjacent ``<Anmerkung> n Titel </Anmerkung>``
+    captions, and removes caption/Material echoes inside and after ``<Bild>...</Bild>``.
+
+    Args:
+        text: Post-processed Markdown text containing ``<Bild>`` blocks.
+        custom_rules: Optional book-specific rules string.
+        ruleset_key: Active FIBS ruleset identifier.
+
+    Returns:
+        Markdown text with ``#### {prefix}{num} ...`` captions placed above ``<Bild>``.
+    """
+    if not text or "<Bild" not in text:
+        return text
+
+    fig_pfx, explicit_bk = _resolve_figure_caption_prefix(custom_rules, ruleset_key)
+
+    # Drop standalone single-letter panel headings ('### A', '#### B') adjacent to <Bild>, ((num)), or captions
+    panel_chk_lines = text.splitlines()
+    panel_kept: list[str] = []
+    n_pl = len(panel_chk_lines)
+    for idx_pl, raw_pl in enumerate(panel_chk_lines):
+        s_pl = raw_pl.strip()
+        if re.match(r"^#{1,6}\s+[A-F]\s*$", s_pl):
+            prev_nb = ""
+            for b_pl in range(idx_pl - 1, -1, -1):
+                sb = panel_chk_lines[b_pl].strip()
+                if sb and sb != "---":
+                    prev_nb = sb
+                    break
+            next_nb = ""
+            for f_pl in range(idx_pl + 1, n_pl):
+                sf = panel_chk_lines[f_pl].strip()
+                if sf and sf != "---":
+                    next_nb = sf
+                    break
+            adj_re = re.compile(
+                r"^(?:</?Bild\b|\(\(\d+|(?:#{1,6}\s+)?(?:[MBQ]\s*)?\d{1,2}[.:]?\s+\S|(?:-\t|[-*•]\s+)?_?[A-F]_?\s+\S)",
+                re.IGNORECASE,
+            )
+            if adj_re.match(prev_nb) or adj_re.match(next_nb):
+                continue
+        panel_kept.append(raw_pl)
+    text = "\n".join(panel_kept)
+
+    # Collapse multi-line sub-panel captions right after </Bild> (including stray '##### <n>\n+<Title:>\n+A ..., B ...')
+    def _collapse_post_bild_subpanels(m_sp: re.Match[str]) -> str:
+        num_h5 = (m_sp.group(1) or "").strip()
+        num_inl = (m_sp.group(2) or "").strip()
+        lead_title = m_sp.group(3).strip()
+        sub_block = m_sp.group(4) or ""
+        eff_num = num_h5 or num_inl
+        if not eff_num or _TASK_OPERATOR_VERB_RE.match(lead_title):
+            return m_sp.group(0)
+        sub_parts: list[str] = []
+        for sl in sub_block.splitlines():
+            sl_s = re.sub(r"^(?:-\t|[-*•]\s+)", "", sl.strip()).strip().rstrip(",")
+            if sl_s:
+                sub_parts.append(sl_s)
+        joined_body = f"{lead_title} {', '.join(sub_parts)}".strip() if sub_parts else lead_title
+        return f"</Bild>\n\n{eff_num} {joined_body}\n"
+
+    text = re.sub(
+        r"</Bild>[ \t]*\n+(?:#####\s*(\d{1,2})\s*\n+)?(?:(\d{1,2})[.:]?[ \t]+)?([A-ZÄÖÜ][^\n#<]{2,90}:)[ \t]*\n+"
+        r"((?:(?:-\t|[-*•][ \t]+)?_?[A-F]_?[ \t]+[^\n#<]+(?:\n+|$))+)",
+        _collapse_post_bild_subpanels,
+        text,
+    )
+    text = re.sub(
+        r"</Bild>[ \t]*\n+#####\s*(\d{1,2})\s*\n+([A-ZÄÖÜ][^\n#<]{3,140}:)(?=\s*\n)",
+        lambda m_c: (
+            m_c.group(0)
+            if _TASK_OPERATOR_VERB_RE.match(m_c.group(2).strip())
+            else f"</Bild>\n\n{m_c.group(1)} {m_c.group(2).strip()}"
+        ),
+        text,
+    )
+    # Drop redundant bare '#### M3' stub when immediately preceded by a titled '#### M4 ...' caption before <Bild>
+    text = re.sub(
+        r"(?m)^(####[ \t]+[MBQ]\d+[a-z]?[ \t]+[^\n#]+)\n+####[ \t]+[MBQ][ \t]*\d+[a-z]?[ \t]*\n+(?=<Bild\b)",
+        r"\1\n\n",
+        text,
+    )
+
+    fig_cap_re = re.compile(
+        r"^(#{1,6}\s+)?(?:\*\*|_)?(?:(Abb(?:ildung)?\.?|Bild|Grafik|Figure|Fig\.?)\s+|([MBQ])\s*)?"
+        r"(\d{1,2}[a-z]?)(?:([:.])[\t\s]*|[\t\s]+)((?:\*\*|_)?[A-ZÄÖÜ\"'„“][^\n]{2,600}?)(?:\*\*|_)?$"
+    )
+    anm_cap_re = re.compile(
+        r"^<Anmerkung>\s*(?:([MBQ])\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n<]{1,500}?)\s*</Anmerkung>$",
+        re.IGNORECASE,
+    )
+
+    def _build_formatted_caption(
+        word_lbl: str,
+        letter_lbl: str,
+        c_num: str,
+        colon_tok: str,
+        c_body: str,
+    ) -> tuple[str, str]:
+        c_body_clean = re.sub(r"^(?:\*\*|_)+|(?:\*\*|_)+$", "", c_body.strip()).strip()
+        if word_lbl:
+            if explicit_bk:
+                label_part = f"{fig_pfx}{c_num}"
+            else:
+                sep = ":" if colon_tok else ""
+                label_part = f"{word_lbl.strip()} {c_num}{sep}"
+        elif letter_lbl:
+            eff_pfx = fig_pfx if explicit_bk else letter_lbl.upper()
+            label_part = f"{eff_pfx}{c_num}"
+        else:
+            label_part = f"{fig_pfx}{c_num}"
+        return _split_long_caption_body(label_part, c_body_clean), c_body_clean
+
+    bild_segs = re.split(r"(<Bild\b[^>]*>[\s\S]*?</Bild>)", text, flags=re.IGNORECASE)
+    for b_i in range(1, len(bild_segs), 2):
+        pre_lines = bild_segs[b_i - 1].splitlines()
+        post_lines = bild_segs[b_i + 1].splitlines()
+        bild_box = bild_segs[b_i]
+
+        # 1. Strip leading 'Material X • ...' or 'Am unteren Bildrand steht der Text: ...' echoes inside <Bild>
+        b_lines = bild_box.splitlines()
+        promoted_mat_heading = ""
+        promoted_margin_cap = ""
+        if len(b_lines) >= 2:
+            cleaned_inner: list[str] = [b_lines[0]]
+            for inner_ln in b_lines[1:-1]:
+                work_ln = inner_ln
+                m_mat_echo = re.match(
+                    r"^((?:Beschreibung(?: mit Bildtext)?:\s*)?)Material\s+([A-Z])\s*[•:]\s*([^\n.]{2,90})(?:\.\s*(.*))?$",
+                    work_ln.strip(),
+                )
+                if m_mat_echo:
+                    desc_lbl = m_mat_echo.group(1) or ""
+                    mat_let = m_mat_echo.group(2)
+                    mat_tit = m_mat_echo.group(3).strip()
+                    rem_desc = (m_mat_echo.group(4) or "").strip()
+                    promoted_mat_heading = f"#### Material {mat_let}: {mat_tit}"
+                    if rem_desc:
+                        work_ln = f"{desc_lbl}{rem_desc}"
+                    elif desc_lbl.strip():
+                        cleaned_inner.append(desc_lbl.rstrip())
+                        continue
+                    else:
+                        continue
+
+                # Capture and strip 'Am unteren/oberen Bildrand steht der Text: 4 ...' echo sentences
+                m_echo_cap = re.search(
+                    r"(?:^|\s+)(?:Am\s+(?:unteren|oberen)\s+Bildrand|Unter\s+dem\s+Bild)\s+"
+                    r"(?:steht|befindet\s+sich|lautet)(?:\s+der\s+Text|\s+die\s+Bildunterschrift|\s+folgender\s+Text)?\s*:?\s*"
+                    r"[\"'„“]?(?:([MBQ])\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n\"'“”]+?)[\"'“”]?\.?\s*$",
+                    work_ln,
+                    flags=re.IGNORECASE,
+                )
+                if m_echo_cap and not promoted_margin_cap:
+                    e_let = m_echo_cap.group(1) or ""
+                    e_num = m_echo_cap.group(2)
+                    e_tit = m_echo_cap.group(3).strip().rstrip(".")
+                    promoted_margin_cap, _ = _build_formatted_caption("", e_let, e_num, "", e_tit)
+                stripped_echo = re.sub(
+                    r"(?:^|\s+)(?:Am\s+(?:unteren|oberen)\s+Bildrand|Unter\s+dem\s+Bild)\s+"
+                    r"(?:steht|befindet\s+sich|lautet)(?:\s+der\s+Text|\s+die\s+Bildunterschrift|\s+folgender\s+Text)?\s*:?\s*"
+                    r"[\"'„“]?(?:[MBQ]\s*)?\d{1,2}\b[^\n]*$",
+                    "",
+                    work_ln,
+                    flags=re.IGNORECASE,
+                ).rstrip()
+                if stripped_echo or work_ln.strip().startswith("Beschreibung"):
+                    cleaned_inner.append(stripped_echo if stripped_echo else work_ln)
+            if len(b_lines) >= 2:
+                cleaned_inner.append(b_lines[-1])
+            bild_box = "\n".join(cleaned_inner)
+
+        if promoted_mat_heading:
+            recent_pre = "\n".join(pre_lines[-8:])
+            mat_key = promoted_mat_heading.split(":")[0].strip()
+            if mat_key.lower() not in recent_pre.lower():
+                while pre_lines and not pre_lines[-1].strip():
+                    pre_lines.pop()
+                pre_lines.extend(["", promoted_mat_heading, ""])
+
+        # Check surrounding body text on the same page for genuine {n} footnote markers
+        pre_page_tail = "\n".join(pre_lines).rsplit("((", 1)[-1]
+        post_page_head = "\n".join(post_lines).split("((", 1)[0]
+        surrounding_body = f"{pre_page_tail}\n{post_page_head}"
+
+        last_ne = -1
+        for idx_p in range(len(pre_lines) - 1, -1, -1):
+            if pre_lines[idx_p].strip():
+                last_ne = idx_p
+                break
+
+        has_pre_cap = False
+        bare_pre_info: tuple[str, str] | None = None
+        cap_text_lower = ""
+        cap_num_found = ""
+        if last_ne >= 0:
+            cand_pre = pre_lines[last_ne].strip()
+            m_bare_pre = re.match(r"^#{3,6}\s+([MBQ])\s*(\d{1,2}[a-z]?)\s*$", cand_pre)
+            if m_bare_pre:
+                bare_pre_info = (m_bare_pre.group(1), m_bare_pre.group(2))
+            # Existing Abb. X.Y: / Bild X.Y: / Abbildung X.Y: decimal captions stay as-is
+            elif re.match(
+                r"^#{3,6}\s+(?:Abb(?:ildung)?\.?|Bild|Grafik|Figure|Fig\.?)\s*\d+\.\d+",
+                cand_pre,
+                re.IGNORECASE,
+            ):
+                has_pre_cap = True
+            else:
+                m_anm_pre = anm_cap_re.match(cand_pre)
+                if m_anm_pre and not re.search(
+                    rf"(?<![_^\\])\{{{m_anm_pre.group(2)}\}}", surrounding_body
+                ):
+                    formatted_cap, c_clean = _build_formatted_caption(
+                        "",
+                        m_anm_pre.group(1) or "",
+                        m_anm_pre.group(2),
+                        "",
+                        m_anm_pre.group(3),
+                    )
+                    pre_lines[last_ne] = formatted_cap
+                    has_pre_cap = True
+                    cap_text_lower = c_clean.lower()
+                    cap_num_found = m_anm_pre.group(2)
+                else:
+                    m_pre = fig_cap_re.match(cand_pre)
+                    pre_body_clean = re.sub(r"^(?:\*\*|_)+", "", m_pre.group(6).strip()) if m_pre else ""
+                    if (
+                        m_pre
+                        and not _TASK_OPERATOR_VERB_RE.match(pre_body_clean)
+                        and not pre_body_clean.rstrip("*_ ").endswith("?")
+                        and not re.search(r"^[A-ZÄÖÜ][a-zäöüß]+en\s+Sie\b", pre_body_clean)
+                    ):
+                        hashes_pre = (m_pre.group(1) or "").strip()
+                        word_pre = m_pre.group(2) or ""
+                        let_pre = m_pre.group(3) or ""
+                        is_chapter_h1_h2 = (
+                            hashes_pre in ("#", "##")
+                            and not word_pre
+                            and not let_pre
+                            and not bool(custom_rules and custom_rules.strip())
+                        )
+                        if not is_chapter_h1_h2 and not re.match(
+                            r"^(?:Kapitel|Chapter|Teil|Part|Lektion|Band)\b",
+                            pre_body_clean,
+                            re.IGNORECASE,
+                        ):
+                            formatted_cap, c_clean = _build_formatted_caption(
+                                word_pre,
+                                let_pre,
+                                m_pre.group(4),
+                                m_pre.group(5) or "",
+                                pre_body_clean,
+                            )
+                            pre_lines[last_ne] = formatted_cap
+                            has_pre_cap = True
+                            cap_text_lower = c_clean.lower()
+                            cap_num_found = m_pre.group(4)
+
+        # Inspect first few non-empty lines after </Bild> for trailing caption, <Anmerkung> caption, or orphan axis fragments
+        ne_indices: list[int] = []
+        for idx_a, a_ln in enumerate(post_lines):
+            a_s = a_ln.strip()
+            if not a_s:
+                continue
+            if re.match(r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)", a_s) or a_s.startswith(
+                ("<Bild", "<Tabelle", "<Rahmen", "#####")
+            ):
+                break
+            if a_s.startswith("<Anmerkung") and not anm_cap_re.match(a_s):
+                break
+            ne_indices.append(idx_a)
+            if len(ne_indices) >= 4:
+                break
+
+        matched_post_idx = -1
+        post_cap_heading = ""
+        for k_pos, idx_a in enumerate(ne_indices):
+            cand = post_lines[idx_a].strip()
+            intervening_ok = all(
+                len(post_lines[prev_a].strip()) <= 50
+                and not post_lines[prev_a].strip().endswith((".", "!", "?"))
+                and not post_lines[prev_a].strip().startswith("#")
+                for prev_a in ne_indices[:k_pos]
+            )
+            if not intervening_ok:
+                continue
+
+            m_anm_post = anm_cap_re.match(cand)
+            if m_anm_post:
+                anm_num = m_anm_post.group(2)
+                anm_body_str = m_anm_post.group(3).strip()
+                has_fn_ref = bool(re.search(rf"(?<![_^\\])\{{{anm_num}\}}", surrounding_body))
+                is_dup_of_pre = has_pre_cap and (
+                    anm_num == cap_num_found or anm_body_str.lower() == cap_text_lower
+                )
+                if (not has_fn_ref or is_dup_of_pre) and not _TASK_OPERATOR_VERB_RE.match(
+                    anm_body_str
+                ):
+                    matched_post_idx = idx_a
+                    post_cap_heading, c_clean = _build_formatted_caption(
+                        "",
+                        m_anm_post.group(1) or "",
+                        anm_num,
+                        "",
+                        anm_body_str,
+                    )
+                    cap_text_lower = cap_text_lower or c_clean.lower()
+                    break
+
+            m_post = fig_cap_re.match(cand)
+            post_body_clean = re.sub(r"^(?:\*\*|_)+", "", m_post.group(6).strip()) if m_post else ""
+            if (
+                m_post
+                and not _TASK_OPERATOR_VERB_RE.match(post_body_clean)
+                and not post_body_clean.rstrip("*_ ").endswith("?")
+                and not re.search(r"^[A-ZÄÖÜ][a-zäöüß]+en\s+Sie\b", post_body_clean)
+            ):
+                hashes_post = (m_post.group(1) or "").strip()
+                word_post = m_post.group(2) or ""
+                let_post = m_post.group(3) or ""
+                if hashes_post in ("#", "##", "###") and not word_post and not let_post:
+                    continue
+                matched_post_idx = idx_a
+                post_cap_heading, c_clean = _build_formatted_caption(
+                    word_post,
+                    let_post,
+                    m_post.group(4),
+                    m_post.group(5) or "",
+                    post_body_clean,
+                )
+                cap_text_lower = cap_text_lower or c_clean.lower()
+                break
+
+            if bare_pre_info is not None:
+                m_italic_np = re.match(r"^(?:_|\*)([A-ZÄÖÜ][^_*\n]{6,160}?)(?:_|\*)$", cand)
+                m_schema_h4 = re.match(
+                    r"^####\s+([A-ZÄÖÜ][^\n#]{6,160}?\((?:Schema|Diagramm|Modell|Zeichnung|Grafik|stark vereinfacht)\))$",
+                    cand,
+                )
+                np_body = (
+                    m_italic_np.group(1).strip()
+                    if m_italic_np
+                    else (m_schema_h4.group(1).strip() if m_schema_h4 else "")
+                )
+                if (
+                    np_body
+                    and 2 <= len(np_body.split()) <= 20
+                    and (not np_body.endswith((".", "?", "!")) or np_body.endswith(")"))
+                    and not _TASK_OPERATOR_VERB_RE.match(np_body)
+                ):
+                    matched_post_idx = idx_a
+                    post_cap_heading, c_clean = _build_formatted_caption(
+                        "",
+                        bare_pre_info[0],
+                        bare_pre_info[1],
+                        "",
+                        np_body,
+                    )
+                    cap_text_lower = cap_text_lower or c_clean.lower()
+                    break
+
+        if matched_post_idx >= 0:
+            post_lines = post_lines[matched_post_idx + 1 :]
+            if bare_pre_info is not None and last_ne >= 0:
+                pre_lines[last_ne] = post_cap_heading
+                has_pre_cap = True
+            elif not has_pre_cap:
+                while pre_lines and not pre_lines[-1].strip():
+                    pre_lines.pop()
+                pre_lines.append("")
+                pre_lines.append(post_cap_heading)
+                pre_lines.append("")
+                has_pre_cap = True
+        elif not has_pre_cap and promoted_margin_cap:
+            if bare_pre_info is not None and last_ne >= 0:
+                pre_lines[last_ne] = promoted_margin_cap
+            else:
+                while pre_lines and not pre_lines[-1].strip():
+                    pre_lines.pop()
+                pre_lines.append("")
+                pre_lines.append(promoted_margin_cap)
+                pre_lines.append("")
+            has_pre_cap = True
+
+        # Strip trailing duplicate caption line or VLM-repeated axis label immediately after </Bild>
+        while post_lines:
+            first_ne = -1
+            for idx_a, a_ln in enumerate(post_lines):
+                if a_ln.strip():
+                    first_ne = idx_a
+                    break
+            if first_ne < 0:
+                break
+            cand_s = post_lines[first_ne].strip()
+            m_anm_dup = anm_cap_re.match(cand_s)
+            if (
+                m_anm_dup
+                and cap_text_lower
+                and m_anm_dup.group(3).strip().lower() == cap_text_lower
+            ):
+                post_lines.pop(first_ne)
+                continue
+            cand_clean = (
+                re.sub(r"^(?:#{1,6}\s+)?(?:[MBQ]?\d+\s+)?", "", cand_s).strip().lower()
+            )
+            if (cap_text_lower and cand_clean == cap_text_lower) or (
+                len(cand_s) <= 45
+                and not cand_s.startswith(("#", "-", "*", "(("))
+                and not cand_s.endswith((".", "!", "?", ":"))
+                and cand_s in bild_box
+            ):
+                post_lines.pop(first_ne)
+            else:
+                break
+
+        bild_segs[b_i] = bild_box
+        pre_joined = "\n".join(pre_lines).strip("\n")
+        if pre_joined:
+            lead_sep = "\n\n" if b_i > 1 else ""
+            bild_segs[b_i - 1] = f"{lead_sep}{pre_joined}\n\n"
+        else:
+            bild_segs[b_i - 1] = "\n\n" if b_i > 1 else ""
+        post_joined = "\n".join(post_lines).lstrip("\n")
+        if post_joined:
+            bild_segs[b_i + 1] = f"\n\n{post_joined}"
+        else:
+            bild_segs[b_i + 1] = "\n\n" if (b_i + 2 < len(bild_segs)) else "\n"
+
+    return "".join(bild_segs)
+
+
+def _normalize_fibs_emphasis(text: str, custom_rules: str | None = None) -> str:
+    """Normalizes ``**Wort**``, unannounced ``*Wort*``, and ``%Wort%`` to FIBS ``_Wort_``.
+
+    Preserves differentiated ``*...*`` / ``%...%`` / ``#...#`` markers only when an
+    explicit ``<Anmerkung>`` legend announces them per FIBS §10 (p. 97 & p. 103).
+    Strips ``_..._`` emphasis markers inside ``#`` headings per FIBS §10 (p. 99).
+
+    Args:
+        text: Input Markdown text.
+        custom_rules: Optional book-specific rules string.
+
+    Returns:
+        Markdown text with normalized FIBS emphasis markers.
+    """
+    if not text:
+        return text
+
+    has_emphasis_legend = bool(
+        _EMPHASIS_LEGEND_ANM_RE.search(text)
+        or (custom_rules and _EMPHASIS_LEGEND_ANM_RE.search(custom_rules))
+    )
+
+    protected_spans: list[str] = []
+
+    def _mask_span(m: re.Match[str]) -> str:
+        protected_spans.append(m.group(0))
+        return f"__EMPH_PROT_{len(protected_spans) - 1}__"
+
+    masked = fc.UNIT_PERCENT_PROTECTED_RE.sub(_mask_span, text)
+    masked = re.sub(r"\$\$[\s\S]*?\$\$|\$[^\$\n]+\$", _mask_span, masked)
+
+    out_lines: list[str] = []
+    for line in masked.splitlines():
+        if re.match(r"^[ \t]*#{1,6}\s+", line):
+            h_ln = re.sub(r"\*\*([^\*\n]+)\*\*", r"\1", line)
+            if not has_emphasis_legend:
+                h_ln = re.sub(
+                    r"(?<![\w\*\\])\*(?![\*\s])([^\*\n]+?)(?<![\*\s])\*(?![\w\*])",
+                    r"\1",
+                    h_ln,
+                )
+                h_ln = _UNANNOUNCED_PCT_EMPH_RE.sub(r"\1", h_ln)
+            h_ln = re.sub(
+                r"(?<![\w\\])_(?!\.\.\._)(?!\s)([^_\n]+?)(?<!\s)_(?![\w\{])",
+                r"\1",
+                h_ln,
+            )
+            out_lines.append(h_ln)
+            continue
+
+        b_ln = re.sub(r"\*\*([^\*\n]+)\*\*", r"_\1_", line)
+        if not has_emphasis_legend:
+            b_ln = re.sub(
+                r"(?<![\w\*\\])\*(?![\*\s])([^\*\n]+?)(?<![\*\s])\*(?![\w\*])",
+                r"_\1_",
+                b_ln,
+            )
+            b_ln = _UNANNOUNCED_PCT_EMPH_RE.sub(r"_\1_", b_ln)
+        out_lines.append(b_ln)
+
+    res = "\n".join(out_lines)
+    for idx, val in enumerate(protected_spans):
+        res = res.replace(f"__EMPH_PROT_{idx}__", val)
+    return res
+
+
+def _apply_linked_worterklaerungen_and_randspalten(
+    text: str,
+    custom_rules: str | None = None,
+) -> str:
+    r"""Formats marginal boxes under ``#### Randspalte`` and links ``Worterklärungen`` per FIBS §11.
+
+    When ``custom_rules`` specifies linked glossary entries (``Worterklärungen ... verlinkt``),
+    converts legacy ``{n}`` + ``<Anmerkung> n ... </Anmerkung>`` footnotes as well as
+    marginal etymology/definition lines into ``Begriff^n`` body references paired with
+    ``#### Worterklärungen`` and ``-\\t^n: Erklärung`` at the end of the page.
+
+    Args:
+        text: Post-processed Markdown text.
+        custom_rules: Optional book-specific rules string.
+
+    Returns:
+        Markdown text with formatted ``#### Randspalte`` boxes and linked ``Worterklärungen``.
+    """
+    if not text:
+        return text
+
+    # 1. Non-glossary marginal boxes ('Randspalte') -> '#### Randspalte' + '<Rahmen>...</Rahmen>'
+    def _lift_randspalte_rahmen(m: re.Match[str]) -> str:
+        sub = (m.group(1) or "").strip()
+        body = m.group(2).strip()
+        heading = f"#### Randspalte: {sub}" if sub else "#### Randspalte"
+        return f"{heading}\n\n<Rahmen>\n{body}\n</Rahmen>"
+
+    text = re.sub(
+        r"<Rahmen>\s*\n[ \t]*(?:_|\*\*)?Randspalte(?::[ \t]*([^_\*\n]+?))?:?(?:_|\*\*)?[ \t]*\n([\s\S]*?)</Rahmen>",
+        _lift_randspalte_rahmen,
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(?m)^(?:#{1,6}\s+|(?:\*\*|_))Randspalte:?(?:\*\*|_)?[ \t]*\n+(?!<Rahmen>)((?:(?![#\n<\(])[^\n]+\n?)+)",
+        lambda m: "#### Randspalte\n\n<Rahmen>\n"
+        + "\n".join(ln.strip() for ln in m.group(1).strip().splitlines() if ln.strip())
+        + "\n</Rahmen>\n",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    linked_glossary = bool(
+        custom_rules
+        and re.search(
+            r"Worterklärungen?\b[^\n.]*verlinkt|verlinkte?\s+Worterklärungen?",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+
+    etym_re = re.compile(
+        r"^(?:[-*]\s+)?([A-ZÄÖÜa-zäöüß\-]{3,40})\s*"
+        r"(?:\((?:(?:von|aus)\s+)?(?:lat\.|griech\.|gr\.|engl\.|frz\.|ital\.)[^)\n]+\)|"
+        r"[,:]\s*(?:(?:von|aus)\s+)?(?:lat\.|griech\.|gr\.|engl\.|frz\.|ital\.)\b[^\n]+)$"
+    )
+    pure_etym_re = re.compile(
+        r"^(?:[-*]\s+)?(lat\.|griech\.|gr\.|engl\.|frz\.|ital\.)\s+([A-Za-zäöüÄÖÜß\-]+)\s*=\s*([^\n]+)$",
+        re.IGNORECASE,
+    )
+    term_eq_re = re.compile(
+        r"^(?:[-*]\s+)?([A-Za-zäöüÄÖÜß\-]{4,35})\s*=\s*([A-Za-zäöüÄÖÜß][^\n=]{3,140})$"
+    )
+    italic_gloss_sent_re = re.compile(
+        r"^(?:_|\*)((?:Der|Die|Das)\s+([A-ZÄÖÜ][A-Za-zäöüÄÖÜß\-]{4,35})\s+(?:wird|bezeichnet|bedeutet|nennt)\b[^_*\n]{5,140}\.)(?:_|\*)$"
+    )
+    term_def_re = re.compile(
+        r"^(?:[-*]\s+)?([A-ZÄÖÜ][A-Za-zäöüÄÖÜß\-]{2,35}):\s+([^\n]{4,220})$"
+    )
+    non_gloss_box_labels = {
+        "material", "materialien", "chemikalien", "geräte", "durchführung",
+        "versuchsdurchführung", "beobachtung", "auswertung", "ergebnis", "deutung",
+        "entsorgung", "merksatz", "merke", "definition", "beispiel", "hinweis",
+        "tipp", "wichtig", "aufgabe", "übung", "lösung", "quelle", "steckbrief",
+        "infobox", "exkurs", "methode", "praxis", "hintergrund", "answer", "solution",
+        "lernwegweiser", "study skills", "watch out",
+    }
+
+    def _unwrap_glossary_rahmen(m_r: re.Match[str]) -> str:
+        inner_r = m_r.group(1).strip()
+        if not inner_r or "-\t" in inner_r:
+            return m_r.group(0)
+        joined_r = re.sub(r"\n+[ \t]*([=:])[ \t]*", r" \1 ", inner_r)
+        joined_r = re.sub(
+            r"([^\n])\n[ \t]*(?![-*•#]|[*_]*(?:lat\.|griech\.|gr\.|engl\.|frz\.|ital\.)\b|[*_]*[A-Za-zäöüÄÖÜß\-]{3,35}[*_]*\s*[=:])([a-zäöüß][^\n]+)",
+            r"\1 \2",
+            joined_r,
+        )
+        r_lines = [ln_r.strip() for ln_r in joined_r.splitlines() if ln_r.strip()]
+        if not r_lines:
+            return m_r.group(0)
+        has_wk_hdr = False
+        first_plain = re.sub(r"[*_#]+", "", r_lines[0]).strip()
+        if re.match(r"^Worterklärung(?:en)?(?:\s*\(Randspalte\))?:?\s*$", first_plain, re.IGNORECASE):
+            has_wk_hdr = True
+            r_lines = r_lines[1:]
+        if not r_lines:
+            return m_r.group(0)
+
+        has_etym_or_eq = False
+        for ln_r in r_lines:
+            p_ln = re.sub(r"[*_]+", "", ln_r).strip()
+            if len(p_ln.split()) > 22:
+                return m_r.group(0)
+            if "\\" in p_ln or "$" in p_ln or "->" in p_ln:
+                return m_r.group(0)
+            lead_lbl = p_ln.split(":")[0].strip(" -*").lower() if ":" in p_ln else ""
+            if lead_lbl in non_gloss_box_labels or fc.DIDACTIC_BOX_HEADER_RE.match(lead_lbl):
+                return m_r.group(0)
+            if pure_etym_re.match(p_ln) or etym_re.match(p_ln) or term_eq_re.match(p_ln):
+                has_etym_or_eq = True
+            elif not term_def_re.match(p_ln):
+                return m_r.group(0)
+
+        if not (has_wk_hdr or has_etym_or_eq):
+            return m_r.group(0)
+        if linked_glossary:
+            return "\n\n".join(r_lines)
+        formatted_items = [
+            f"-\t{re.sub(r'^[-*]\\s+', '', ln_r)}" for ln_r in r_lines
+        ]
+        return "#### Worterklärungen\n\n" + "\n".join(formatted_items)
+
+    text = re.sub(
+        r"<Rahmen\b[^>]*>\s*([\s\S]*?)\s*</Rahmen>",
+        _unwrap_glossary_rahmen,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not linked_glossary:
+        return text
+
+    segs = split_markdown_pages(text)
+
+    def _latin_stem_regex(word: str) -> str:
+        w_low = word.lower()
+        stripped_root = re.sub(r"(?:ere|are|ire|ari|os|on|us|um|is)$", "", w_low)
+        base = stripped_root if len(stripped_root) >= 4 else w_low[: max(4, len(w_low) - 2)]
+        raw_st = base[: min(6, len(base))]
+        # Allow Latin/Greek c -> German k/z and i -> e stem alternations (secern -> sezern, recip -> rezep, contrah -> kontrah, sarc -> sark)
+        pat_chars: list[str] = []
+        for idx_c, ch in enumerate(raw_st):
+            if ch == "c":
+                pat_chars.append("[ckz]")
+            elif ch == "i" and idx_c >= 2:
+                pat_chars.append("[ie]")
+            else:
+                pat_chars.append(re.escape(ch))
+        return "".join(pat_chars)
+
+    for seg in segs:
+        p_text = seg.text
+        if not p_text.strip():
+            continue
+
+        entries: list[tuple[int, str]] = []
+        used_nums: set[int] = set()
+        for existing_m in re.finditer(r"(?m)^(?:-\t|\s*)\^(\d+)[:\s]", p_text):
+            used_nums.add(int(existing_m.group(1)))
+
+        def _next_num() -> int:
+            n_cand = 1
+            while n_cand in used_nums:
+                n_cand += 1
+            used_nums.add(n_cand)
+            return n_cand
+
+        # A. Convert {n} + <Anmerkung> n ... </Anmerkung> on this page
+        anm_defs: dict[int, str] = {}
+
+        def _collect_anm(m_a: re.Match[str]) -> str:
+            num_i = int(m_a.group(1))
+            body_a = m_a.group(2).strip()
+            if re.search(rf"(?<![_^\\])\{{{num_i}\}}", p_text):
+                anm_defs[num_i] = body_a
+                used_nums.add(num_i)
+                return ""
+            return m_a.group(0)
+
+        p_text = re.sub(
+            r"<Anmerkung\b[^>]*>\s*(\d+)\s+([\s\S]*?)\s*</Anmerkung>",
+            _collect_anm,
+            p_text,
+            flags=re.IGNORECASE,
+        )
+        for num_i in sorted(anm_defs):
+            p_text = re.sub(rf"(?<![_^\\])\{{{num_i}\}}", f"^{num_i}", p_text)
+            entries.append((num_i, anm_defs[num_i]))
+
+        # B. Detect marginal etymology / glossary lines outside protected blocks
+        p_text = re.sub(r"\n+[ \t]*=[ \t]*", " = ", p_text)
+        lines = p_text.splitlines()
+        kept_lines: list[str] = []
+        in_prot = False
+        in_worterkl_sec = False
+        body_snapshot = re.sub(
+            r"<(?:Bild|Tabelle|Rahmen|Anmerkung)\b[^>]*>[\s\S]*?</(?:Bild|Tabelle|Rahmen|Anmerkung)>",
+            "",
+            p_text,
+            flags=re.IGNORECASE,
+        )
+
+        # Tuple: (primary_term, fallback_gloss, num_e, formatted_desc, original_line)
+        pending_links: list[tuple[str, str, int, str, str]] = []
+        for ln in lines:
+            s = ln.strip()
+            if re.match(r"^<(?:Bild|Tabelle|Rahmen|Anmerkung)\b", s, re.IGNORECASE):
+                if not re.search(r"</(?:Bild|Tabelle|Rahmen|Anmerkung)>", s, re.IGNORECASE):
+                    in_prot = True
+                kept_lines.append(ln)
+                continue
+            if in_prot:
+                if re.search(r"</(?:Bild|Tabelle|Rahmen|Anmerkung)>", s, re.IGNORECASE):
+                    in_prot = False
+                kept_lines.append(ln)
+                continue
+
+            s_plain = re.sub(r"[*_]+", "", s).strip()
+            if re.match(
+                r"^(?:#{1,6}\s+)?Worterklärung(?:en)?(?:\s*\(Randspalte\))?:?\s*$",
+                s_plain,
+                re.IGNORECASE,
+            ):
+                in_worterkl_sec = True
+                continue
+
+            if in_worterkl_sec and re.match(r"^(?:#{1,6}\s+|\(\()", s):
+                in_worterkl_sec = False
+
+            if in_worterkl_sec and s:
+                m_already = re.match(r"^(?:[-*]\s+)?\^(\d+):\s*(.+)$", s)
+                if m_already:
+                    num_e = int(m_already.group(1))
+                    used_nums.add(num_e)
+                    entries.append((num_e, m_already.group(2).strip()))
+                    continue
+                m_td = term_def_re.match(s_plain) or etym_re.match(s_plain)
+                if m_td:
+                    term_c = m_td.group(1).strip()
+                    clean_s = re.sub(r"^[-*]\s+", "", s_plain)
+                    num_e = _next_num()
+                    pending_links.append((term_c, "", num_e, clean_s, ln))
+                    continue
+
+            m_pe = pure_etym_re.match(s_plain)
+            if m_pe:
+                lang_lbl = m_pe.group(1).strip()
+                foreign_w = m_pe.group(2).strip()
+                gloss_w = m_pe.group(3).strip()
+                clean_s = f"{lang_lbl} _{foreign_w}_ = {gloss_w}"
+                num_e = _next_num()
+                pending_links.append((foreign_w, gloss_w, num_e, clean_s, ln))
+                continue
+
+            m_et = etym_re.match(s_plain)
+            if m_et:
+                term_c = m_et.group(1).strip()
+                stem = term_c[: max(4, len(term_c) - 2)]
+                if len(re.findall(rf"(?<![A-Za-zäöüÄÖÜß]){re.escape(stem)}", body_snapshot, re.IGNORECASE)) >= 2:
+                    clean_s = re.sub(r"^[-*]\s+", "", s_plain)
+                    num_e = _next_num()
+                    pending_links.append((term_c, "", num_e, clean_s, ln))
+                    continue
+
+            m_eq = term_eq_re.match(s_plain)
+            if m_eq and not s.startswith("#") and "\\to" not in s and "->" not in s:
+                term_c = m_eq.group(1).strip()
+                gloss_eq = m_eq.group(2).strip()
+                stem_eq = _latin_stem_regex(term_c)
+                if len(re.findall(rf"(?<![A-Za-zäöüÄÖÜß]){stem_eq}[A-Za-zäöüÄÖÜß]*", body_snapshot, re.IGNORECASE)) >= 2:
+                    clean_s = f"_{term_c}_ = {gloss_eq}"
+                    num_e = _next_num()
+                    pending_links.append((term_c, "", num_e, clean_s, ln))
+                    continue
+
+            m_igs = italic_gloss_sent_re.match(s)
+            if m_igs:
+                full_sent = m_igs.group(1).strip()
+                subj_term = m_igs.group(2).strip()
+                if len(re.findall(rf"(?<![A-Za-zäöüÄÖÜß]){re.escape(subj_term)}[A-Za-zäöüÄÖÜß]*", body_snapshot, re.IGNORECASE)) >= 2:
+                    num_e = _next_num()
+                    pending_links.append((subj_term, "", num_e, full_sent, ln))
+                    continue
+
+            m_tdef = term_def_re.match(s_plain)
+            if m_tdef and not s.startswith("#") and "\\to" not in s:
+                term_c = m_tdef.group(1).strip()
+                if term_c.lower() not in {
+                    "material", "chemikalien", "geräte", "durchführung", "beobachtung",
+                    "auswertung", "ergebnis", "merksatz", "definition", "beispiel", "hinweis",
+                    "aufgabe", "lösung", "quelle", "fach", "titel", "verlag", "seite",
+                }:
+                    stem = term_c[: max(4, len(term_c) - 1)]
+                    non_colon_hits = len(
+                        re.findall(
+                            rf"(?<![A-Za-zäöüÄÖÜß]){re.escape(stem)}[A-Za-zäöüÄÖÜß]*(?!\s*:)",
+                            body_snapshot,
+                            re.IGNORECASE,
+                        )
+                    )
+                    if non_colon_hits >= 1 and len(m_tdef.group(2).split()) >= 3:
+                        clean_s = re.sub(r"^[-*]\s+", "", s_plain)
+                        num_e = _next_num()
+                        pending_links.append((term_c, "", num_e, clean_s, ln))
+                        continue
+
+            kept_lines.append(ln)
+
+        rebuilt = "\n".join(kept_lines)
+        prot_blocks: list[str] = []
+
+        def _mask_prot_block(m_pb: re.Match[str]) -> str:
+            prot_blocks.append(m_pb.group(0))
+            return f"__GLOSS_PROT_BLK_{len(prot_blocks) - 1}__"
+
+        rebuilt_masked = re.sub(
+            r"<(?:Bild|Tabelle|Rahmen|Anmerkung)\b[^>]*>[\s\S]*?</(?:Bild|Tabelle|Rahmen|Anmerkung)>",
+            _mask_prot_block,
+            rebuilt,
+            flags=re.IGNORECASE,
+        )
+
+        unmatched_lines: list[str] = []
+        for term_c, gloss_fb, num_e, clean_s, orig_ln in pending_links:
+            already_has = bool(re.search(rf"\^{num_e}\b", rebuilt_masked))
+            n_subs = 1 if already_has else 0
+            if not already_has:
+                stem_pat = _latin_stem_regex(term_c)
+                for cand_pat in (
+                    rf"(?m)^(?![ \t]*#|[ \t]*__GLOSS_PROT_BLK_)([^\n]*?(?<![A-Za-zäöüÄÖÜß])[A-Za-zäöüÄÖÜß]*{stem_pat}[A-Za-zäöüÄÖÜß]*)(?:(_))?(?!\^\d)",
+                    *(
+                        [
+                            rf"(?m)^(?![ \t]*#|[ \t]*__GLOSS_PROT_BLK_)([^\n]*?(?<![A-Za-zäöüÄÖÜß])[A-Za-zäöüÄÖÜß]*{re.escape(gloss_fb.split()[0][:5])}[A-Za-zäöüÄÖÜß]*)(?:(_))?(?!\^\d)"
+                        ]
+                        if gloss_fb and len(gloss_fb.split()[0]) >= 5
+                        else []
+                    ),
+                ):
+                    rebuilt_new, cnt = re.subn(
+                        cand_pat,
+                        lambda m_hit, ne=num_e: f"{m_hit.group(1)}{m_hit.group(2) or ''}^{ne}",
+                        rebuilt_masked,
+                        count=1,
+                        flags=re.IGNORECASE,
+                    )
+                    if cnt > 0:
+                        rebuilt_masked = rebuilt_new
+                        n_subs = cnt
+                        break
+
+            if n_subs > 0:
+                entries.append((num_e, clean_s))
+            else:
+                unmatched_lines.append(orig_ln)
+
+        for idx_pb, val_pb in enumerate(prot_blocks):
+            rebuilt_masked = rebuilt_masked.replace(f"__GLOSS_PROT_BLK_{idx_pb}__", val_pb)
+        rebuilt = rebuilt_masked
+        if unmatched_lines:
+            rebuilt = rebuilt.rstrip() + "\n\n" + "\n\n".join(unmatched_lines)
+
+        if entries:
+            entries.sort(key=lambda pair: pair[0])
+            glossary_lines = ["#### Worterklärungen", ""] + [
+                f"-\t^{num_e}: {desc_e}" for num_e, desc_e in entries
+            ]
+            rebuilt = re.sub(r"\n{3,}", "\n\n", rebuilt.rstrip())
+            rebuilt = f"{rebuilt}\n\n" + "\n".join(glossary_lines)
+
+        seg.text = rebuilt.rstrip() + "\n\n"
+
+    return "".join(s.text for s in segs).strip()
+
+
+def _apply_buchkonferenz_rules(
+    text: str,
+    custom_rules: str | None,
+    ruleset_key: str = "uebertragungsregeln_09_2025",
+) -> str:
     """Applies generic Buchkonferenz structural and formatting directives from ``custom_rules``.
 
     Args:
         text: Post-processed Markdown text.
         custom_rules: Optional book-specific rules string from ``custom_ruleset.txt``.
+        ruleset_key: Active FIBS ruleset identifier.
 
     Returns:
         Markdown text transformed according to the detected Buchkonferenz directives.
@@ -1427,8 +2463,111 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
         flags=re.IGNORECASE,
     )
 
+    # Global FIBS 09/2025 Ü4 captions above <Bild> with Buchkonferenz prefix priority
+    text = _promote_and_clean_bild_captions(text, custom_rules=custom_rules, ruleset_key=ruleset_key)
+
     if not custom_rules or not custom_rules.strip():
         return text
+
+    fig_pfx, explicit_bk = _resolve_figure_caption_prefix(custom_rules, ruleset_key)
+
+    # 0. Format Steckbrief / biography callout boxes and deduplicate composite 'Foto mit Text' portrait summaries
+    steckbrief_rubric = f"#### {fig_pfx} Steckbrief" if (fig_pfx == "M" and explicit_bk) else "#### Steckbrief"
+    text = re.sub(
+        r"(?m)^#{2,6}\s+(?:M\s+)?Steckbrief:?\s*(?=\n+<Rahmen\b)",
+        steckbrief_rubric,
+        text,
+        flags=re.IGNORECASE,
+    )
+    sb_pages = split_markdown_pages(text)
+    sb_changed = False
+    for sb_seg in sb_pages:
+        sb_txt = sb_seg.text
+        if "<Bild" not in sb_txt:
+            continue
+        m_fmt_bio = re.search(
+            r"(<Bild>\s*Foto mit Text:\s*\nBeschreibung(?: mit Bildtext)?:\s*)"
+            r"([^\n]+?)\s+"
+            r"((?:Links|Rechts|Daneben|Oben|Unten)[^\n.]*?\bTextblock\s+unter\s+der\s+Überschrift\s+([^\n,]+?),\s+der\s+beschreibt[^\n]*)"
+            r"(\n</Bild>)",
+            sb_txt,
+        )
+        if not m_fmt_bio:
+            continue
+        portrait_sent = m_fmt_bio.group(2).strip()
+        dup_clause = m_fmt_bio.group(3).strip()
+        sub_raw = re.sub(r"[*_]+", "", m_fmt_bio.group(4)).strip()
+        clause_words = {
+            w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9]{4,}", f"{sub_raw} {dup_clause}")
+            if w.lower() not in {"links", "rechts", "daneben", "befindet", "sich", "textblock", "unter", "überschrift", "beschreibt"}
+        }
+        if len(clause_words) < 2:
+            continue
+
+        has_matching_rahmen = False
+        for m_ex_r in re.finditer(r"<Rahmen\b[^>]*>([\s\S]*?)</Rahmen>", sb_txt, flags=re.IGNORECASE):
+            rw = {w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9]{4,}", m_ex_r.group(1))}
+            if len(rw & clause_words) >= 3 or (clause_words and len(rw & clause_words) / len(clause_words) >= 0.60):
+                has_matching_rahmen = True
+                break
+
+        if not has_matching_rahmen:
+            sb_paras = re.split(r"(\n{2,})", sb_txt)
+            for p_k in range(0, len(sb_paras), 2):
+                cand_p = sb_paras[p_k].strip()
+                if (
+                    not cand_p
+                    or cand_p.startswith(("#", "<", "((", "---", "-\t"))
+                    or len(cand_p.split()) < 20
+                ):
+                    continue
+                pw = {w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9]{4,}", cand_p)}
+                if len(pw & clause_words) >= 3:
+                    sb_paras[p_k] = (
+                        f"{steckbrief_rubric}\n\n<Rahmen>\n_{sub_raw}_\n\n{cand_p}\n</Rahmen>"
+                    )
+                    has_matching_rahmen = True
+                    break
+            if has_matching_rahmen:
+                sb_txt = re.sub(r"(?m)^[ \t]*---[ \t]*\n+", "", "".join(sb_paras))
+
+        if has_matching_rahmen:
+            compact_bild = f"<Bild> Foto:\nBeschreibung: {portrait_sent}\n</Bild>"
+            sb_txt = sb_txt.replace(m_fmt_bio.group(0), compact_bild, 1)
+            # If a misplaced diagram caption sits right above this portrait <Bild>, relocate it above an earlier uncaptioned diagram <Bild>
+            m_mis_cap = re.search(
+                rf"(?m)^(####\s+{re.escape(fig_pfx)}?\d+\s+([^\n]+))\n\n(?={re.escape(compact_bild)})",
+                sb_txt,
+            )
+            if m_mis_cap:
+                cap_full_ln = m_mis_cap.group(1)
+                cap_kw = {
+                    w.lower()
+                    for w in re.findall(r"[A-Za-zÄÖÜäöüß]{5,}", m_mis_cap.group(2))
+                    if w.lower() not in {"durch", "einer", "einem", "eines", "unter", "über"}
+                }
+                port_kw = {w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß]{5,}", portrait_sent)}
+                if cap_kw and not (cap_kw & port_kw):
+                    for m_prev_b in re.finditer(r"<Bild>\s*[^\n]*\n[\s\S]*?</Bild>", sb_txt):
+                        if m_prev_b.start() >= m_mis_cap.start():
+                            break
+                        prev_pre = sb_txt[: m_prev_b.start()].rstrip()
+                        last_prev_ln = prev_pre.splitlines()[-1].strip() if prev_pre.splitlines() else ""
+                        if re.match(rf"^####\s+{re.escape(fig_pfx)}?\d+\b", last_prev_ln):
+                            continue
+                        prev_b_kw = {w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß]{5,}", m_prev_b.group(0))}
+                        if len(cap_kw & prev_b_kw) >= 2:
+                            sb_txt = (
+                                sb_txt[: m_prev_b.start()]
+                                + f"{cap_full_ln}\n\n"
+                                + sb_txt[m_prev_b.start() : m_mis_cap.start()]
+                                + sb_txt[m_mis_cap.end() :]
+                            )
+                            break
+            sb_seg.text = sb_txt
+            sb_changed = True
+    if sb_changed:
+        text = "".join(s.text for s in sb_pages)
 
     # 1. Resolve <Tabelle> blocks up to 30 cells (2c) and drop placeholder tables (2a)
     def _resolve_custom_tabelle(m: re.Match[str]) -> str:
@@ -1471,121 +2610,13 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
         flags=re.IGNORECASE,
     )
 
-    # 2. Figure Caption M-Prefix & Placement Before <Bild> (3b)
-    use_m_prefix = bool(
-        re.search(
-            r"Abbildungsnummern\s+ein\s+M\s+vorangestellt|\bM\s+vorangestellt",
-            custom_rules,
-            re.IGNORECASE,
-        )
-    )
-    caption_h4 = use_m_prefix or bool(
+    caption_h4 = bool(fig_pfx) or bool(
         re.search(
             r"Überschrift\s*4[^\n]*Abbildungsunterschriften|Abbildungsunterschriften[^\n]*Überschrift\s*4",
             custom_rules,
             re.IGNORECASE,
         )
     )
-    if caption_h4 and "<Bild" in text:
-        m_pfx = "M" if use_m_prefix else ""
-        fig_cap_re = re.compile(
-            r"^(?:#{1,6}\s+)?(?:\*\*|_)?(?:Abb(?:ildung)?\.?\s*|M\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n]{3,180}?)(?:\*\*|_)?$"
-        )
-        bild_segs = re.split(
-            r"(<Bild\b[^>]*>[\s\S]*?</Bild>)", text, flags=re.IGNORECASE
-        )
-        for b_i in range(1, len(bild_segs), 2):
-            pre_lines = bild_segs[b_i - 1].splitlines()
-            post_lines = bild_segs[b_i + 1].splitlines()
-            bild_box = bild_segs[b_i]
-
-            last_ne = -1
-            for idx_p in range(len(pre_lines) - 1, -1, -1):
-                if pre_lines[idx_p].strip():
-                    last_ne = idx_p
-                    break
-
-            has_pre_cap = False
-            cap_text_lower = ""
-            if last_ne >= 0:
-                m_pre = fig_cap_re.match(pre_lines[last_ne].strip())
-                if m_pre and not _TASK_OPERATOR_VERB_RE.match(m_pre.group(2).strip()):
-                    c_num, c_body = m_pre.group(1), m_pre.group(2).strip()
-                    pre_lines[last_ne] = f"#### {m_pfx}{c_num} {c_body}"
-                    has_pre_cap = True
-                    cap_text_lower = c_body.lower()
-
-            # Inspect first few non-empty lines after </Bild> for trailing caption or orphan axis fragments
-            ne_indices: list[int] = []
-            for idx_a, a_ln in enumerate(post_lines):
-                a_s = a_ln.strip()
-                if not a_s:
-                    continue
-                if re.match(r"^\(\(\d+\)\)", a_s) or a_s.startswith(
-                    ("<Bild", "<Tabelle", "<Rahmen", "<Anmerkung", "#####")
-                ):
-                    break
-                ne_indices.append(idx_a)
-                if len(ne_indices) >= 4:
-                    break
-
-            matched_post_idx = -1
-            post_cap_heading = ""
-            for k_pos, idx_a in enumerate(ne_indices):
-                cand = post_lines[idx_a].strip()
-                m_post = fig_cap_re.match(cand)
-                if m_post and not _TASK_OPERATOR_VERB_RE.match(m_post.group(2).strip()):
-                    # Ensure any preceding lines before idx_a are short orphan diagram labels
-                    intervening_ok = all(
-                        len(post_lines[prev_a].strip()) <= 50
-                        and not post_lines[prev_a].strip().endswith((".", "!", "?"))
-                        and not post_lines[prev_a].strip().startswith("#")
-                        for prev_a in ne_indices[:k_pos]
-                    )
-                    if intervening_ok:
-                        matched_post_idx = idx_a
-                        c_num, c_body = m_post.group(1), m_post.group(2).strip()
-                        post_cap_heading = f"#### {m_pfx}{c_num} {c_body}"
-                        cap_text_lower = cap_text_lower or c_body.lower()
-                        break
-
-            if matched_post_idx >= 0:
-                post_lines = post_lines[matched_post_idx + 1 :]
-                if not has_pre_cap:
-                    while pre_lines and not pre_lines[-1].strip():
-                        pre_lines.pop()
-                    pre_lines.append("")
-                    pre_lines.append(post_cap_heading)
-                    pre_lines.append("")
-                    has_pre_cap = True
-
-            # Strip trailing duplicate caption line or VLM-repeated axis label immediately after </Bild>
-            while post_lines:
-                first_ne = -1
-                for idx_a, a_ln in enumerate(post_lines):
-                    if a_ln.strip():
-                        first_ne = idx_a
-                        break
-                if first_ne < 0:
-                    break
-                cand_s = post_lines[first_ne].strip()
-                cand_clean = re.sub(r"^(?:#{1,6}\s+)?(?:M?\d+\s+)?", "", cand_s).strip().lower()
-                if (cap_text_lower and cand_clean == cap_text_lower) or (
-                    len(cand_s) <= 45
-                    and not cand_s.startswith(("#", "-", "*", "(("))
-                    and not cand_s.endswith((".", "!", "?", ":"))
-                    and cand_s in bild_box
-                ):
-                    post_lines.pop(first_ne)
-                else:
-                    break
-
-            bild_segs[b_i - 1] = "\n".join(pre_lines)
-            if not bild_segs[b_i - 1].endswith("\n"):
-                bild_segs[b_i - 1] += "\n\n"
-            bild_segs[b_i + 1] = "\n" + "\n".join(post_lines).lstrip("\n")
-
-        text = "".join(bild_segs)
 
     # 3. Task Formatting: ##### Aufgaben + ##### <Nr> + Paragraph (4a)
     tasks_h5 = bool(
@@ -1597,8 +2628,101 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
         in_bild = False
         in_tabelle = False
         in_aufgaben = False
+        in_material_sec = False
+        cur_t_page = ""
 
-        for ln in t_lines:
+        # Pre-index bare figure headings ('#### M3') per page so non-task numbered captions attach to them
+        bare_fig_line_by_page_num: dict[tuple[str, str], int] = {}
+        scan_pg_t = ""
+        for idx_tl, raw_tl in enumerate(t_lines):
+            st_tl = raw_tl.strip()
+            m_pm_t = re.match(r"^\(\((\d+)\)\)", st_tl)
+            if m_pm_t:
+                scan_pg_t = m_pm_t.group(1)
+                continue
+            m_bf = re.match(r"^####\s+([MBQ])\s*(\d{1,2}[a-z]?)\s*$", st_tl)
+            if m_bf:
+                bare_fig_line_by_page_num[(scan_pg_t, m_bf.group(2))] = idx_tl
+
+        attached_fig_titles: dict[int, str] = {}
+        skip_t_indices: set[int] = set()
+        n_tl = len(t_lines)
+        idx_t = 0
+        while idx_t < n_tl:
+            s_chk = t_lines[idx_t].strip()
+            m_pm_c = re.match(r"^\(\((\d+)\)\)", s_chk)
+            if m_pm_c:
+                cur_t_page = m_pm_c.group(1)
+                idx_t += 1
+                continue
+            # Check '##### <n>\n+<Noun-phrase caption>' or '<n>. <Noun-phrase caption>' matching a bare '#### M<n>' on the same page
+            m_h5_cand = re.match(r"^#####\s+(\d{1,2}[a-z]?)\s*$", s_chk)
+            m_pl_cand = re.match(r"^(?:(\d{1,2})\.\t|(\d{1,2})[.:]\s+)([A-ZÄÖÜ].+)$", s_chk)
+            if m_h5_cand and (cur_t_page, m_h5_cand.group(1)) in bare_fig_line_by_page_num:
+                c_num_k = m_h5_cand.group(1)
+                nxt_ne_i = idx_t + 1
+                while nxt_ne_i < n_tl and not t_lines[nxt_ne_i].strip():
+                    nxt_ne_i += 1
+                if nxt_ne_i < n_tl:
+                    body_cand = t_lines[nxt_ne_i].strip()
+                    if (
+                        body_cand
+                        and not body_cand.startswith(("#", "<", "(("))
+                        and not _TASK_OPERATOR_VERB_RE.match(body_cand)
+                        and not body_cand.endswith("?")
+                        and not re.search(r"\bSie\b", body_cand)
+                    ):
+                        cap_parts = [body_cand]
+                        end_skip = nxt_ne_i
+                        scan_sub = nxt_ne_i + 1
+                        while scan_sub < n_tl:
+                            sub_s = t_lines[scan_sub].strip()
+                            if not sub_s:
+                                scan_sub += 1
+                                continue
+                            if re.match(r"^(?:-\t|[-*•]\s+)?_?[A-F]_?\s+\S", sub_s):
+                                cap_parts.append(re.sub(r"^(?:-\t|[-*•]\s+)", "", sub_s).rstrip(","))
+                                end_skip = scan_sub
+                                scan_sub += 1
+                            else:
+                                break
+                        joined_cap = (
+                            f"{cap_parts[0]} {', '.join(cap_parts[1:])}"
+                            if len(cap_parts) > 1
+                            else cap_parts[0]
+                        )
+                        target_bf_idx = bare_fig_line_by_page_num[(cur_t_page, c_num_k)]
+                        attached_fig_titles[target_bf_idx] = _split_long_caption_body(
+                            f"{fig_pfx}{c_num_k}", joined_cap
+                        )
+                        for sk_i in range(idx_t, end_skip + 1):
+                            skip_t_indices.add(sk_i)
+                        idx_t = end_skip + 1
+                        continue
+            elif m_pl_cand:
+                c_num_p = m_pl_cand.group(1) or m_pl_cand.group(2)
+                body_p = m_pl_cand.group(3).strip()
+                if (
+                    (cur_t_page, c_num_p) in bare_fig_line_by_page_num
+                    and not _TASK_OPERATOR_VERB_RE.match(body_p)
+                    and not body_p.endswith("?")
+                    and not re.search(r"\bSie\b", body_p)
+                ):
+                    target_bf_idx = bare_fig_line_by_page_num[(cur_t_page, c_num_p)]
+                    attached_fig_titles[target_bf_idx] = _split_long_caption_body(
+                        f"{fig_pfx}{c_num_p}", body_p
+                    )
+                    skip_t_indices.add(idx_t)
+                    idx_t += 1
+                    continue
+            idx_t += 1
+
+        for line_i_t, ln in enumerate(t_lines):
+            if line_i_t in skip_t_indices:
+                continue
+            if line_i_t in attached_fig_titles:
+                out_t_lines.append(attached_fig_titles[line_i_t])
+                continue
             s = ln.strip()
             if in_bild:
                 if re.search(r"</Bild>", s, re.IGNORECASE):
@@ -1622,8 +2746,13 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
                 continue
 
             if re.match(r"^\(\(\d+\)\)", s):
+                in_material_sec = False
+                in_aufgaben = False
                 out_t_lines.append(ln)
                 continue
+
+            if re.match(r"^#{2,4}\s+Material\b", s, re.IGNORECASE):
+                in_material_sec = True
 
             # Standalone "Aufgaben" or "Aufgaben:"
             if re.match(
@@ -1652,19 +2781,39 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
                 in_aufgaben = True
                 continue
 
-            # Standalone "##### <Nr>" or "### Aufgabe 1:"
+            # Standalone "##### <Nr>", "### Aufgabe 1:", or "#### A1" sub-task heading
             m_h5_only = re.match(
                 r"^(#{1,6})\s+(?:(?:\*\*|_)?(Aufgaben?)\s+)?([A-LN-Z]?\d+)[.:]?\s*$",
                 s,
                 re.IGNORECASE,
             )
-            if m_h5_only and (len(m_h5_only.group(1)) == 5 or m_h5_only.group(2)):
-                if not in_aufgaben:
-                    out_t_lines.append("##### Aufgaben")
-                    out_t_lines.append("")
-                    in_aufgaben = True
-                out_t_lines.append(f"##### {m_h5_only.group(3)}")
-                continue
+            if m_h5_only:
+                h_only_hashes = m_h5_only.group(1)
+                h_only_kw = m_h5_only.group(2)
+                h_only_num = m_h5_only.group(3)
+                nxt_ne_line = ""
+                for fwd_t in range(line_i_t + 1, n_tl):
+                    if fwd_t not in skip_t_indices and t_lines[fwd_t].strip():
+                        nxt_ne_line = t_lines[fwd_t].strip()
+                        break
+                is_alpha_subtask = (
+                    len(h_only_hashes) >= 2
+                    and bool(re.match(r"^[A-LN-Z]\d+$", h_only_num))
+                    and not nxt_ne_line.startswith(("<Bild", "!["))
+                    and (
+                        in_aufgaben
+                        or in_material_sec
+                        or bool(_TASK_OPERATOR_VERB_RE.match(nxt_ne_line))
+                        or nxt_ne_line.endswith("?")
+                    )
+                )
+                if len(h_only_hashes) == 5 or h_only_kw or is_alpha_subtask:
+                    if not in_aufgaben:
+                        out_t_lines.append("##### Aufgaben")
+                        out_t_lines.append("")
+                        in_aufgaben = True
+                    out_t_lines.append(f"##### {h_only_num}")
+                    continue
 
             # Heading with task number + sentence: ### 1 Erklären Sie... or #### A1 Erläutern Sie... or ### Aufgabe 1: ...
             m_h_task = re.match(
@@ -1700,17 +2849,22 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
                 out_t_lines.append(ln)
                 continue
 
-            # Plain-text or list-formatted task line: "1 Erklären Sie...", "Ü. 1 Erläutern Sie...", "A2 Beschreiben Sie..."
+            # Plain-text or list-formatted task line: "1 Erklären Sie...", "- A2 Beschreiben Sie...", "Ü. 1 Erläutern Sie..."
             m_plain_task = re.match(
-                r"^(?:(\d+)\.\t|(?:Ü\.?\s+)?(?:\*\*|_)?([A-LN-Z]\d+|\d+)(?:\*\*|_)?[.:]?\s+)([A-ZÄÖÜ].+)$",
+                r"^(?:(\d+)\.\t|(?:[-*•][\t ]+)?(?:Ü\.?\s+)?(?:\*\*|_)?([A-LN-Z]\d+|\d+)(?:\*\*|_)?[.:]?\s+)([A-ZÄÖÜ].+)$",
                 s,
             )
             if m_plain_task:
                 t_num = m_plain_task.group(1) or m_plain_task.group(2)
                 t_body = m_plain_task.group(3).strip()
-                if (
+                is_explicit_op_or_q = (
                     bool(_TASK_OPERATOR_VERB_RE.match(t_body))
-                    or (in_aufgaben and bool(re.match(r"^[A-LN-Z]?\d+$", t_num)))
+                    or t_body.endswith("?")
+                    or bool(re.search(r"^[A-ZÄÖÜ][a-zäöüß]+en\s+Sie\b", t_body))
+                )
+                if is_explicit_op_or_q or (
+                    in_aufgaben
+                    and bool(re.match(r"^[A-LN-Z]\d+$", t_num))
                 ):
                     if not in_aufgaben:
                         out_t_lines.append("##### Aufgaben")
@@ -1733,15 +2887,44 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
             re.IGNORECASE,
         )
     )
+    material_h3_section = bool(
+        re.search(
+            r"Material\s+Ü3|Überschrift\s*3\s*:[\s\S]{0,120}\bMaterial\b",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
     if has_buchkonferenz_hierarchy:
+        # Detect pages that contain figure M1 ('#### M1 ...') and pages that already have '###'
+        pages_with_m1: set[str] = set()
+        pages_with_h3: set[str] = set()
+        cur_pg_scan = ""
+        for scan_ln in text.splitlines():
+            st_sc = scan_ln.strip()
+            m_pm_s = re.match(r"^\(\((\d+)\)\)", st_sc)
+            if m_pm_s:
+                cur_pg_scan = m_pm_s.group(1)
+            elif cur_pg_scan:
+                if re.match(rf"^####\s+{re.escape(fig_pfx)}?1\b", st_sc):
+                    pages_with_m1.add(cur_pg_scan)
+                elif re.match(r"^###\s+\S", st_sc):
+                    pages_with_h3.add(cur_pg_scan)
+
         h_lines = text.splitlines()
         out_h_lines: list[str] = []
         in_bild = False
         in_tabelle = False
         seen_chapter_or_h3 = False
         after_m1_caption = False
+        cur_pg_h = ""
+        seen_mat_h3_on_page = False
         for ln in h_lines:
             s = ln.strip()
+            m_pm_h = re.match(r"^\(\((\d+)\)\)", s)
+            if m_pm_h:
+                cur_pg_h = m_pm_h.group(1)
+                seen_mat_h3_on_page = False
+                after_m1_caption = False
             if in_bild:
                 if re.search(r"</Bild>", s, re.IGNORECASE):
                     in_bild = False
@@ -1763,7 +2946,7 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
                 out_h_lines.append(ln)
                 continue
 
-            if re.match(r"^####\s+M1\b", s):
+            if re.match(rf"^####\s+{re.escape(fig_pfx)}?1\b", s):
                 after_m1_caption = True
                 out_h_lines.append(ln)
                 continue
@@ -1786,7 +2969,12 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
                 s,
             )
             if m_mat_sub:
-                mat_title = re.sub(r"\s*•\s*", ": ", m_mat_sub.group(1).strip())
+                if material_h3_section and not seen_mat_h3_on_page and re.match(r"^Material\s+A\b", m_mat_sub.group(1).strip()):
+                    out_h_lines.append("### Material")
+                    out_h_lines.append("")
+                    seen_mat_h3_on_page = True
+                    seen_chapter_or_h3 = True
+                mat_title = re.sub(r"\s*[•·]\s*", ": ", m_mat_sub.group(1).strip())
                 out_h_lines.append(f"#### {mat_title}")
                 continue
 
@@ -1806,8 +2994,10 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
                 sp_title = re.sub(
                     r"^überblick\b", "ÜBERBLICK", sp_title, flags=re.IGNORECASE
                 )
-                sp_title = re.sub(r"\s*•\s*", ": ", sp_title)
+                sp_title = re.sub(r"\s*[•·]\s*", ": ", sp_title)
                 out_h_lines.append(f"### {sp_title}")
+                if sp_title.lower().startswith("material"):
+                    seen_mat_h3_on_page = True
                 seen_chapter_or_h3 = True
                 after_m1_caption = False
                 continue
@@ -1815,14 +3005,13 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
             # Numbered figure/table caption heading: e.g. "## 3 Ionenkonzentrationen..." -> "#### M3 ..."
             if caption_h4:
                 m_num_cap = re.match(
-                    r"^#{1,4}\s+(?:M\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n]{3,180})$",
+                    r"^#{1,4}\s+(?:[MBQ]\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n]{3,600})$",
                     s,
                 )
                 if m_num_cap and not _TASK_OPERATOR_VERB_RE.match(m_num_cap.group(2).strip()):
-                    m_pfx_c = "M" if use_m_prefix else ""
                     c_num = m_num_cap.group(1)
                     c_body = m_num_cap.group(2).strip()
-                    out_h_lines.append(f"#### {m_pfx_c}{c_num} {c_body}")
+                    out_h_lines.append(_split_long_caption_body(f"{fig_pfx}{c_num}", c_body))
                     if c_num == "1":
                         after_m1_caption = True
                     continue
@@ -1834,6 +3023,18 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
                 if h_lvl == 3:
                     seen_chapter_or_h3 = True
                     after_m1_caption = False
+                elif h_lvl == 4 and after_m1_caption and cur_pg_h in pages_with_m1 and cur_pg_h not in pages_with_h3 and not seen_mat_h3_on_page:
+                    if not re.match(
+                        rf"^(?:{re.escape(fig_pfx)}?\d|Abb(?:ildung)?\b|Bild\b|Grafik\b|Material\b|Aufgaben?\b|Worterklärung|Randspalte|{re.escape(fig_pfx)}\s+Steckbrief|Steckbrief)",
+                        h_title,
+                        re.IGNORECASE,
+                    ):
+                        out_h_lines.append(f"### {h_title}")
+                        pages_with_m1.discard(cur_pg_h)
+                        pages_with_h3.add(cur_pg_h)
+                        seen_chapter_or_h3 = True
+                        after_m1_caption = False
+                        continue
                 elif h_lvl in (1, 2):
                     if re.match(r"^\d+\.\d+\b", h_title):
                         out_h_lines.append(f"## {h_title}")
@@ -1842,10 +3043,12 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
                         continue
                     target_hashes = (
                         "###"
-                        if (not seen_chapter_or_h3 or after_m1_caption)
+                        if (not seen_chapter_or_h3 or after_m1_caption or (cur_pg_h in pages_with_m1 and not seen_mat_h3_on_page))
                         else "####"
                     )
                     out_h_lines.append(f"{target_hashes} {h_title}")
+                    if target_hashes == "###":
+                        pages_with_m1.discard(cur_pg_h)
                     seen_chapter_or_h3 = True
                     after_m1_caption = False
                     continue
@@ -1853,6 +3056,16 @@ def _apply_buchkonferenz_rules(text: str, custom_rules: str | None) -> str:
             out_h_lines.append(ln)
 
         text = "\n".join(out_h_lines)
+
+        # Ensure page-opening section heading ('###' or non-caption '####') precedes leading '<Bild>' block
+        text = re.sub(
+            rf"(?m)^(\(\(\d+\)\)[ \t]*\n+)"
+            rf"((?:####\s+{re.escape(fig_pfx)}?\d+[a-z]?\b[^\n]*\n+(?:(?![#<])[^\n]+\n+)*)?<Bild\b[^>]*>[\s\S]*?</Bild>"
+            rf"(?:[ \t]*\n+(?:_?[A-F]_?[ \t]+[^\n#<]+|---))*)[ \t]*\n+"
+            rf"(#{{3,4}}\s+(?!Material\b|{re.escape(fig_pfx)}?\d+\b|Abb(?:ildung)?\b|Bild\b|Grafik\b|Aufgaben?\b|Worterklärung|Randspalte|{re.escape(fig_pfx)}\s+Steckbrief|Steckbrief\b)[^\n]+)",
+            r"\1\3\n\n\2",
+            text,
+        )
 
     # 5. Formula & Ion Notation Refinements when custom_rules is active (5b)
     def _unwrap_simple_chem_ion(m: re.Match[str]) -> str:
@@ -1906,6 +3119,7 @@ def post_process_structure(
     raw_markdown: str | None = None,
     directory_info: dict[str, Any] | None = None,
     custom_rules: str | None = None,
+    ruleset_key: str = "uebertragungsregeln_09_2025",
 ) -> str:
     """Applies the full deterministic FIBS 09/2025 structural post-processing pipeline.
 
@@ -1919,6 +3133,7 @@ def post_process_structure(
         raw_markdown: Optional Stage 1 raw extracted Markdown for cross-checking.
         directory_info: Optional detected TOC/directory metadata dictionary.
         custom_rules: Optional book-specific rules string (e.g. task difficulty overrides).
+        ruleset_key: Identifier of the active FIBS ruleset.
 
     Returns:
         Fully post-processed E-Buch Markdown string.
@@ -2067,10 +3282,11 @@ def post_process_structure(
     try:
         from backend.services.formula_service import standardize_formulas
 
-        processed = standardize_formulas(processed)
+        processed = standardize_formulas(processed, fibs_mode=True)
     except Exception as e:
         logger.error(f"Error standardizing formulas in post_process_structure: {e}")
 
+    processed = normalize_fibs_units_and_percent(processed)
     processed = normalize_versalien(processed)
     processed = re.sub(r"[„“”»«]", '"', processed)
     processed = re.sub(r"[‚‘’‹›]", "'", processed)
@@ -2145,7 +3361,21 @@ def post_process_structure(
     )
 
     processed = normalize_bild_tags(processed)
-    processed = _apply_buchkonferenz_rules(processed, custom_rules)
+    processed = _apply_buchkonferenz_rules(processed, custom_rules, ruleset_key=ruleset_key)
+    processed = _apply_linked_worterklaerungen_and_randspalten(processed, custom_rules=custom_rules)
+
+    if raw_markdown:
+        for m_raw_bul in re.finditer(
+            r"(?m)^[ \t]*•[ \t]+([A-ZÄÖÜ][a-zäöüß]{3,25})[ \t]+([A-ZÄÖÜa-zäöüß][^\n•]{10,})$",
+            raw_markdown,
+        ):
+            lead_w, tail_clause = m_raw_bul.group(1), m_raw_bul.group(2).strip()
+            head_prefix = tail_clause[: min(24, len(tail_clause))]
+            processed = re.sub(
+                rf"(?m)^#{{1,6}}[ \t]+{re.escape(lead_w)}[ \t]*\n+({re.escape(head_prefix)}[^\n]*)$",
+                rf"-\t{lead_w} \1",
+                processed,
+            )
 
     if raw_markdown is not None and "<Bild" not in raw_markdown and "![" not in raw_markdown:
         processed = re.sub(
@@ -2163,6 +3393,8 @@ def post_process_structure(
     if raw_markdown:
         processed = _recover_dropped_rahmen_blocks(processed, raw_markdown)
 
+    processed = _normalize_fibs_emphasis(processed, custom_rules=custom_rules)
+    processed = normalize_fibs_units_and_percent(processed)
     processed = deduplicate_page_numbers(processed)
 
     if directory_info and directory_info.get("has_any_directory"):

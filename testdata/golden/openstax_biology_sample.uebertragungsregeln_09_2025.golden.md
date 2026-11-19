@@ -1,9 +1,9 @@
 ((57))
 
-# CHAPTER 3: Cell Structure and Function
+# Chapter 3: Cell Structure and Function
 
 <Bild> Foto:
-Beschreibung mit Bildtext: FIGURE 3.1 (a) Nasal sinus cells (viewed with a light microscope, scale bar 10 µm), (b) onion cells (viewed with a light microscope, scale bar 50 µm), and (c) Vibrio tasmaniensis bacterial cells (viewed using a scanning electron microscope, scale bar 500 nm) are from very different organisms, yet all share certain characteristics of basic cell structure. (credit a: modification of work by Ed Uthman, MD; credit b: modification of work by Umberto Salvagnin; credit c: modification of work by Anthony D'Onofrio; scale-bar data from Matt Russell)
+Beschreibung mit Bildtext: FIGURE 3.1 (a) Nasal sinus cells (viewed with a light microscope, scale bar 10 ~mm), (b) onion cells (viewed with a light microscope, scale bar 50 ~mm), and (c) Vibrio tasmaniensis bacterial cells (viewed using a scanning electron microscope, scale bar 500 nm) are from very different organisms, yet all share certain characteristics of basic cell structure. (credit a: modification of work by Ed Uthman, MD; credit b: modification of work by Umberto Salvagnin; credit c: modification of work by Anthony D'Onofrio; scale-bar data from Matt Russell)
 </Bild>
 
 <Rahmen>
@@ -16,7 +16,7 @@ _CHAPTER OUTLINE_
 -	3.6 Active Transport
 </Rahmen>
 
-## INTRODUCTION
+## Introduction
 
 Close your eyes and picture a brick wall. What is the basic building block of that wall? It is a single brick, of course. Like a brick wall, your body is composed of basic building blocks, and the building blocks of your body are cells.
 
@@ -48,7 +48,7 @@ Cells vary in size. With few exceptions, individual cells are too small to be se
 
 #### Light Microscopes
 
-To give you a sense of the size of a cell, a typical human red blood cell is about eight millionths of a meter or eight micrometers (abbreviated as µm) in diameter; the head of a pin is about two thousandths of a meter (millimeters, or mm) in diameter. That means that approximately 250 red blood cells could fit on the head of a pin.
+To give you a sense of the size of a cell, a typical human red blood cell is about eight millionths of a meter or eight micrometers (abbreviated as ~mm) in diameter; the head of a pin is about two thousandths of a meter (millimeters, or mm) in diameter. That means that approximately 250 red blood cells could fit on the head of a pin.
 
 The optics of the lenses of a light microscope changes the orientation of the image. A specimen that is right-side up and facing right on the microscope slide will appear upside-down and facing left when viewed through a microscope, and vice versa. Similarly, if the slide is moved left while looking through the microscope, it will appear to move right, and if moved down, it will seem to move up. This occurs because microscopes use two sets of lenses to magnify the image. Due to the manner in which light travels through the lenses, this system of lenses produces an inverted image (binoculars and a dissecting microscope work in a similar manner, but include an additional magnification system that makes the final image appear to be upright).
 
@@ -78,13 +78,13 @@ In contrast to light microscopes, electron microscopes use a beam of electrons i
 In a scanning electron microscope, a beam of electrons moves back and forth across a cell's surface, rendering the details of cell surface characteristics by reflection. Cells and other structures are usually coated with a metal like gold. In a transmission electron microscope, the electron beam is transmitted through the cell and provides details of a cell's internal structures. As you might imagine, electron microscopes are significantly more bulky and expensive than are light microscopes.
 
 <Bild> Foto:
-Beschreibung mit Bildtext: FIGURE 3.3 (a) Light micrograph of Salmonella bacteria with a 25 µm scale bar.
+Beschreibung mit Bildtext: FIGURE 3.3 (a) Light micrograph of Salmonella bacteria with a 25 ~mm scale bar.
 </Bild>
 
 ((60))
 
 <Bild> Foto:
-Beschreibung mit Bildtext: FIGURE 3.3 (a) Salmonella bacteria are viewed with a light microscope. (b) This scanning electron micrograph shows Salmonella bacteria (in red, 1 µm scale bar) invading human cells. (credit a: modification of work by CDC, Armed Forces Institute of Pathology, Charles N. Farmer; credit b: modification of work by Rocky Mountain Laboratories, NIAID, NIH; scale-bar data from Matt Russell)
+Beschreibung mit Bildtext: FIGURE 3.3 (a) Salmonella bacteria are viewed with a light microscope. (b) This scanning electron micrograph shows Salmonella bacteria (in red, 1 ~mm scale bar) invading human cells. (credit a: modification of work by CDC, Armed Forces Institute of Pathology, Charles N. Farmer; credit b: modification of work by Rocky Mountain Laboratories, NIAID, NIH; scale-bar data from Matt Russell)
 </Bild>
 
 <Rahmen>
@@ -97,7 +97,7 @@ Cytotechnologists play vital roles in saving people's lives. When abnormalities 
 </Rahmen>
 
 <Bild> Foto:
-Beschreibung mit Bildtext: FIGURE 3.4 These uterine cervix cells, viewed through a light microscope (10 µm scale bar), were obtained from a Pap smear. Normal cells are on the left. The cells on the right are infected with human papillomavirus. (credit: modification of work by Ed Uthman; scale-bar data from Matt Russell)
+Beschreibung mit Bildtext: FIGURE 3.4 These uterine cervix cells, viewed through a light microscope (10 ~mm scale bar), were obtained from a Pap smear. Normal cells are on the left. The cells on the right are infected with human papillomavirus. (credit: modification of work by Ed Uthman; scale-bar data from Matt Russell)
 </Bild>
 
 ### Cell Theory

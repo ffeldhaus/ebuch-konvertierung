@@ -722,12 +722,14 @@ def insert_page_numbers_from_metadata(
             elif any(d is not None for d in detected_ints_from_blocks):
                 pages_list = [str(p) for p in _resolve_page_sequence(detected_ints_from_blocks, fallback_start_page=1)]
 
-    # Pre-calculate physical page label for each block index
+    # Pre-calculate physical page label and 1-based relative index for each block
     block_page_nums: list[str | None] = []
+    block_rel_indices: list[int | None] = []
     for b in blocks:
         raw_idx = b.get("page_idx")
         if raw_idx is None:
             block_page_nums.append(None)
+            block_rel_indices.append(None)
             continue
 
         # Convert to 1-based relative index
@@ -752,13 +754,21 @@ def insert_page_numbers_from_metadata(
             phys_num = str(relative_idx)
 
         block_page_nums.append(phys_num)
+        block_rel_indices.append(relative_idx)
 
     # Collect ordered candidate body text blocks for each page (excluding furniture, images, and footnotes)
     page_to_candidates: dict[str, list[tuple[int, str]]] = {}
+    page_min_rel_idx: dict[str, int] = {}
     for i, b in enumerate(blocks):
         phys_num = block_page_nums[i]
         if phys_num is None:
             continue
+
+        rel_idx = block_rel_indices[i]
+        if rel_idx is not None:
+            prev_min = page_min_rel_idx.get(phys_num)
+            if prev_min is None or rel_idx < prev_min:
+                page_min_rel_idx[phys_num] = rel_idx
 
         b_type = str(b.get("type", "")).lower()
         if b_type in ("header", "footer", "page_header", "page_footer", "image", "footnote"):
@@ -771,10 +781,29 @@ def insert_page_numbers_from_metadata(
     if not page_to_candidates:
         return markdown_content
 
-    # Preserve document page order by sorting by the first block index of each page
+    # Preserve document page order by sorting by minimum relative page index, then first block index
     sorted_pages = [
-        k for k, _ in sorted(page_to_candidates.items(), key=lambda kv: kv[1][0][0])
+        k
+        for k, _ in sorted(
+            page_to_candidates.items(),
+            key=lambda kv: (page_min_rel_idx.get(kv[0], 10**9), kv[1][0][0]),
+        )
     ]
+
+    # Prefer direct OCR body blocks (with page_no and without Docling bbox) over Docling heading/callout blocks
+    for cands in page_to_candidates.values():
+        cands.sort(
+            key=lambda item: (
+                0
+                if (
+                    "page_no" in blocks[item[0]]
+                    and "bbox" not in blocks[item[0]]
+                    and "bbox_1000" not in blocks[item[0]]
+                )
+                else 1,
+                item[0],
+            )
+        )
 
     # Check if the PDF uses landscape double-page spreads with paired page numbers ((N)) / ((N+1))
     spread_markers_by_phys: dict[str, str] = {}
@@ -1004,6 +1033,41 @@ def extract_pdf_pages(
             )
             return False
 
+        neighbors: dict[str, str] = {}
+        prev_idx = valid_indices[0] - 1
+        if prev_idx >= 0:
+            try:
+                tp_prev = doc[prev_idx].get_textpage()
+                prev_raw = (tp_prev.get_text_range() or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+                tp_prev.close()
+                if prev_raw:
+                    prev_lbl = (
+                        str(source_labels[prev_idx]).strip()
+                        if source_labels and prev_idx < len(source_labels) and str(source_labels[prev_idx]).strip()
+                        else str(prev_idx + 1)
+                    )
+                    neighbors["prev_page"] = prev_lbl
+                    neighbors["prev_text"] = prev_raw
+            except Exception as ex:
+                logger.debug(f"Could not extract previous neighbor page text at {prev_idx}: {ex}")
+
+        next_idx = valid_indices[-1] + 1
+        if next_idx < total_pages:
+            try:
+                tp_next = doc[next_idx].get_textpage()
+                next_raw = (tp_next.get_text_range() or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+                tp_next.close()
+                if next_raw:
+                    next_lbl = (
+                        str(source_labels[next_idx]).strip()
+                        if source_labels and next_idx < len(source_labels) and str(source_labels[next_idx]).strip()
+                        else str(next_idx + 1)
+                    )
+                    neighbors["next_page"] = next_lbl
+                    neighbors["next_text"] = next_raw
+            except Exception as ex:
+                logger.debug(f"Could not extract next neighbor page text at {next_idx}: {ex}")
+
         new_doc = pdfium.PdfDocument.new()
         new_doc.import_pages(doc, valid_indices)
 
@@ -1020,11 +1084,56 @@ def extract_pdf_pages(
             except Exception as ex:
                 logger.debug(f"Could not write page labels sidecar for {output_path}: {ex}")
 
+        try:
+            with open(f"{output_path}.neighbors.json", "w", encoding="utf-8") as nf:
+                json.dump(neighbors, nf, ensure_ascii=False)
+        except Exception as ex:
+            logger.debug(f"Could not write neighbor context sidecar for {output_path}: {ex}")
+
         logger.info(f"Extracted pages {valid_indices} to {output_path}")
         return True
     except Exception as e:
         logger.error(f"Error extracting PDF pages: {str(e)}")
         return False
+
+
+def load_pdf_neighbor_context(pdf_path: str) -> dict[str, str]:
+    """Loads neighbor page plain-text context from ``{pdf_path}.neighbors.json``.
+
+    Args:
+        pdf_path: Path to the cropped PDF file whose ``.neighbors.json`` sidecar should be read.
+
+    Returns:
+        Dictionary containing any non-empty ``prev_page``, ``prev_text``, ``next_page``,
+        and ``next_text`` entries, or ``{}`` if no sidecar exists.
+    """
+    if not pdf_path:
+        return {}
+    resolved = pdf_path
+    if not os.path.isabs(resolved) and not os.path.exists(resolved):
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+        cand_path = os.path.join(project_root, resolved)
+        if os.path.exists(cand_path):
+            resolved = cand_path
+
+    sidecar_path = f"{resolved}.neighbors.json"
+    if not os.path.exists(sidecar_path):
+        return {}
+
+    try:
+        with open(sidecar_path, encoding="utf-8") as nf:
+            data = json.load(nf)
+        if not isinstance(data, dict):
+            return {}
+        allowed_keys = ("prev_page", "prev_text", "next_page", "next_text")
+        return {
+            k: v.strip()
+            for k in allowed_keys
+            if isinstance((v := data.get(k)), str) and v.strip()
+        }
+    except Exception as ex:
+        logger.debug(f"Could not load neighbor context sidecar {sidecar_path}: {ex}")
+        return {}
 
 
 def get_pdf_page_count(pdf_path: str) -> int:
@@ -1667,7 +1776,7 @@ async def run_background_extraction(
     method: str = "auto",
     lang: str = "en",
     backend: str = "vlm-engine",
-    engine: str = "infinity",
+    engine: str = "lightonocr",
 ) -> None:
     """Execute document OCR/layout extraction and VLM image description in the background."""
     task["status"] = "queued"
@@ -1675,11 +1784,12 @@ async def run_background_extraction(
         "percent": 0,
         "current": 0,
         "total": 0,
-        "phase": "In Warteschlange..."
+        "unit": "Seiten",
+        "phase": "In Warteschlange...",
     }
-    
+
     # Notify listeners about queued status
-    queued_event = '{"status": "progress", "percent": 0, "current": 0, "total": 0, "phase": "In Warteschlange..."}\n'
+    queued_event = '{"status": "progress", "percent": 0, "current": 0, "total": 0, "unit": "Seiten", "phase": "In Warteschlange..."}\n'
     for queue in list(task["listeners"]):
         try:
             await queue.put(queued_event)
@@ -1714,7 +1824,7 @@ async def _run_background_extraction_locked(
     method: str = "auto",
     lang: str = "en",
     backend: str = "vlm-engine",
-    engine: str = "infinity",
+    engine: str = "lightonocr",
 ) -> None:
     # Release GPU memory before starting extraction (GPU sequencing)
     try:
@@ -1786,10 +1896,26 @@ async def _run_background_extraction_locked(
             ):
                 process_path = selected_pdf_path
 
-    # Count pages for progress reporting
+    # Count pages and compute workload-aware Stage 1 progress budget
     total_pdf_pages = 1
-    if task["extension"] == ".pdf":
+    is_pdf = task.get("extension") == ".pdf"
+    if is_pdf:
         total_pdf_pages = get_pdf_page_count(process_path) or 1
+
+    from backend.services.progress_service import (
+        compute_extraction_budget,
+        count_pdf_embedded_images,
+    )
+
+    estimated_images = count_pdf_embedded_images(process_path) if is_pdf else 0
+    describe_images = bool(task.get("describe_images", True))
+    budget = compute_extraction_budget(
+        engine,
+        total_pdf_pages,
+        estimated_images,
+        describe_images=describe_images,
+        is_pdf=is_pdf,
+    )
 
     base_name = os.path.splitext(os.path.basename(process_path))[0]
     auto_dir = os.path.join(output_root, base_name, "auto")
@@ -1808,20 +1934,20 @@ async def _run_background_extraction_locked(
             "--output-dir", auto_dir,
             "--ocr-lang", lang,
         ]
-    elif engine in ("lightonocr", "lightonocr3"):
-        cmd = [
-            python_exe,
-            "-m",
-            "backend.services.lightonocr_extractor",
-            "--input", process_path,
-            "--output-dir", auto_dir,
-        ]
-    else:
-        # Default engine: Infinity-Parser2-Flash
+    elif engine in ("infinity", "infinity_parser"):
         cmd = [
             python_exe,
             "-m",
             "backend.services.infinity_parser_extractor",
+            "--input", process_path,
+            "--output-dir", auto_dir,
+        ]
+    else:
+        # Default engine: LightOnOCR-3
+        cmd = [
+            python_exe,
+            "-m",
+            "backend.services.lightonocr_extractor",
             "--input", process_path,
             "--output-dir", auto_dir,
         ]
@@ -1856,12 +1982,26 @@ async def _run_background_extraction_locked(
     env["PYTHONWARNINGS"] = "ignore::UserWarning:multiprocessing.resource_tracker"
 
     try:
-        # Initial log
+        # Initial log and 1% extraction start indicator
         start_log = f"{engine.capitalize()}-Prozess gestartet..."
         task["logs"].append(start_log)
+        init_phase = f"Starte {engine.capitalize()}-Extraktion..."
+        task["progress"] = {
+            "percent": 1,
+            "current": 0,
+            "total": total_pdf_pages,
+            "unit": "Seiten",
+            "phase": init_phase,
+        }
         start_event = f'{{"status": "log", "message": {json.dumps(start_log)}}}\n'
+        init_progress_event = (
+            f'{{"status": "progress", "percent": 1, "current": 0, '
+            f'"total": {total_pdf_pages}, "unit": "Seiten", '
+            f'"phase": {json.dumps(init_phase)}}}\n'
+        )
         for queue in list(task["listeners"]):
             await queue.put(start_event)
+            await queue.put(init_progress_event)
 
         # Launch the subprocess
         logger.info(f"Running {engine} extraction for task {task_id}: {' '.join(cmd)}")
@@ -1933,59 +2073,85 @@ async def _run_background_extraction_locked(
                 for queue in list(task["listeners"]):
                     await queue.put(log_event)
 
-                # Parse progress indicator from tqdm bar
-                if "%|" in line_str:
+                # Parse progress indicator from Docling / VLM-OCR stdout
+                if "Going to convert document" in line_str:
+                    docling_pct = max(
+                        task.get("progress", {}).get("percent", 0),
+                        max(1, int(round(budget.extraction_end_percent * 0.1))),
+                    )
+                    docling_phase = "Layout- & Tabellen-Analyse (Docling)..."
+                    task["progress"] = {
+                        "percent": docling_pct,
+                        "current": current_page,
+                        "total": total_pdf_pages,
+                        "unit": "Seiten",
+                        "phase": docling_phase,
+                    }
+                    progress_event = (
+                        f'{{"status": "progress", "percent": {docling_pct}, '
+                        f'"current": {current_page}, "total": {total_pdf_pages}, '
+                        f'"unit": "Seiten", "phase": {json.dumps(docling_phase)}}}\n'
+                    )
+                    for queue in list(task["listeners"]):
+                        await queue.put(progress_event)
+                elif "%|" in line_str and "Loading weights" not in line_str:
                     percent_match = re.search(r"(\d+)%\|", line_str)
                     progress_match = re.search(r"(\d+)/(\d+)", line_str)
 
                     if percent_match and progress_match:
-                        percent_val = int(percent_match.group(1))
+                        percent_val = max(0, min(100, int(percent_match.group(1))))
                         current_val = int(progress_match.group(1))
 
                         phase = task.get("progress", {}).get("phase", "Extraktion...")
                         global_percent = task.get("progress", {}).get("percent", 0)
+                        cap = budget.extraction_end_percent
+                        scale = cap / 100.0
 
-                        if "Layout Output Parsing" in line_str:
+                        if "Processing pages" in line_str:
+                            current_page = max(1, min(current_val, total_pdf_pages))
+                            phase = f"Texterkennung Seite {current_page}/{total_pdf_pages}..."
+                            floor_pct = max(1, int(round(cap * 0.12)))
+                            global_percent = int(
+                                round(floor_pct + (percent_val / 100.0) * max(0, cap - floor_pct))
+                            )
+                        elif "Layout Output Parsing" in line_str:
                             seen_layout_parsing = True
                             phase = "Layout-Verarbeitung"
-                            global_percent = int(75 + (percent_val / 100.0) * 1)
+                            global_percent = max(1, int(round((75 + (percent_val / 100.0) * 1) * scale)))
                         elif "Predict" in line_str:
                             if not seen_layout_parsing:
                                 phase = "Layout-Analyse"
-                                global_percent = int(0 + (percent_val / 100.0) * 75)
+                                global_percent = max(1, int(round((percent_val / 100.0) * 75 * scale)))
                                 current_page = current_val
                             else:
                                 phase = "Tabellen-Inhaltsanalyse"
-                                global_percent = int(77 + (percent_val / 100.0) * 1)
+                                global_percent = max(1, int(round((77 + (percent_val / 100.0) * 1) * scale)))
                         elif "Table orientation" in line_str:
                             phase = "Tabellen-Orientierung"
-                            global_percent = int(75 + (percent_val / 100.0) * 1)
+                            global_percent = max(1, int(round((75 + (percent_val / 100.0) * 1) * scale)))
                         elif "Table-ocr det" in line_str:
                             phase = "Tabellen-Texterkennung"
-                            global_percent = int(76 + (percent_val / 100.0) * 1)
+                            global_percent = max(1, int(round((76 + (percent_val / 100.0) * 1) * scale)))
                         elif "Table-ocr rec" in line_str:
                             phase = "Tabellen-Inhaltsanalyse"
-                            global_percent = int(77 + (percent_val / 100.0) * 1)
+                            global_percent = max(1, int(round((77 + (percent_val / 100.0) * 1) * scale)))
                         elif "Table-wireless" in line_str or "Table-wired" in line_str:
                             phase = "Tabellen-Strukturierung"
-                            global_percent = int(78 + (percent_val / 100.0) * 2)
+                            global_percent = max(1, int(round((78 + (percent_val / 100.0) * 2) * scale)))
                         elif "OCR-det" in line_str:
                             phase = "Dokumenten-Texterkennung"
-                            global_percent = int(80 + (percent_val / 100.0) * 10)
-                        elif "Processing pages" in line_str:
-                            phase = "Extraktion & Formatierung"
-                            global_percent = int(90 + (percent_val / 100.0) * 5)
-                            current_page = current_val
+                            global_percent = max(1, int(round((80 + (percent_val / 100.0) * 10) * scale)))
                         elif "OCR-rec" in line_str:
                             phase = "Texterkennung-Finalisierung"
-                            global_percent = int(95 + (percent_val / 100.0) * 4)
+                            global_percent = max(1, int(round((95 + (percent_val / 100.0) * 4) * scale)))
 
+                        global_percent = min(cap, global_percent)
                         current_progress = task["progress"].get("percent", 0)
                         if global_percent < current_progress:
                             global_percent = current_progress
 
-                        if current_page == 0:
-                            current_page = max(1, int((global_percent / 100.0) * total_pdf_pages))
+                        if current_page == 0 and cap > 0:
+                            current_page = max(1, int(round((global_percent / float(cap)) * total_pdf_pages)))
 
                         current_page = min(current_page, total_pdf_pages)
 
@@ -1993,14 +2159,15 @@ async def _run_background_extraction_locked(
                             "percent": global_percent,
                             "current": current_page,
                             "total": total_pdf_pages,
-                            "phase": phase
+                            "unit": "Seiten",
+                            "phase": phase,
                         }
                         task["progress"] = progress_info
 
                         progress_event = (
                             f'{{"status": "progress", "percent": {global_percent}, '
                             f'"current": {current_page}, "total": {total_pdf_pages}, '
-                            f'"phase": "{phase}"}}\n'
+                            f'"unit": "Seiten", "phase": {json.dumps(phase)}}}\n'
                         )
                         for queue in list(task["listeners"]):
                             await queue.put(progress_event)
@@ -2112,9 +2279,10 @@ async def _run_background_extraction_locked(
         task["image_dir"] = image_dir
         task["images"] = images
         task["progress"] = {
-            "percent": 100,
+            "percent": budget.extraction_end_percent,
             "current": total_pdf_pages,
             "total": total_pdf_pages,
+            "unit": "Seiten",
             "phase": "Extraktion abgeschlossen",
         }
 
@@ -2122,7 +2290,8 @@ async def _run_background_extraction_locked(
         completed_event = (
             f'{{"status": "completed", '
             f'"markdown": {json.dumps(markdown_content)}, '
-            f'"image_count": {len(images)}}}\n'
+            f'"image_count": {len(images)}, '
+            f'"progress_percent": {budget.extraction_end_percent}}}\n'
         )
         for queue in list(task["listeners"]):
             await queue.put(completed_event)

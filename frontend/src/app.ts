@@ -103,10 +103,13 @@ class AppController {
   
   // Progress Bar elements
   private progressContainer = document.getElementById('pipeline-progress-container') as HTMLDivElement;
+  private progressTrack = document.getElementById('pipeline-progress-track') as HTMLDivElement | null;
   private progressPhase = document.getElementById('pipeline-progress-phase') as HTMLSpanElement;
   private progressPages = document.getElementById('pipeline-progress-pages') as HTMLSpanElement;
   private progressBar = document.getElementById('pipeline-progress-bar') as HTMLDivElement;
   private progressPercent = document.getElementById('pipeline-progress-percent') as HTMLSpanElement;
+  private lastProgressPercent = 0;
+  private lastAnnouncedPhase = '';
 
   // Stepper steps
   private step1 = document.getElementById('step-1-indicator') as HTMLDivElement;
@@ -279,7 +282,7 @@ class AppController {
       this.describeImagesToggle.checked = true;
     }
     if (this.engineSelect) {
-      this.engineSelect.value = 'infinity';
+      this.engineSelect.value = 'lightonocr';
     }
     this.loadCharReplacementsFromStorage();
     this.initEventListeners();
@@ -1212,7 +1215,7 @@ class AppController {
     this.pagesInput.classList.remove('border-rose-500');
     this.pagesInput.classList.add('border-slate-800');
     this.pagesInput.placeholder = 'Erst Dokument hochladen...';
-    this.engineSelect.value = 'infinity';
+    this.engineSelect.value = 'lightonocr';
     this.langSelect.value = 'en';
     this.engineSelectContainer.classList.remove('hidden');
     this.handleEngineChange();
@@ -1251,9 +1254,14 @@ class AppController {
 
     // Reset Progress Bar
     this.progressContainer.classList.add('hidden');
-    this.progressPhase.textContent = 'Bereite Extraktion vor...';
-    this.progressBar.style.width = '0%';
-    this.progressPercent.textContent = '0%';
+    this.renderPipelineProgress({
+      percent: 0,
+      phase: 'Bereite Extraktion vor...',
+      current: 0,
+      total: 0,
+      reset: true,
+      show: false,
+    });
 
     // Show standardized editor by default
     this.isPdfPaneVisible = false;
@@ -1328,6 +1336,59 @@ class AppController {
     });
   }
 
+  private renderPipelineProgress(opts: {
+    percent?: number;
+    phase?: string;
+    current?: number;
+    total?: number;
+    unit?: string;
+    reset?: boolean;
+    show?: boolean;
+  }) {
+    if (opts.show !== false) {
+      this.progressContainer.classList.remove('hidden');
+    }
+    if (opts.reset) {
+      this.lastProgressPercent = 0;
+      this.lastAnnouncedPhase = '';
+    }
+    const raw = typeof opts.percent === 'number' && Number.isFinite(opts.percent)
+      ? Math.round(opts.percent)
+      : this.lastProgressPercent;
+    const clamped = Math.max(
+      0,
+      Math.min(100, opts.reset ? raw : Math.max(this.lastProgressPercent, raw)),
+    );
+    this.lastProgressPercent = clamped;
+
+    this.progressBar.style.width = `${clamped}%`;
+    this.progressPercent.textContent = `${clamped}%`;
+
+    if (opts.phase !== undefined && opts.phase !== this.lastAnnouncedPhase) {
+      this.progressPhase.textContent = opts.phase;
+      this.lastAnnouncedPhase = opts.phase;
+    }
+
+    let counterText = '';
+    if (typeof opts.total === 'number') {
+      if (opts.total > 0) {
+        const cur = Math.max(0, opts.current ?? 0);
+        const unitLabel = opts.unit || 'Seiten';
+        counterText = `${cur} / ${opts.total} ${unitLabel}`;
+      }
+      this.progressPages.textContent = counterText;
+    } else {
+      counterText = this.progressPages.textContent || '';
+    }
+
+    if (this.progressTrack) {
+      this.progressTrack.setAttribute('aria-valuenow', String(clamped));
+      const phaseLabel = this.progressPhase.textContent || '';
+      const valueText = [phaseLabel, counterText, `${clamped}%`].filter(Boolean).join(' – ');
+      this.progressTrack.setAttribute('aria-valuetext', valueText);
+    }
+  }
+
   private async startProcessing() {
     console.log('startProcessing: entry', { activeFile: this.activeFile?.name, taskId: this.taskId, activePageCount: this.activePageCount });
     if (!this.activeFile || !this.taskId) {
@@ -1380,6 +1441,13 @@ class AppController {
 
       // 2. Extract
       this.updateStepper('extracting');
+      this.renderPipelineProgress({
+        percent: 0,
+        phase: 'Bereite Extraktion vor...',
+        current: 0,
+        total: 0,
+        reset: true,
+      });
       this.log('Starte Inhalts-Extraktion (Markdown Konvertierung)...');
       
       const extractFormData = new FormData();
@@ -1391,6 +1459,10 @@ class AppController {
       extractFormData.append('engine', this.engineSelect.value);
       extractFormData.append('method', 'auto');
       extractFormData.append('lang', this.langSelect.value);
+      extractFormData.append(
+        'describe_images',
+        String(this.describeImagesToggle ? this.describeImagesToggle.checked : true),
+      );
       
       const extractRes = await fetch('/api/extract', {
         method: 'POST',
@@ -1429,11 +1501,13 @@ class AppController {
             if (data.status === 'log') {
               this.log(data.message);
             } else if (data.status === 'progress') {
-              this.progressContainer.classList.remove('hidden');
-              this.progressPhase.textContent = data.phase;
-              this.progressPages.textContent = `${data.current} / ${data.total} Seiten`;
-              this.progressBar.style.width = `${data.percent}%`;
-              this.progressPercent.textContent = `${data.percent}%`;
+              this.renderPipelineProgress({
+                percent: data.percent,
+                phase: data.phase,
+                current: data.current,
+                total: data.total,
+                unit: data.unit,
+              });
             } else if (data.status === 'raw_chunk') {
               if (data.delta) {
                 if (!this.currentRawMarkdown) {
@@ -1451,12 +1525,17 @@ class AppController {
             } else if (data.status === 'error') {
               throw new Error(data.message);
             } else if (data.status === 'completed') {
-              this.progressBar.style.width = '90%';
-              this.progressPercent.textContent = '90%';
-              this.progressPhase.textContent = 'Bereite Standardisierung vor...';
+              const imageCount = data.image_count ?? 0;
+              this.renderPipelineProgress({
+                percent: data.progress_percent ?? this.lastProgressPercent,
+                phase: imageCount > 0
+                  ? `Bereite Bildanalyse & Standardisierung vor (${imageCount} Bilder)...`
+                  : 'Bereite Standardisierung vor...',
+                total: 0,
+              });
               this.currentRawMarkdown = data.markdown;
               this.rawMarkdownTextarea.value = this.currentRawMarkdown;
-              this.log(`Extraktion beendet. ${data.image_count} Bilder extrahiert.`, 'success');
+              this.log(`Extraktion beendet. ${imageCount} Bilder extrahiert.`, 'success');
               if (this.isRawRendered) this.updateRawRenderPreview();
             }
           } catch (e: any) {
@@ -1475,23 +1554,30 @@ class AppController {
           if (data.status === 'log') {
             this.log(data.message);
           } else if (data.status === 'progress') {
-            this.progressContainer.classList.remove('hidden');
-            this.progressPhase.textContent = data.phase;
-            this.progressPages.textContent = `${data.current} / ${data.total} Seiten`;
-            this.progressBar.style.width = `${data.percent}%`;
-            this.progressPercent.textContent = `${data.percent}%`;
+            this.renderPipelineProgress({
+              percent: data.percent,
+              phase: data.phase,
+              current: data.current,
+              total: data.total,
+              unit: data.unit,
+            });
           } else if (data.status === 'aborted') {
             this.handleConversionAborted();
             return;
           } else if (data.status === 'error') {
             throw new Error(data.message);
           } else if (data.status === 'completed') {
-            this.progressBar.style.width = '90%';
-            this.progressPercent.textContent = '90%';
-            this.progressPhase.textContent = 'Bereite Standardisierung vor...';
+            const imageCount = data.image_count ?? 0;
+            this.renderPipelineProgress({
+              percent: data.progress_percent ?? this.lastProgressPercent,
+              phase: imageCount > 0
+                ? `Bereite Bildanalyse & Standardisierung vor (${imageCount} Bilder)...`
+                : 'Bereite Standardisierung vor...',
+              total: 0,
+            });
             this.currentRawMarkdown = data.markdown;
             this.rawMarkdownTextarea.value = this.currentRawMarkdown;
-            this.log(`Extraktion beendet. ${data.image_count} Bilder extrahiert.`, 'success');
+            this.log(`Extraktion beendet. ${imageCount} Bilder extrahiert.`, 'success');
             if (this.isRawRendered) this.updateRawRenderPreview();
           }
         } catch (e: any) {
@@ -1778,16 +1864,23 @@ class AppController {
       }
 
       if (data.status === 'processing') {
-        // Show progress bar container and reset bar width
-        this.progressContainer.classList.remove('hidden');
-        this.progressBar.style.width = `${data.progress.percent}%`;
-        this.progressPercent.textContent = `${data.progress.percent}%`;
-        this.progressPhase.textContent = data.progress.phase;
-        this.progressPages.textContent = `${data.progress.current} / ${data.progress.total} Seiten`;
+        const phaseStr = String(data.progress?.phase || '');
+        this.renderPipelineProgress({
+          percent: data.progress?.percent ?? 0,
+          phase: phaseStr || 'Verarbeitung läuft...',
+          current: data.progress?.current,
+          total: data.progress?.total ?? 0,
+          unit: data.progress?.unit,
+          reset: true,
+        });
         
         if (this.abortProcessBtn) this.abortProcessBtn.classList.remove('hidden');
         
-        const isStandardising = (data.progress.percent || 0) >= 90 || data.progress.phase?.includes('Standardis') || data.progress.phase?.includes('Bildanalyse') || data.progress.phase?.includes('Render');
+        const isStandardising =
+          data.job_kind === 'standardisation' ||
+          ['Standardis', 'Gemma', 'VLM', 'Bild', 'Übertragungsregeln', 'Word-Dokument'].some(
+            (kw) => phaseStr.includes(kw),
+          );
         this.updateStepper(isStandardising ? 'standardising' : 'extracting');
         
         this.isPdfPaneVisible = true;
@@ -1885,11 +1978,13 @@ class AppController {
           if (data.replay && skipReplayedLogs) return;
           this.log(data.message);
         } else if (data.status === 'progress') {
-          this.progressContainer.classList.remove('hidden');
-          this.progressPhase.textContent = data.phase;
-          if (data.total) this.progressPages.textContent = `${data.current} / ${data.total} Seiten`;
-          this.progressBar.style.width = `${data.percent}%`;
-          this.progressPercent.textContent = `${data.percent}%`;
+          this.renderPipelineProgress({
+            percent: data.percent,
+            phase: data.phase,
+            current: data.current,
+            total: data.total,
+            unit: data.unit,
+          });
         } else if (data.status === 'raw_chunk') {
           if (data.delta) {
             this.currentRawMarkdown = this.currentRawMarkdown ? `${this.currentRawMarkdown}\n\n${data.delta}` : data.delta;
@@ -1935,12 +2030,17 @@ class AppController {
             this.finalizeStandardisedView();
             this.refreshTasksList();
           } else {
-            this.progressBar.style.width = '90%';
-            this.progressPercent.textContent = '90%';
-            this.progressPhase.textContent = 'Bereite Standardisierung vor...';
+            const imageCount = data.image_count ?? 0;
+            this.renderPipelineProgress({
+              percent: data.progress_percent ?? this.lastProgressPercent,
+              phase: imageCount > 0
+                ? `Bereite Bildanalyse & Standardisierung vor (${imageCount} Bilder)...`
+                : 'Bereite Standardisierung vor...',
+              total: 0,
+            });
             this.currentRawMarkdown = data.markdown;
             this.rawMarkdownTextarea.value = this.currentRawMarkdown;
-            this.log(`Extraktion beendet. ${data.image_count ?? 0} Bilder extrahiert.`, 'success');
+            this.log(`Extraktion beendet. ${imageCount} Bilder extrahiert.`, 'success');
             if (this.isRawRendered) this.updateRawRenderPreview();
             // Trigger standardise (attaches if the server already chained it)
             this.standardiseTask(taskId);
@@ -1992,6 +2092,14 @@ class AppController {
 
     try {
       this.updateStepper('standardising');
+      if (this.lastProgressPercent >= 100) {
+        this.renderPipelineProgress({
+          percent: 0,
+          phase: 'Bereite Standardisierung vor...',
+          total: 0,
+          reset: true,
+        });
+      }
       this.log('Wende E-Buch Formatierungsregeln (Anwendung Übertragungsregeln) an...');
       
       const ruleset = this.rulesetSelect.value;
@@ -2048,10 +2156,13 @@ class AppController {
             } else if (data.status === 'stream_snapshot') {
               this.standardisedMarkdownTextarea.value = data.text || '';
             } else if (data.status === 'progress') {
-              this.progressContainer.classList.remove('hidden');
-              this.progressPhase.textContent = data.phase;
-              this.progressBar.style.width = `${data.percent}%`;
-              this.progressPercent.textContent = `${data.percent}%`;
+              this.renderPipelineProgress({
+                percent: data.percent,
+                phase: data.phase,
+                current: data.current,
+                total: data.total,
+                unit: data.unit,
+              });
             } else if (data.status === 'log') {
               this.log(data.message);
             } else if (data.status === 'aborted') {
@@ -2085,10 +2196,13 @@ class AppController {
             this.standardisedMarkdownTextarea.value += data.delta;
             this.standardisedMarkdownTextarea.scrollTop = this.standardisedMarkdownTextarea.scrollHeight;
           } else if (data.status === 'progress') {
-            this.progressContainer.classList.remove('hidden');
-            this.progressPhase.textContent = data.phase;
-            this.progressBar.style.width = `${data.percent}%`;
-            this.progressPercent.textContent = `${data.percent}%`;
+            this.renderPipelineProgress({
+              percent: data.percent,
+              phase: data.phase,
+              current: data.current,
+              total: data.total,
+              unit: data.unit,
+            });
           } else if (data.status === 'aborted') {
             this.handleConversionAborted();
             return;
@@ -4280,8 +4394,8 @@ class AppController {
     if (enabled) {
       this.benchExistingTransferHint?.classList.remove('hidden');
       this.benchEnginesContainer?.classList.add('opacity-60');
-      const eng = String(engine || 'infinity').toLowerCase();
-      const target = eng.includes('lighton') ? 'lightonocr' : eng.includes('docling') ? 'docling' : 'infinity';
+      const eng = String(engine || 'lightonocr').toLowerCase();
+      const target = eng.includes('infinity') ? 'infinity' : eng.includes('docling') ? 'docling' : 'lightonocr';
       if (this.benchEngInfinity) {
         this.benchEngInfinity.checked = target === 'infinity';
         this.benchEngInfinity.disabled = true;

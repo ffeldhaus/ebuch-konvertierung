@@ -92,3 +92,21 @@ def test_docx_roundtrip_multiline_bild_block(tmp_path):
     assert len(bild_paras) == 1
     assert bild_paras[0].text == block
     assert block in extract_markdown_from_docx(out)
+
+
+def test_docx_import_fibs_underscore_bold_runs_roundtrip(tmp_path):
+    """Official FIBS _bl.docx files format _Wort_ as '_' + [B]'Wort' + '_'; import must yield _Wort_."""
+    doc = Document()
+    p = doc.add_paragraph(style="Normal")
+    p.add_run("Das ist ein ")
+    p.add_run("_")
+    r_b = p.add_run("zentraler Fachbegriff")
+    r_b.bold = True
+    p.add_run("_")
+    p.add_run(" im Satz.")
+    path = str(tmp_path / "fibs_bl_style.docx")
+    doc.save(path)
+
+    md = extract_markdown_from_docx(path)
+    assert md == "Das ist ein _zentraler Fachbegriff_ im Satz."
+

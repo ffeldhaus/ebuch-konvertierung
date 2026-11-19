@@ -9,11 +9,6 @@ Format: `- [ ] **Titel** – Priorität` · Dateien · Befund · Lösungsvorschl
 
 ### Pipeline & Qualität
 
-- [ ] **Erklärvideo (`ebuch_konverter_erklaervideo_de.mp4`) aktualisieren und Dateinamen/ISBN in der Kopfzeile anonymisieren** – mittel
-  - Datei: `ebuch_konverter_erklaervideo_de.mp4` (Szene `02:04–02:19`, Word-Vorschau)
-  - Befund: In der Kopfzeile der Word-Vorschau bei `02:04–02:19` ist noch ein alter Dateiname/ISBN-Eintrag (a proprietary publisher DOCX filename and ISBN) zu sehen; der eigentliche Buchinhalt im Video stammt bereits aus dem offenen OER-Werk *Physik Libre* (`physik_optik_sample.pdf`). Zudem zeigt das Video noch ältere Engine-Auswahloptionen.
-  - Vorschlag: Bei der nächsten Video-Aktualisierung die Szene mit einem synthetischen Dateinamen (`physik_optik_sample.docx`) und einer Platzhalter-ISBN (`000-0-000-00000-0`) sowie den aktuellen drei Engines (`Docling`, `LightOnOCR-3`, `Infinity-Parser2-Flash`) neu aufnehmen.
-
 - [ ] **Bildunterschriften ohne extrahiertes Bild werden auf gemischten Seiten zu „Schein-Bildern“** – hoch
   - Dateien: `backend/services/llm_service.py` (`post_process_structure`), `backend/services/extraction_service.py`
   - Befund: Steht auf einer Seite sowohl mindestens ein echtes Bild als auch eine weitere Bildunterschrift (`Abb. 2 …`) ohne zugehöriges extrahiertes `![…](…)`-Bild, kann Gemma aus der bildlosen Unterschrift einen zusätzlichen `<Bild>`-Block erzeugen. (Seiten komplett ohne extrahiertes Bild werden bereits deterministisch bereinigt.)
@@ -57,6 +52,12 @@ Format: `- [ ] **Titel** – Priorität` · Dateien · Befund · Lösungsvorschl
 
 ## Abgeschlossene Meilensteine (Zusammenfassung)
 
+- [x] **Buchkonferenz-bewusster Linter, Steckbrief-`<Rahmen>`-Erkennung, Glossar-`<Rahmen>`-Auflösung, Skeleton-Loop-Deduplizierung, Tilde-Griechisch & `LightOnOCR-3` als Standard-Engine**:
+  - `lint_markdown()` (`a11y_linter.py`), `evaluate_a11y()`, `custom_benchmark_service.py` und `feedback_service.py` unterstützen Plural-Rubriken (`Aufgaben`, `Worterklärungen`, `Steckbriefe`) sowie explizite Buchkonferenz-Ebenenregeln (`custom_rules`), ohne echte Ebenensprünge zu übersehen.
+  - Farbig hinterlegte `Steckbrief`-/Didaktikkästen (`DIDACTIC_BOX_HEADER_RE`, `is_callout_box`) werden in `extraction_postprocess.py` und `fibs_postprocess.py` als `<Rahmen>` strukturiert, während fälschlich in `<Rahmen>` gewrappte Randglossare in `#### Worterklärungen` aufgelöst werden.
+  - Skeleton-basierte Zyklus-Deduplizierung in `clean_vlm_repetition_loops()` kappt hochzählende VLM-Überschriftenschleifen (`#### Material A` … `Z`), ohne Inhaltsverzeichnisse zu beeinträchtigen; ausgeschriebene Tilde-Griechisch-Tokens (`~alpha` → `~a`, `~beta` → `~b`) und getrennte/nachgestellte Bildunterschriften werden deterministisch normalisiert; `LightOnOCR-3-0.8B` ist in UI und Backend als empfohlene Standard-Engine vorausgewählt.
+- [x] **Erklärvideo (`ebuch_konverter_erklaervideo_de.mp4`) mit `gemini-3.8-flash-tts`-Stimmen (`Kore` & `Charon`) und anonymisierter Word-Kopfzeile neu aufgenommen**:
+  - 16 bildgenau synchronisierte Szenen (`scripts/generate_video_assets.py`, `scripts/record_explanation_video.mjs`) zu Arbeitsoberfläche, 2-stufiger Offline-Architektur, OER-Lehrbuch `physik_optik_sample.pdf`, den drei aktuellen Engines (`Infinity-Parser2-Flash`, `LightOnOCR-3-0.8B`, `Docling`), hybrider 32px-Grid-Fusion, interaktivem `0..1000`-BBox-Grounding (`#pdf-bbox-viewer`), FIBS-09/2025-Konzepten, Eurobraille-Sonderzeichen-Assistent (`#char-replace-modal`), Differenz-Ansicht, Vollbild-Word-Vorschau (`physik_optik_sample.docx`, Platzhalter-ISBN `000-0-000-00000-0`) sowie Benchmark- und Feedback-Modus.
 - [x] **Plattformübergreifende Kompatibilität (macOS MLX, Linux/Windows CUDA & CPU) & Code-Konsolidierung** (20.10.):
   - `pyproject.toml` mit plattformspezifischen Markern (`sys_platform == 'darwin' and platform_machine == 'arm64'` für `mlx*`/`rapid-mlx`; `torch`, `transformers`, `accelerate`, `bitsandbytes` für Linux/Windows) ausgestattet.
   - Automatische Hardware-Erkennung (`cuda` → `mps` → `cpu`) in `main.py`, `extraction_service.py`, `lightonocr_extractor.py`, `infinity_parser_extractor.py`, `vlm_describer.py`, `feedback_analyzer.py` und `llm_service.py` (inkl. PyTorch/Transformers-Fallback und `LOCAL_LLM_BASE_URL`).

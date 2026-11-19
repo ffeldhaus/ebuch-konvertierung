@@ -10,14 +10,14 @@ Ein Algorithmus ist eine eindeutige, ausführbare und endliche Handlungsvorschri
 
 <Bild> Strukturdiagramm:
 Beschreibung mit Bildtext: Programmablaufplan (PAP) zur Hinderniserkennung und Ausweichsteuerung eines Roboters in einer Endlosschleife (alle 50 ms):
-Start \to Ultraschallsensor: Messe Abstand $d$ (cm) \to Entscheidung: $d < 25\,\text{cm}$?
-Ja \to Stoppe Motoren und drehe $90^\circ$ nach rechts.
-Nein \to Fahre geradeaus (Geschwindigkeit $v = 50\,\%$).
+Start \to Ultraschallsensor: Messe Abstand d (cm) \to Entscheidung: d < 25 cm?
+Ja \to Stoppe Motoren und drehe 90° nach rechts.
+Nein \to Fahre geradeaus (Geschwindigkeit v = 50 %).
 </Bild>
 
 <Rahmen>
 _Mediencode 74108-18: Interaktive Simulation Labyrinth-Roboter_
--	Teste den Programmablaufplan aus Abb. 1.1 im virtuellen 2D-Parcours mit verschiedenen Schwellenwerten ($d < 15\,\text{cm}$, $d < 25\,\text{cm}$, $d < 40\,\text{cm}$) und beobachte die Fahrspur des Roboters.
+-	Teste den Programmablaufplan aus Abb. 1.1 im virtuellen 2D-Parcours mit verschiedenen Schwellenwerten (d < 15 cm, d < 25 cm, d < 40 cm) und beobachte die Fahrspur des Roboters.
 </Rahmen>
 
 <Rahmen>
@@ -34,25 +34,25 @@ _Merksatz: Algorithmus und Grundstrukturen nach Böhm und Jacopini_
 
 ### Logische Verknüpfungen und Sensordaten-Auswertung
 
-Damit ein autonomer Transportroboter in einer Werkhalle nicht mit Regalen oder Personen kollidiert, kombiniert seine Steuerung oft mehrere Sensoren über boolesche Operatoren (_UND_, _ODER_, _NICHT_). Ein Ausweichmanöver wird genau dann eingeleitet, wenn der vordere Ultraschallsensor ein Hindernis meldet ($A = 1$) _oder_ der Stoßfänger-Taster ausgelöst wird ($B = 1$).
+Damit ein autonomer Transportroboter in einer Werkhalle nicht mit Regalen oder Personen kollidiert, kombiniert seine Steuerung oft mehrere Sensoren über boolesche Operatoren (_UND_, _ODER_, _NICHT_). Ein Ausweichmanöver wird genau dann eingeleitet, wenn der vordere Ultraschallsensor ein Hindernis meldet (A = 1) _oder_ der Stoßfänger-Taster ausgelöst wird (B = 1).
 
 ### Tabelle 1.1: Wahrheitstabelle und Aktor-Reaktion der Robotersteuerung
 
 <Tabelle>
 Sensor A (Abstand < 25 cm)	Sensor B (Taster vorn)	Verknüpfung A ODER B	Aktor-Befehl (Fahrmotoren)
-0 (frei)	0 (nicht gedrückt)	0 (falsch)	Geradeaus fahren ($v = 50\,\%$)
+0 (frei)	0 (nicht gedrückt)	0 (falsch)	Geradeaus fahren (v = 50 %)
 0 (frei)	1 (gedrückt)	1 (wahr)	Sofort stoppen & zurücksetzen
-1 (Hindernis nah)	0 (nicht gedrückt)	1 (wahr)	Stoppen & $90^\circ$ rechts drehen
+1 (Hindernis nah)	0 (nicht gedrückt)	1 (wahr)	Stoppen & 90° rechts drehen
 1 (Hindernis nah)	1 (gedrückt)	1 (wahr)	Not-Stopp & Warnsignalton
 </Tabelle>
 
 ### Aufgabe 1: Programmablaufplan nachvollziehen (Trace-Tabelle)
 
-Der Ultraschallsensor liefert nacheinander die Messwerte $d = 62\,\text{cm}$, $d = 38\,\text{cm}$, $d = 19\,\text{cm}$ und $d = 45\,\text{cm}$. Gib für jeden Messwert an, welchen Zweig der Roboter in Abb. 1.1 durchläuft.
+Der Ultraschallsensor liefert nacheinander die Messwerte d = 62 cm, d = 38 cm, d = 19 cm und d = 45 cm. Gib für jeden Messwert an, welchen Zweig der Roboter in Abb. 1.1 durchläuft.
 
 ### Aufgabe 2: Erweiterung um einen linken und rechten Seitensensor
 
-Formuliere eine geschachtelte Wenn-Dann-Sonst-Bedingung, mit der der Roboter vor einer Drehung prüft, ob rechts mehr Platz ist als links ($d_{\text{rechts}} > d_{\text{links}}$).
+Formuliere eine geschachtelte Wenn-Dann-Sonst-Bedingung, mit der der Roboter vor einer Drehung prüft, ob rechts mehr Platz ist als links (d_{rechts} > d_{links}).
 
 ### Aufgabe 3: Boolesche Algebra im Alltag
 

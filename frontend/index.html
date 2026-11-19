@@ -85,15 +85,15 @@
   <!-- Glowing Progress Bar Container -->
   <div id="pipeline-progress-container" class="hidden h-8 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between select-none flex-shrink-0 text-xs text-slate-350">
     <div class="flex items-center space-x-2">
-      <span class="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
-      <span id="pipeline-progress-phase" class="font-semibold text-slate-300">Bereite Extraktion vor...</span>
+      <span class="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" aria-hidden="true"></span>
+      <span id="pipeline-progress-phase" aria-live="polite" class="font-semibold text-slate-300">Bereite Extraktion vor...</span>
     </div>
     <div class="flex items-center space-x-3 w-1/2 justify-end">
-      <span id="pipeline-progress-pages" class="text-[10px] text-slate-500 font-mono">0 / 0 Seiten</span>
-      <div class="w-32 bg-slate-950 rounded-full h-1.5 overflow-hidden border border-slate-850">
-        <div id="pipeline-progress-bar" class="bg-gradient-to-r from-indigo-500 to-purple-600 h-full w-0 transition-all duration-300"></div>
+      <span id="pipeline-progress-pages" class="text-[10px] text-slate-500 font-mono tabular-nums"></span>
+      <div id="pipeline-progress-track" role="progressbar" aria-labelledby="pipeline-progress-phase" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" class="w-32 bg-slate-950 rounded-full h-1.5 overflow-hidden border border-slate-850">
+        <div id="pipeline-progress-bar" class="bg-gradient-to-r from-indigo-500 to-purple-600 h-full w-0 transition-[width] duration-200 ease-out motion-reduce:transition-none"></div>
       </div>
-      <span id="pipeline-progress-percent" class="font-mono font-bold text-indigo-400 w-8 text-right">0%</span>
+      <span id="pipeline-progress-percent" class="font-mono tabular-nums font-bold text-indigo-400 w-8 text-right">0%</span>
       <button id="pipeline-abort-btn" title="Konvertierung abbrechen" class="px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all flex items-center space-x-1 ml-2">
         <span>🛑 Abbrechen</span>
       </button>
@@ -171,8 +171,8 @@
           <div class="space-y-1.5" id="engine-select-container">
             <label for="engine-select" class="text-[10px] font-bold tracking-wider uppercase text-slate-400">Extraktions-Engine</label>
             <select id="engine-select" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors">
-              <option value="infinity" selected>Infinity-Parser2-Flash + Docling Layout (Standard – Beste Formel- &amp; Scan-OCR)</option>
-              <option value="lightonocr">LightOnOCR-3-0.8B + Docling Layout (Kompakte VLM-OCR – Schnell &amp; Speicherschonend)</option>
+              <option value="lightonocr" selected>LightOnOCR-3-0.8B + Docling Layout (Empfohlen – Schnell &amp; Hohe Strukturtreue)</option>
+              <option value="infinity">Infinity-Parser2-Flash + Docling Layout (Beste Formel- &amp; Scan-OCR)</option>
               <option value="docling">Docling mit CodeFormulaV2 (IBM Research – Schnellste Fließtext-Engine)</option>
             </select>
           </div>

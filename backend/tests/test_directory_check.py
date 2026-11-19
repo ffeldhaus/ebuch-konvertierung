@@ -5,6 +5,7 @@ reconstruction.
 
 import json
 import os
+import re
 import time
 
 from fastapi.testclient import TestClient
@@ -647,6 +648,51 @@ def test_large_556_page_pdf_directory_and_page_label_detection_under_half_second
     assert len(phys_With_dir) == total_pages
     assert phys_With_dir[-1] == 551
     assert len(phys_without_dir) == total_pages
+
+
+def test_insert_page_numbers_orders_pages_monotonically_with_sparse_docling_blocks(tmp_path):
+    """Verifies monotonic physical page order ((62))..((69)) when Docling heading/layout blocks
+    appear before per-page OCR body blocks and only cover a subset of pages.
+    """
+    blocks: list[dict] = [
+        {"type": "title", "text": "Optische Dispersion am Prisma", "text_level": 2, "page_idx": 0, "bbox": [40, 50, 420, 90]},
+        {"type": "title", "text": "Brechungsgesetz und Totalreflexion", "text_level": 2, "page_idx": 2, "bbox": [40, 50, 440, 90]},
+        {"type": "title", "text": "Beugung am optischen Gitter", "text_level": 2, "page_idx": 4, "bbox": [40, 50, 410, 90]},
+        {"type": "title", "text": "Interferenz dünner Schichten", "text_level": 2, "page_idx": 5, "bbox": [40, 50, 430, 90]},
+        {"type": "title", "text": "Polarisation von Lichtwellen", "text_level": 2, "page_idx": 7, "bbox": [40, 50, 400, 90]},
+        {"type": "text", "text": "Merksatz: Die Wellenlänge bleibt bei Reflexion konstant.", "page_idx": 6, "bbox_1000": [100, 200, 600, 320]},
+    ]
+    heading_by_page = {
+        0: "## Optische Dispersion am Prisma\n\n",
+        2: "## Brechungsgesetz und Totalreflexion\n\n",
+        4: "## Beugung am optischen Gitter\n\n",
+        5: "## Interferenz dünner Schichten\n\n",
+        6: "Merksatz: Die Wellenlänge bleibt bei Reflexion konstant.\n\n",
+        7: "## Polarisation von Lichtwellen\n\n",
+    }
+    page_bodies: list[str] = []
+    for p_idx in range(8):
+        phys = 62 + p_idx
+        body_txt = f"Synthetischer Lehrtext der Physik auf Seite {phys} über Lichtausbreitung im Medium {p_idx + 1}."
+        blocks.append({"type": "text", "text": body_txt, "page_idx": p_idx, "page_no": phys})
+        page_bodies.append(f"{heading_by_page.get(p_idx, '')}{body_txt}")
+
+    cl_file = tmp_path / "sparse_docling_content_list.json"
+    cl_file.write_text(json.dumps(blocks), encoding="utf-8")
+
+    # 1. Pre-existing misordered markers (reflecting sparse Docling block order) are repaired 1-to-1
+    misordered_nums = ["62", "64", "66", "67", "69", "68", "63", "65"]
+    md_wrong_markers = "\n\n".join(
+        f"(({num}))\n\n{body}" for num, body in zip(misordered_nums, page_bodies)
+    )
+    fixed = insert_page_numbers_from_metadata(md_wrong_markers, str(cl_file), "62-69")
+    assert re.findall(r"\(\((\d+)\)\)", fixed) == [str(p) for p in range(62, 70)]
+
+    # 2. Fallback anchor matching without pre-existing markers also emits monotonic pages 62..69
+    md_plain = "\n\n".join(page_bodies)
+    injected = insert_page_numbers_from_metadata(md_plain, str(cl_file), "62-69")
+    assert re.findall(r"\(\((\d+)\)\)", injected) == [str(p) for p in range(62, 70)]
+
 
 
 

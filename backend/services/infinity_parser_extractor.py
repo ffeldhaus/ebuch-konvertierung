@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import tempfile
+from typing import Any
 
 from PIL import Image
 
@@ -20,8 +21,11 @@ from backend.services.extraction_postprocess import (
 )
 from backend.services.pdf_render_service import render_pdf_page_for_vlm
 
-# Official Infinity-Parser2 training prompt (infinity_parser2/prompts.py)
-PROMPT_DOC2MD = "Please transform the document's contents into Markdown format."
+# Official Infinity-Parser2 training prompt reinforced with source-language preservation
+PROMPT_DOC2MD = (
+    "Please transform the document's contents into Markdown format. "
+    "Preserve the exact original language of the document without translating."
+)
 
 logger = logging.getLogger("infinity_parser_extractor")
 
@@ -162,11 +166,14 @@ def main(cli_args: list[str] | None = None):
             sys.exit(1)
 
     all_markdown = []
-    blocks = []
-    blocks.extend(layout_info.get("heading_blocks", []))
-    blocks.extend(layout_info.get("layout_blocks", []))
-    for p_furn in layout_info.get("furniture_by_page", {}).values():
-        blocks.extend(p_furn)
+    blocks: list[dict[str, Any]] = []
+    heading_blocks_by_page: dict[int, list[dict[str, Any]]] = {}
+    for b in layout_info.get("heading_blocks", []):
+        heading_blocks_by_page.setdefault(int(b.get("page_idx", 0)), []).append(b)
+    layout_blocks_by_page: dict[int, list[dict[str, Any]]] = {}
+    for b in layout_info.get("layout_blocks", []):
+        layout_blocks_by_page.setdefault(int(b.get("page_idx", 0)), []).append(b)
+    furn_by_page = layout_info.get("furniture_by_page", {})
 
     physical_page_numbers: list[int | str] = []
     if is_pdf:
@@ -319,6 +326,8 @@ def main(cli_args: list[str] | None = None):
             phys_num,
             page_tables=page_tables,
             opening_headers=opening_headers,
+            docling_layout=layout_info,
+            page_idx=p_idx,
         )
         all_markdown.append(cleaned_text)
 
@@ -354,6 +363,18 @@ def main(cli_args: list[str] | None = None):
                 "page_idx": p_idx,
                 "page_no": phys_num,
             })
+
+        blocks.extend(heading_blocks_by_page.get(p_idx, []))
+        blocks.extend(layout_blocks_by_page.get(p_idx, []))
+        blocks.extend(furn_by_page.get(p_idx, []))
+
+    extra_pages = sorted(
+        {pk for pk in (*heading_blocks_by_page, *layout_blocks_by_page, *furn_by_page) if not (0 <= pk < total_pages)}
+    )
+    for pk in extra_pages:
+        blocks.extend(heading_blocks_by_page.get(pk, []))
+        blocks.extend(layout_blocks_by_page.get(pk, []))
+        blocks.extend(furn_by_page.get(pk, []))
 
     if pdf is not None:
         try:

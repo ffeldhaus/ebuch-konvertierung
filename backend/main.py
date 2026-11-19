@@ -11,6 +11,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -391,7 +392,8 @@ async def extract_markdown(
     pages: str = Form(None),
     method: str = Form("auto"),
     lang: str = Form("en"),
-    engine: str = Form("infinity"),
+    engine: str = Form("lightonocr"),
+    describe_images: bool = Form(True),
 ):
     """Step 2: Run extraction (LightOnOCR-3, Infinity-Parser2-Flash, or Docling) on the uploaded document.
     Streams progress logs, ending with the extracted Markdown payload.
@@ -434,6 +436,9 @@ async def extract_markdown(
         task.method = method
         task.lang = lang
         task.engine = engine
+        task.describe_images = (
+            describe_images if isinstance(describe_images, bool) else True
+        )
         task.status = "processing"
         if not task.started_at:
             task.started_at = time.time()
@@ -736,18 +741,158 @@ async def delete_task(task_id: str):
         except Exception as e:
             logger.warning(f"Failed to delete output dir {output_root}: {str(e)}")
 
-    # Also delete selected temp pdf if exists
+    # Also delete selected temp pdf and sidecars if present
     selected_pdf_path = os.path.join(UPLOAD_DIR, "selected", f"{task_id}.pdf")
-    if os.path.exists(selected_pdf_path):
-        try:
-            os.remove(selected_pdf_path)
-        except Exception:
-            pass
+    for sel_candidate in (
+        selected_pdf_path,
+        f"{selected_pdf_path}.labels.json",
+        f"{selected_pdf_path}.neighbors.json",
+    ):
+        if os.path.exists(sel_candidate):
+            try:
+                os.remove(sel_candidate)
+            except Exception:
+                pass
 
     # 3. Remove from task manager
     await task_manager.delete(task_id)
 
     return {"status": "deleted", "task_id": task_id}
+
+
+def _load_or_sync_neighbor_context(
+    task_id: str,
+    selected_pdf_path: str | None = None,
+) -> dict[str, str] | None:
+    """Sync ``.neighbors.json`` sidecar into ``task_dir/neighbor_context.json`` and load it.
+
+    Args:
+        task_id: Conversion task identifier.
+        selected_pdf_path: Optional path to the cropped PDF whose ``.neighbors.json``
+            sidecar should be inspected first.
+
+    Returns:
+        Parsed neighbor context dictionary if available, otherwise ``None``.
+    """
+    import shutil
+
+    task_dir = os.path.join(OUTPUT_DIR, task_id)
+    dst_nb = os.path.join(task_dir, "neighbor_context.json")
+    sel_pdf = selected_pdf_path or os.path.join(UPLOAD_DIR, "selected", f"{task_id}.pdf")
+    src_nb = f"{sel_pdf}.neighbors.json"
+
+    if os.path.exists(src_nb) and not os.path.exists(dst_nb):
+        try:
+            os.makedirs(task_dir, exist_ok=True)
+            shutil.copyfile(src_nb, dst_nb)
+        except Exception as copy_err:
+            logger.debug(f"Could not copy neighbor context sidecar: {copy_err}")
+
+    for cand in (dst_nb, src_nb):
+        if os.path.exists(cand):
+            try:
+                with open(cand, encoding="utf-8") as nbf:
+                    data = json.load(nbf)
+                if isinstance(data, dict):
+                    return {str(k): str(v) for k, v in data.items() if v is not None}
+            except Exception as read_err:
+                logger.debug(f"Could not load neighbor context {cand}: {read_err}")
+    return None
+
+
+def _build_task_doc_metadata(task: Any, markdown_text: str = "") -> dict[str, str]:
+    """Extract FIBS-Kopf metadata (``fach``, ``titel``, ``verlag``, ``isbn``, page bounds) from ``task``.
+
+    Args:
+        task: Active conversion ``Task`` instance.
+        markdown_text: Standardised Markdown content used to check for ``((num))`` markers.
+
+    Returns:
+        Dictionary of populated FIBS-Kopf metadata fields.
+    """
+    meta: dict[str, str] = {}
+    try:
+        rules_text, _ = task.resolve_custom_ruleset(
+            output_dir=OUTPUT_DIR,
+            sibling_tasks=list(task_manager._tasks.values()),
+        )
+    except Exception:
+        rules_text = ""
+
+    if rules_text:
+        for field_key, label_pat in (
+            ("fach", r"Fach"),
+            ("titel", r"Titel"),
+            ("verlag", r"Verlag"),
+        ):
+            m_fld = re.search(
+                rf"(?im)^[ \t]*(?:#{{1,6}}\s+|[-*]\s+|\*\*|_)*{label_pat}[ \t]*:[ \t]*([^\n*_]+)",
+                rules_text,
+            )
+            if m_fld and m_fld.group(1).strip():
+                meta[field_key] = m_fld.group(1).strip()
+        m_isbn_rules = re.search(r"978[\d\-_]{10,14}", rules_text)
+        if m_isbn_rules:
+            cand_isbn = m_isbn_rules.group(0).replace("_", "-").strip("-")
+            if len(re.sub(r"\D", "", cand_isbn)) == 13:
+                meta["isbn"] = cand_isbn
+
+    if "isbn" not in meta:
+        orig_name = getattr(task, "original_name", "") or ""
+        m_isbn_name = re.search(r"978[\d\-_]{10,14}", orig_name)
+        if m_isbn_name:
+            cand_isbn = m_isbn_name.group(0).replace("_", "-").strip("-")
+            if len(re.sub(r"\D", "", cand_isbn)) == 13:
+                meta["isbn"] = cand_isbn
+
+    has_md_markers = bool(
+        re.search(r"(?m)^\s*\(\([\dIVXLCDMivxlcdm]+\)\)", markdown_text or "")
+    )
+    pages_raw = (getattr(task, "pages", "") or "").strip()
+    if not has_md_markers and pages_raw:
+        nums = re.findall(r"\d+|[IVXLCDMivxlcdm]+", pages_raw)
+        if nums:
+            meta["start_page"] = nums[0]
+            meta["end_page"] = nums[-1]
+
+    return meta
+
+
+def _resolve_task_docx_template_path(task_id: str, template_mode: str | None = "default") -> str | None:
+    """Resolve the custom or default FIBS ``.dotx``/``.docx`` template path for DOCX export.
+
+    Args:
+        task_id: Conversion task identifier.
+        template_mode: ``"custom"``, ``"default"``, ``"auto"``, or ``None``.
+
+    Returns:
+        Filesystem path to the template file if found, else ``None``.
+    """
+    template_docx = os.path.join(OUTPUT_DIR, task_id, "template.docx")
+    template_dotx = os.path.join(OUTPUT_DIR, task_id, "template.dotx")
+    default_tpl = os.path.join(
+        BASE_DIR,
+        "assets",
+        "templates",
+        "Dokumentenvorlage FIBS 25.05.2025_NEU.dotx",
+    )
+    mode = template_mode or "default"
+    if mode == "custom":
+        if os.path.exists(template_docx):
+            return template_docx
+        if os.path.exists(template_dotx):
+            return template_dotx
+    elif mode == "auto":
+        if os.path.exists(template_docx):
+            return template_docx
+        if os.path.exists(template_dotx):
+            return template_dotx
+        if os.path.exists(default_tpl):
+            return default_tpl
+    elif mode == "default":
+        if os.path.exists(default_tpl):
+            return default_tpl
+    return None
 
 
 def _standardise_events(task, request: StandardiseRequest):
@@ -760,33 +905,92 @@ def _standardise_events(task, request: StandardiseRequest):
     """
 
     async def standardise_generator():
+        initial_percent = int((task.progress or {}).get("percent") or 0)
+        if initial_percent >= 100:
+            initial_percent = 0
+        last_emitted_percent = initial_percent
+
+        def log_progress(
+            percent: int,
+            phase: str,
+            log_msg: str | None = None,
+            *,
+            current: int = 0,
+            total: int = 0,
+            unit: str = "",
+        ) -> int:
+            nonlocal last_emitted_percent
+            clamped = (
+                100
+                if percent >= 100
+                else max(last_emitted_percent, min(99, int(percent)))
+            )
+            last_emitted_percent = clamped
+            task.touch()
+            task.progress = {
+                "percent": clamped,
+                "phase": phase,
+                "current": current,
+                "total": total,
+                "unit": unit,
+            }
+            if log_msg:
+                task.logs.append(log_msg)
+            # Listeners are fed by the job runner (_run_standardise_job), which
+            # publishes every yielded event line – no direct push here.
+            return clamped
+
+        def format_progress_line(
+            percent: int,
+            phase: str,
+            *,
+            current: int = 0,
+            total: int = 0,
+            unit: str = "",
+        ) -> str:
+            return (
+                json.dumps(
+                    {
+                        "status": "progress",
+                        "percent": percent,
+                        "phase": phase,
+                        "current": current,
+                        "total": total,
+                        "unit": unit,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
         try:
-            # Helper to log and update progress
-            def log_progress(percent: int, phase: str, log_msg: str = None):
-                task.touch()
-                task.progress = {
-                    "percent": percent,
-                    "phase": phase,
-                    "current": 0,
-                    "total": 0
-                }
-                if log_msg:
-                    task.logs.append(log_msg)
-                # Listeners are fed by the job runner (_run_standardise_job), which
-                # publishes every yielded event line – no direct push here.
+            import hashlib
+
+            from backend.services.llm_service import (
+                StandardisationAborted,
+                build_standardisation_chunks,
+            )
+            from backend.services.progress_service import (
+                compute_gemma_stream_percent,
+                compute_post_extraction_budget,
+                compute_vlm_image_percent,
+            )
+            from backend.services.prompts import VLM_IMAGE_PROMPT, build_vlm_prompt
+            from backend.services.vlm_describer import load_cache
 
             # Determine if we have a PDF file and want multimodal input
             image_paths = None
             loop = asyncio.get_event_loop()
-            
+
             should_describe = bool(getattr(request, "describe_images", True))
 
             # Pre-process raw markdown to describe images using the local VLM
-            markdown_to_process = request.markdown
+            markdown_to_process = request.markdown or ""
             if markdown_to_process:
                 from backend.services.extraction_postprocess import sanitize_runaway_repetitions
+
                 markdown_to_process = sanitize_runaway_repetitions(markdown_to_process)
-            
+
             # Candidate directories where extractors place extracted images
             candidate_dirs = [
                 task.image_dir,
@@ -798,12 +1002,14 @@ def _standardise_events(task, request: StandardiseRequest):
                 os.path.join(OUTPUT_DIR, request.task_id, "lightonocr", "images"),
             ]
             valid_image_dirs = [d for d in candidate_dirs if d and os.path.exists(d)]
-            
+
+            unique_matches: list[re.Match[str]] = []
+            image_paths_list: list[str] = []
+            matched_file_map: dict[str, str] = {}
             if valid_image_dirs:
                 pattern = r"(?s)!\[(.*?)\]\((?:images/)?([^)]+)\)"
                 wrapped_pattern = r"(?s)<Bild>\s*!\[(.*?)\]\((?:images/)?([^)]+)\)\s*</Bild>"
-                
-                # Find all images without duplicating nested matches
+
                 wrapped_matches = list(re.finditer(wrapped_pattern, markdown_to_process))
                 plain_matches = list(re.finditer(pattern, markdown_to_process))
                 wrapped_spans = [m.span() for m in wrapped_matches]
@@ -812,197 +1018,348 @@ def _standardise_events(task, request: StandardiseRequest):
                     p_start, p_end = pm.span()
                     if not any(w_start <= p_start and p_end <= w_end for w_start, w_end in wrapped_spans):
                         unique_matches.append(pm)
-                
-                total_images = len(unique_matches)
-                if total_images > 0:
-                    # Prepare image paths list (searching across valid candidate directories)
-                    image_paths_list = []
-                    matched_file_map = {}
-                    for match in unique_matches:
-                        img_filename = os.path.basename(match.group(2))
-                        resolved_path = None
-                        for img_dir in valid_image_dirs:
-                            candidate_path = os.path.join(img_dir, img_filename)
-                            if os.path.exists(candidate_path):
-                                resolved_path = candidate_path
-                                break
-                        if not resolved_path:
-                            resolved_path = os.path.join(valid_image_dirs[0], img_filename)
-                        
-                        matched_file_map[match.group(0)] = resolved_path
-                        if resolved_path not in image_paths_list and os.path.exists(resolved_path):
-                            image_paths_list.append(resolved_path)
 
-                    if not should_describe:
-                        log_progress(92, f"{total_images} Bilder ohne VLM übernommen", f"[Info] Gefunden: {total_images} Bilder. VLM-Bildbeschreibungen übersprungen.")
-                        yield f'{{"status": "log", "message": "{total_images} Bilder ohne VLM übernommen."}}\n'
-                        yield f'{{"status": "progress", "percent": 92, "phase": "{total_images} Bilder ohne VLM übernommen..."}}\n'
-                        json_data = {}
-                    else:
-                        log_progress(92, f"Analysiere {total_images} Bilder...", f"[Info] Gefunden: {total_images} Bilder zur Barrierefreiheits-Beschreibung.")
-                        yield f'{{"status": "log", "message": "Analysiere {total_images} Bilder..."}}\n'
-                        yield f'{{"status": "progress", "percent": 92, "phase": "Analysiere {total_images} Bilder..."}}\n'
-                        
-                        import sys
-                        json_data = {}
-                        
-                        if os.environ.get("E2E_MOCK") == "true":
-                            logger.info("E2E_MOCK active: bypassing VLM describer subprocess.")
-                            json_data = {
-                                p: "Versuchsaufbau eines optischen Experiments mit Prismen zur Lichtbrechung."
-                                for p in image_paths_list
-                            }
-                        elif image_paths_list:
-                            # 1. Unload text model from GPU before starting VLM to prevent memory exhaustion
-                            release_gpu_memory()
+                for match in unique_matches:
+                    img_filename = os.path.basename(match.group(2))
+                    resolved_path = None
+                    for img_dir in valid_image_dirs:
+                        candidate_path = os.path.join(img_dir, img_filename)
+                        if os.path.exists(candidate_path):
+                            resolved_path = candidate_path
+                            break
+                    if not resolved_path:
+                        resolved_path = os.path.join(valid_image_dirs[0], img_filename)
 
-                            tmp_vlm_json_path = os.path.join(OUTPUT_DIR, request.task_id, "vlm_descriptions.json")
-                            python_exe = sys.executable or "python"
+                    matched_file_map[match.group(0)] = resolved_path
+                    if resolved_path not in image_paths_list and os.path.exists(resolved_path):
+                        image_paths_list.append(resolved_path)
 
-                            cmd = [
-                                python_exe,
-                                "-m",
-                                "backend.services.vlm_describer",
-                                "--images",
-                                ",".join(image_paths_list),
-                                "--output-json",
-                                tmp_vlm_json_path,
-                            ]
-                            
-                            logger.info(f"Running VLM describer subprocess: {' '.join(cmd)}")
-                            log_progress(92, "Lade Gemma VLM Modell...", f"[VLM] Lade Gemma VLM für {len(image_paths_list)} Bilder...")
-                            yield f'{{"status": "log", "message": "[VLM] Lade Gemma VLM für {len(image_paths_list)} Bilder..."}}\n'
-                            yield '{"status": "progress", "percent": 92, "phase": "Lade Gemma VLM Modell..."}\n'
-                            
-                            # Resume checkpoint: survives interruptions, removed after successful completion.
-                            vlm_cache_path = os.path.join(OUTPUT_DIR, request.task_id, "vlm_cache.json")
-                            cmd += ["--cache-json", vlm_cache_path]
+            total_images = len(unique_matches)
+            vlm_cache_path = os.path.join(OUTPUT_DIR, request.task_id, "vlm_cache.json")
+            vlm_contexts: dict[str, str] = {}
+            vlm_contexts_ready = False
+            cached_count = 0
+            uncached_count = 0
 
-                            # Page text context per image (current page, plus the end of the previous
-                            # page from its last heading when the page does not start with a heading).
+            if should_describe and image_paths_list:
+                try:
+                    from backend.services.fibs_formatting import image_contexts_for_markdown
+
+                    vlm_contexts = image_contexts_for_markdown(markdown_to_process, matched_file_map)
+                    vlm_contexts_ready = True
+                except Exception as ctx_err:
+                    logger.warning(f"Could not build page contexts for VLM: {ctx_err}")
+
+                cached_entries = load_cache(vlm_cache_path, VLM_IMAGE_PROMPT)
+                if cached_entries:
+                    for p in image_paths_list:
+                        p_prompt = build_vlm_prompt(vlm_contexts.get(p, ""))
+                        p_key = f"{p}#{hashlib.sha256(p_prompt.encode('utf-8')).hexdigest()[:16]}"
+                        if p_key in cached_entries:
+                            cached_count += 1
+                uncached_count = max(0, len(image_paths_list) - cached_count)
+
+            planned_chunks = max(
+                1, len(build_standardisation_chunks(markdown_to_process, ""))
+            )
+            budget = compute_post_extraction_budget(
+                start_percent=initial_percent,
+                uncached_images=uncached_count if should_describe else 0,
+                cached_images=cached_count if should_describe else 0,
+                describe_images=should_describe,
+                total_chunks=planned_chunks,
+            )
+
+            if total_images > 0:
+                if not should_describe:
+                    skip_phase = f"{total_images} Bilder ohne VLM übernommen..."
+                    pct = log_progress(
+                        budget.vlm_end_percent,
+                        skip_phase,
+                        f"[Info] Gefunden: {total_images} Bilder. VLM-Bildbeschreibungen übersprungen.",
+                        current=total_images,
+                        total=total_images,
+                        unit="Bilder",
+                    )
+                    yield f'{{"status": "log", "message": "{total_images} Bilder ohne VLM übernommen."}}\n'
+                    yield format_progress_line(
+                        pct, skip_phase, current=total_images, total=total_images, unit="Bilder"
+                    )
+                    json_data = {}
+                else:
+                    import sys
+
+                    vlm_total = len(image_paths_list) or total_images
+                    init_vlm_phase = f"Analysiere {vlm_total} Bilder..."
+                    pct = log_progress(
+                        budget.vlm_start_percent,
+                        init_vlm_phase,
+                        f"[Info] Gefunden: {total_images} Bilder zur Barrierefreiheits-Beschreibung.",
+                        current=0,
+                        total=vlm_total,
+                        unit="Bilder",
+                    )
+                    yield f'{{"status": "log", "message": "Analysiere {total_images} Bilder..."}}\n'
+                    yield format_progress_line(
+                        pct, init_vlm_phase, current=0, total=vlm_total, unit="Bilder"
+                    )
+
+                    json_data = {}
+                    if os.environ.get("E2E_MOCK") == "true":
+                        logger.info("E2E_MOCK active: bypassing VLM describer subprocess.")
+                        for mock_idx, _p in enumerate(image_paths_list, 1):
+                            mock_pct = compute_vlm_image_percent(
+                                budget, mock_idx, len(image_paths_list)
+                            )
+                            mock_phase = f"Analysiere Bild {mock_idx}/{len(image_paths_list)} (VLM)..."
+                            pct = log_progress(
+                                mock_pct,
+                                mock_phase,
+                                current=mock_idx,
+                                total=len(image_paths_list),
+                                unit="Bilder",
+                            )
+                            yield format_progress_line(
+                                pct,
+                                mock_phase,
+                                current=mock_idx,
+                                total=len(image_paths_list),
+                                unit="Bilder",
+                            )
+                        json_data = {
+                            p: "Versuchsaufbau eines optischen Experiments mit Prismen zur Lichtbrechung."
+                            for p in image_paths_list
+                        }
+                        done_pct = compute_vlm_image_percent(
+                            budget, vlm_total, vlm_total, finished=True
+                        )
+                        done_phase = f"Bildanalyse abgeschlossen ({vlm_total}/{vlm_total})"
+                        pct = log_progress(
+                            done_pct,
+                            done_phase,
+                            current=vlm_total,
+                            total=vlm_total,
+                            unit="Bilder",
+                        )
+                        yield format_progress_line(
+                            pct, done_phase, current=vlm_total, total=vlm_total, unit="Bilder"
+                        )
+                    elif image_paths_list:
+                        # 1. Unload text model from GPU before starting VLM to prevent memory exhaustion
+                        release_gpu_memory()
+
+                        tmp_vlm_json_path = os.path.join(OUTPUT_DIR, request.task_id, "vlm_descriptions.json")
+                        python_exe = sys.executable or "python"
+
+                        cmd = [
+                            python_exe,
+                            "-m",
+                            "backend.services.vlm_describer",
+                            "--images",
+                            ",".join(image_paths_list),
+                            "--output-json",
+                            tmp_vlm_json_path,
+                            "--cache-json",
+                            vlm_cache_path,
+                        ]
+
+                        logger.info(f"Running VLM describer subprocess: {' '.join(cmd)}")
+                        pct = log_progress(
+                            budget.vlm_start_percent,
+                            "Lade Gemma VLM Modell...",
+                            f"[VLM] Lade Gemma VLM für {len(image_paths_list)} Bilder...",
+                            current=0,
+                            total=len(image_paths_list),
+                            unit="Bilder",
+                        )
+                        yield f'{{"status": "log", "message": "[VLM] Lade Gemma VLM für {len(image_paths_list)} Bilder..."}}\n'
+                        yield format_progress_line(
+                            pct,
+                            "Lade Gemma VLM Modell...",
+                            current=0,
+                            total=len(image_paths_list),
+                            unit="Bilder",
+                        )
+
+                        # Persist precomputed read-only page contexts for vlm_describer.py
+                        if vlm_contexts_ready:
                             try:
-                                from backend.services.fibs_formatting import image_contexts_for_markdown
-                                vlm_contexts = image_contexts_for_markdown(markdown_to_process, matched_file_map)
                                 vlm_contexts_path = os.path.join(OUTPUT_DIR, request.task_id, "vlm_contexts.json")
                                 with open(vlm_contexts_path, "w", encoding="utf-8") as cf:
                                     json.dump(vlm_contexts, cf, ensure_ascii=False, indent=2)
                                 cmd += ["--contexts-json", vlm_contexts_path]
-                                log_progress(92, "Seitenkontext für Bilder vorbereitet",
-                                             f"[VLM] Seitenkontext für {sum(1 for v in vlm_contexts.values() if v)}/{len(image_paths_list)} Bilder vorbereitet.")
+                                log_progress(
+                                    budget.vlm_start_percent,
+                                    "Seitenkontext für Bilder vorbereitet",
+                                    f"[VLM] Seitenkontext für {sum(1 for v in vlm_contexts.values() if v)}/{len(image_paths_list)} Bilder vorbereitet.",
+                                    current=0,
+                                    total=len(image_paths_list),
+                                    unit="Bilder",
+                                )
                             except Exception as ctx_err:
-                                logger.warning(f"Could not build page contexts for VLM: {ctx_err}")
+                                logger.warning(f"Could not write page contexts for VLM: {ctx_err}")
 
-                            # stdout -> DEVNULL: results come via --output-json. An unread PIPE would
-                            # block the child as soon as its final JSON print exceeds the pipe buffer.
-                            proc = await asyncio.create_subprocess_exec(
-                                *cmd,
-                                stdout=asyncio.subprocess.DEVNULL,
-                                stderr=asyncio.subprocess.PIPE,
-                                cwd=BASE_DIR,
-                            )
-                            task.process = proc  # explicit abort kills the subprocess
+                        # stdout -> DEVNULL: results come via --output-json. An unread PIPE would
+                        # block the child as soon as its final JSON print exceeds the pipe buffer.
+                        proc = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.PIPE,
+                            cwd=BASE_DIR,
+                        )
+                        task.process = proc  # explicit abort kills the subprocess
 
-                            idx = 0
-                            stderr_tail = []
-                            try:
-                                while True:
-                                    line = await proc.stderr.readline()
-                                    if not line:
-                                        break
-                                    line_str = line.decode("utf-8", errors="ignore").strip()
-                                    if "[PROGRESS]" in line_str:
-                                        m = re.search(r"\[PROGRESS\]\s+(\d+)/(\d+)", line_str)
-                                        if m:
-                                            idx = int(m.group(1))
-                                            total_imgs_reported = int(m.group(2))
-                                        else:
-                                            idx += 1
-                                            total_imgs_reported = len(image_paths_list)
-                                        percent = 92 + int(((idx - 1) / max(1, total_imgs_reported)) * 5)
-                                        phase = f"Analysiere Bild {idx}/{total_imgs_reported} (VLM)..."
-                                        log_msg = f"[VLM] Analysiere Bild {idx}/{total_imgs_reported}..."
-                                        log_progress(percent, phase, log_msg)
-                                        yield f'{{"status": "log", "message": {json.dumps(log_msg)}}}\n'
-                                        yield f'{{"status": "progress", "percent": {percent}, "phase": {json.dumps(phase)}}}\n'
-                                    elif line_str:
-                                        if "Resume checkpoint" in line_str:
-                                            resume_msg = "[VLM] " + line_str.split(" - ")[-1]
-                                            yield f'{{"status": "log", "message": {json.dumps(resume_msg)}}}\n'
-                                        stderr_tail = (stderr_tail + [line_str])[-20:]
+                        idx = 0
+                        stderr_tail = []
+                        try:
+                            while True:
+                                line = await proc.stderr.readline()
+                                if not line:
+                                    break
+                                line_str = line.decode("utf-8", errors="ignore").strip()
+                                if "[PROGRESS]" in line_str:
+                                    m = re.search(r"\[PROGRESS\]\s+(\d+)/(\d+)", line_str)
+                                    if m:
+                                        idx = int(m.group(1))
+                                        total_imgs_reported = int(m.group(2))
+                                    else:
+                                        idx += 1
+                                        total_imgs_reported = len(image_paths_list)
+                                    raw_pct = compute_vlm_image_percent(
+                                        budget, idx, total_imgs_reported
+                                    )
+                                    phase = f"Analysiere Bild {idx}/{total_imgs_reported} (VLM)..."
+                                    log_msg = f"[VLM] Analysiere Bild {idx}/{total_imgs_reported}..."
+                                    pct = log_progress(
+                                        raw_pct,
+                                        phase,
+                                        log_msg,
+                                        current=idx,
+                                        total=total_imgs_reported,
+                                        unit="Bilder",
+                                    )
+                                    yield f'{{"status": "log", "message": {json.dumps(log_msg)}}}\n'
+                                    yield format_progress_line(
+                                        pct,
+                                        phase,
+                                        current=idx,
+                                        total=total_imgs_reported,
+                                        unit="Bilder",
+                                    )
+                                elif line_str:
+                                    if "Resume checkpoint" in line_str:
+                                        resume_msg = "[VLM] " + line_str.split(" - ")[-1]
+                                        yield f'{{"status": "log", "message": {json.dumps(resume_msg)}}}\n'
+                                    stderr_tail = (stderr_tail + [line_str])[-20:]
 
-                                await proc.wait()
-                            except BaseException:
-                                # Job cancelled (explicit abort / shutdown): never leave the VLM running.
-                                if proc.returncode is None:
-                                    try:
-                                        proc.kill()
-                                    except ProcessLookupError:
-                                        pass
-                                raise
-                            finally:
-                                task.process = None
-
-                            if proc.returncode not in (0, None):
-                                warn = f"[VLM] Bildbeschreibung beendet mit Code {proc.returncode}."
-                                logger.warning(warn + " stderr: " + " | ".join(stderr_tail[-5:]))
-                                yield f'{{"status": "log", "message": {json.dumps(warn)}}}\n'
-
-                            if os.path.exists(tmp_vlm_json_path):
-                                from backend.services.vlm_describer import load_vlm_results
-
-                                vlm_results = load_vlm_results(tmp_vlm_json_path)
+                            await proc.wait()
+                        except BaseException:
+                            # Job cancelled (explicit abort / shutdown): never leave the VLM running.
+                            if proc.returncode is None:
                                 try:
-                                    os.remove(tmp_vlm_json_path)
-                                except Exception:
+                                    proc.kill()
+                                except ProcessLookupError:
                                     pass
+                            raise
+                        finally:
+                            task.process = None
 
-                            # 2. Release VLM memory before loading text model for standardisation
-                            release_gpu_memory()
-                                
-                    from backend.services.fibs_formatting import bild_tag_from_vlm, format_bild_tag, has_caption_context
-                    from backend.services.vlm_describer import parse_vlm_description
+                        if proc.returncode not in (0, None):
+                            warn = f"[VLM] Bildbeschreibung beendet mit Code {proc.returncode}."
+                            logger.warning(warn + " stderr: " + " | ".join(stderr_tail[-5:]))
+                            yield f'{{"status": "log", "message": {json.dumps(warn)}}}\n'
 
-                    descriptions = {}
-                    decorative_removed = 0
-                    for match in unique_matches:
-                        alt_text = match.group(1)
-                        resolved_img_path = matched_file_map.get(match.group(0), "")
+                        if os.path.exists(tmp_vlm_json_path):
+                            from backend.services.vlm_describer import load_vlm_results
 
-                        vlm_res = vlm_results.get(resolved_img_path) if "vlm_results" in locals() else None
-                        if vlm_res is None and resolved_img_path in json_data:
-                            raw_val = json_data[resolved_img_path]
-                            vlm_res = parse_vlm_description(raw_val) if isinstance(raw_val, str) and raw_val else None
-                        if vlm_res:
-                            # Structured VLM answer -> multi-line <Bild> block. Purely decorative images
-                            # (VLM verdict) without caption / text context are not transferred (empty string).
-                            has_caption = has_caption_context(markdown_to_process, match.start(), match.end(), alt_text)
-                            tag = bild_tag_from_vlm(vlm_res, has_caption=has_caption, alt_text=alt_text)
-                            if not tag:
-                                decorative_removed += 1
-                            descriptions[match.group(0)] = tag
-                        else:
-                            descriptions[match.group(0)] = format_bild_tag("", alt_text, has_text=False)
+                            vlm_results = load_vlm_results(tmp_vlm_json_path)
+                            try:
+                                os.remove(tmp_vlm_json_path)
+                            except Exception:
+                                pass
 
-                    if decorative_removed:
-                        log_msg = f"[VLM] {decorative_removed} dekorative(s) Bild(er) ohne Bildunterschrift nicht übertragen."
-                        logger.info(log_msg)
-                        yield f'{{"status": "log", "message": {json.dumps(log_msg)}}}\n'
+                        done_pct = compute_vlm_image_percent(
+                            budget, len(image_paths_list), len(image_paths_list), finished=True
+                        )
+                        done_phase = f"Bildanalyse abgeschlossen ({len(image_paths_list)}/{len(image_paths_list)})"
+                        pct = log_progress(
+                            done_pct,
+                            done_phase,
+                            current=len(image_paths_list),
+                            total=len(image_paths_list),
+                            unit="Bilder",
+                        )
+                        yield format_progress_line(
+                            pct,
+                            done_phase,
+                            current=len(image_paths_list),
+                            total=len(image_paths_list),
+                            unit="Bilder",
+                        )
 
-                    # Apply replacements
-                    for raw_match, replaced_tag in descriptions.items():
-                        markdown_to_process = markdown_to_process.replace(raw_match, replaced_tag)
-                    markdown_to_process = re.sub(r"\n{3,}", "\n\n", markdown_to_process)
+                        # 2. Release VLM memory before loading text model for standardisation
+                        release_gpu_memory()
 
-                    # Strip details block
-                    markdown_to_process = re.sub(r"<details\b[^>]*>.*?</details>", "", markdown_to_process, flags=re.DOTALL)
+                from backend.services.fibs_formatting import (
+                    bild_tag_from_vlm,
+                    format_bild_tag,
+                    has_caption_context,
+                )
+                from backend.services.vlm_describer import parse_vlm_description
 
-            # Now run text standardisation with real-time token streaming
-            log_progress(98, "Formatiere Text...", "[Info] Wende E-Buch Formatierungsregeln (Gemma) an...")
+                descriptions = {}
+                decorative_removed = 0
+                for match in unique_matches:
+                    alt_text = match.group(1)
+                    resolved_img_path = matched_file_map.get(match.group(0), "")
+
+                    vlm_res = vlm_results.get(resolved_img_path) if "vlm_results" in locals() else None
+                    if vlm_res is None and resolved_img_path in json_data:
+                        raw_val = json_data[resolved_img_path]
+                        vlm_res = parse_vlm_description(raw_val) if isinstance(raw_val, str) and raw_val else None
+                    if vlm_res:
+                        # Structured VLM answer -> multi-line <Bild> block. Purely decorative images
+                        # (VLM verdict) without caption / text context are not transferred (empty string).
+                        has_caption = has_caption_context(markdown_to_process, match.start(), match.end(), alt_text)
+                        tag = bild_tag_from_vlm(vlm_res, has_caption=has_caption, alt_text=alt_text)
+                        if not tag:
+                            decorative_removed += 1
+                        descriptions[match.group(0)] = tag
+                    else:
+                        descriptions[match.group(0)] = format_bild_tag("", alt_text, has_text=False)
+
+                if decorative_removed:
+                    log_msg = f"[VLM] {decorative_removed} dekorative(s) Bild(er) ohne Bildunterschrift nicht übertragen."
+                    logger.info(log_msg)
+                    yield f'{{"status": "log", "message": {json.dumps(log_msg)}}}\n'
+
+                # Apply replacements
+                for raw_match, replaced_tag in descriptions.items():
+                    markdown_to_process = markdown_to_process.replace(raw_match, replaced_tag)
+                markdown_to_process = re.sub(r"\n{3,}", "\n\n", markdown_to_process)
+
+                # Strip details block
+                markdown_to_process = re.sub(r"<details\b[^>]*>.*?</details>", "", markdown_to_process, flags=re.DOTALL)
+
+            # Recompute planned chunks after VLM <Bild> insertions and run Gemma streaming
+            planned_chunks = max(
+                1, len(build_standardisation_chunks(markdown_to_process, ""))
+            )
+            active_phase = "Wende Übertragungsregeln an (Gemma)..."
+            pct = log_progress(
+                budget.gemma_start_percent,
+                active_phase,
+                "[Info] Wende E-Buch Formatierungsregeln (Gemma) an...",
+                current=0,
+                total=planned_chunks,
+                unit="Abschnitte",
+            )
             yield '{"status": "log", "message": "Wende E-Buch Formatierungsregeln (Gemma) an..."}\n'
-            yield '{"status": "progress", "percent": 98, "phase": "Wende Übertragungsregeln an (Gemma)..."}\n'
-            
+            yield format_progress_line(
+                pct, active_phase, current=0, total=planned_chunks, unit="Abschnitte"
+            )
+
             token_queue = asyncio.Queue()
-            from backend.services.llm_service import StandardisationAborted
 
             def on_token_delta(delta: str):
                 if task.is_abort_requested:
@@ -1015,6 +1372,9 @@ def _standardise_events(task, request: StandardiseRequest):
                     raise StandardisationAborted("Standardisierung abgebrochen")
                 loop.call_soon_threadsafe(token_queue.put_nowait, ("progress", info))
 
+            neighbor_ctx = await asyncio.to_thread(
+                _load_or_sync_neighbor_context, request.task_id
+            )
             task.standardisation_backend = "gemma"
             exec_future = asyncio.create_task(
                 standardise_markdown_async(
@@ -1025,10 +1385,18 @@ def _standardise_events(task, request: StandardiseRequest):
                     on_token_delta,
                     on_progress=on_gemma_progress,
                     directory_info=getattr(task, "directory_info", None),
+                    neighbor_context=neighbor_ctx,
                 )
             )
             exec_future.add_done_callback(
                 lambda _fut: loop.call_soon_threadsafe(token_queue.put_nowait, ("done", None))
+            )
+
+            active_chunk_idx = 1
+            active_total_chunks = planned_chunks
+            chunk_streamed_chars = 0
+            expected_chunk_chars = max(
+                400, len(markdown_to_process) // max(1, planned_chunks)
             )
 
             # Stream tokens and section progress to the client as Gemma generates them (sentinel-driven, no busy polling)
@@ -1038,17 +1406,72 @@ def _standardise_events(task, request: StandardiseRequest):
                     break
                 if kind == "token":
                     yield f'{{"status": "token", "delta": {json.dumps(payload)}}}\n'
+                    chunk_streamed_chars += len(payload)
+                    raw_pct = compute_gemma_stream_percent(
+                        budget,
+                        active_chunk_idx,
+                        active_total_chunks,
+                        chunk_streamed_chars,
+                        expected_chunk_chars,
+                    )
+                    if raw_pct > last_emitted_percent:
+                        pct = log_progress(
+                            raw_pct,
+                            active_phase,
+                            current=active_chunk_idx,
+                            total=active_total_chunks,
+                            unit="Abschnitte",
+                        )
+                        yield format_progress_line(
+                            pct,
+                            active_phase,
+                            current=active_chunk_idx,
+                            total=active_total_chunks,
+                            unit="Abschnitte",
+                        )
                     continue
-                if payload.get("event") == "fallback":
+
+                if payload.get("total"):
+                    active_total_chunks = max(1, int(payload["total"]))
+                    expected_chunk_chars = max(
+                        400, len(markdown_to_process) // active_total_chunks
+                    )
+                event_type = payload.get("event")
+                if event_type == "fallback":
                     task.standardisation_backend = "rule_based_fallback"
                 message = payload.get("message") or ""
-                level = "[Warnung]" if payload.get("event") in ("retry", "fallback") else "[Gemma]"
+                level = "[Warnung]" if event_type in ("retry", "fallback") else "[Gemma]"
                 log_msg = f"{level} {message}"
-                phase = message if payload.get("event") == "start" else None
-                log_progress(98, phase or "Wende Übertragungsregeln an (Gemma)...", log_msg)
                 yield f'{{"status": "log", "message": {json.dumps(log_msg)}}}\n'
-                if phase:
-                    yield f'{{"status": "progress", "percent": 98, "phase": {json.dumps(phase)}}}\n'
+                if event_type == "start":
+                    active_chunk_idx = max(1, int(payload.get("index") or 1))
+                    chunk_streamed_chars = 0
+                    if message:
+                        active_phase = message
+                    raw_pct = compute_gemma_stream_percent(
+                        budget,
+                        active_chunk_idx,
+                        active_total_chunks,
+                        0,
+                        expected_chunk_chars,
+                    )
+                    pct = log_progress(
+                        raw_pct,
+                        active_phase,
+                        log_msg,
+                        current=active_chunk_idx,
+                        total=active_total_chunks,
+                        unit="Abschnitte",
+                    )
+                    yield format_progress_line(
+                        pct,
+                        active_phase,
+                        current=active_chunk_idx,
+                        total=active_total_chunks,
+                        unit="Abschnitte",
+                    )
+                else:
+                    task.logs.append(log_msg)
 
             standardised = await exec_future
             
@@ -1107,11 +1530,24 @@ def _standardise_events(task, request: StandardiseRequest):
             except Exception as ex:
                 logger.error(f"Failed to write standardised markdown to disk: {ex}")
 
-            # Generate/update DOCX if not present
+            # Generate/update DOCX using FIBS template + populated FIBS-Kopf metadata
+            docx_pct = log_progress(99, "Erstelle barrierefreies Word-Dokument...")
+            yield format_progress_line(
+                docx_pct, "Erstelle barrierefreies Word-Dokument..."
+            )
             docx_path = os.path.join(OUTPUT_DIR, request.task_id, f"{request.task_id}.docx")
             try:
                 from backend.services.docx_service import convert_markdown_to_docx
-                await asyncio.to_thread(convert_markdown_to_docx, standardised, docx_path)
+
+                auto_tpl = _resolve_task_docx_template_path(request.task_id, "auto")
+                doc_meta = _build_task_doc_metadata(task, standardised)
+                await asyncio.to_thread(
+                    convert_markdown_to_docx,
+                    standardised,
+                    docx_path,
+                    auto_tpl,
+                    doc_meta,
+                )
             except Exception as dex:
                 logger.warning(f"Auto docx conversion skipped: {dex}")
 
@@ -1121,7 +1557,8 @@ def _standardise_events(task, request: StandardiseRequest):
             # so re-standardising the same task reuses finished image descriptions without re-running VLM.
 
             success_msg = "[Success] Standardisierung erfolgreich abgeschlossen."
-            log_progress(100, "Standardisierung beendet.", success_msg)
+            done_std_pct = log_progress(100, "Standardisierung beendet.", success_msg)
+            yield format_progress_line(done_std_pct, "Standardisierung beendet.")
             yield f'{{"status": "log", "message": {json.dumps(success_msg)}}}\n'
             yield f'{{"status": "completed", "stage": "standardisation", "markdown": {json.dumps(standardised)}}}\n'
             
@@ -1154,6 +1591,14 @@ def _prepare_standardise(task, request: StandardiseRequest) -> None:
     task.finished_at = None
     if not task.started_at:
         task.started_at = time.time()
+    if task.standardised_markdown or (task.progress or {}).get("percent", 0) >= 100:
+        task.progress = {
+            "percent": 0,
+            "current": 0,
+            "total": 0,
+            "unit": "Abschnitte",
+            "phase": "Bereite Standardisierung vor...",
+        }
     task.ruleset = request.ruleset
     task.describe_images = bool(request.describe_images)
     task.job_kind = "standardisation"
@@ -1331,6 +1776,7 @@ async def resume_task(task_id: str):
     ruleset = task.ruleset or "uebertragungsregeln_09_2025"
     describe_images = task.describe_images
     task.reset_for_new_extraction()
+    task.describe_images = bool(describe_images)
     task.status = "processing"
     task.started_at = time.time()
     task.save_meta()
@@ -1346,7 +1792,7 @@ async def resume_task(task_id: str):
             method=task.method or "auto",
             lang=task.lang or "en",
             backend="vlm-engine",
-            engine=task.engine or "infinity",
+            engine=task.engine or "lightonocr",
         )
         if task.status == "completed" and not task.is_abort_requested and task.raw_markdown:
             req = StandardiseRequest(task_id=task_id, markdown=task.raw_markdown,
@@ -1633,6 +2079,7 @@ async def _resolve_lint_context(request: LintRequest):
     raw_markdown = request.raw_markdown
     expected_pages = request.expected_pages
     table_max_cells = request.table_max_cells
+    custom_rules: str | None = None
     if request.task_id:
         task = await task_manager.get(request.task_id)
         if task:
@@ -1640,13 +2087,19 @@ async def _resolve_lint_context(request: LintRequest):
                 raw_markdown = task.raw_markdown
             if expected_pages is None and task.page_count:
                 expected_pages = task.page_count
+            resolved_rules, _ = task.resolve_custom_ruleset(
+                output_dir=OUTPUT_DIR,
+                sibling_tasks=list(task_manager._tasks.values()),
+            )
+            if resolved_rules:
+                custom_rules = resolved_rules
     if table_max_cells is None:
         try:
             from backend.services.settings_service import get_setting
             table_max_cells = int(get_setting("table_resolve_max_cells"))
         except Exception:
             table_max_cells = 0
-    return raw_markdown, expected_pages, table_max_cells
+    return raw_markdown, expected_pages, table_max_cells, custom_rules
 
 
 @app.post("/api/lint")
@@ -1655,13 +2108,14 @@ async def lint_document(request: LintRequest):
     Returns compliance score, pass/fail status, and structured issue list.
     """
     try:
-        raw_md, exp_pages, max_cells = await _resolve_lint_context(request)
+        raw_md, exp_pages, max_cells, custom_rules = await _resolve_lint_context(request)
         report = await asyncio.to_thread(
             lint_markdown,
             request.markdown,
             raw_markdown=raw_md,
             expected_pages=exp_pages,
             table_max_cells=max_cells,
+            custom_rules=custom_rules,
         )
         return report
     except Exception as e:
@@ -1675,7 +2129,7 @@ async def autofix_document(request: LintRequest):
     Returns fixed markdown, applied fixes list, and updated lint report.
     """
     try:
-        raw_md, exp_pages, max_cells = await _resolve_lint_context(request)
+        raw_md, exp_pages, max_cells, custom_rules = await _resolve_lint_context(request)
         fixed_markdown, applied_fixes = await asyncio.to_thread(
             autofix_markdown, request.markdown
         )
@@ -1685,6 +2139,7 @@ async def autofix_document(request: LintRequest):
             raw_markdown=raw_md,
             expected_pages=exp_pages,
             table_max_cells=max_cells,
+            custom_rules=custom_rules,
         )
         return {
             "fixed_markdown": fixed_markdown,
@@ -1707,29 +2162,17 @@ async def export_document(request: ExportRequest):
 
     try:
         output_docx = os.path.join(OUTPUT_DIR, request.task_id, "ebuch_output.docx")
-        template_docx = os.path.join(OUTPUT_DIR, request.task_id, "template.docx")
-        template_dotx = os.path.join(OUTPUT_DIR, request.task_id, "template.dotx")
-
-        template_mode = request.template_mode or "default"
-        template_path = None
-
-        if template_mode == "custom":
-            if os.path.exists(template_docx):
-                template_path = template_docx
-            elif os.path.exists(template_dotx):
-                template_path = template_dotx
-        elif template_mode == "default":
-            default_tpl = os.path.join(
-                BASE_DIR,
-                "assets",
-                "templates",
-                "Dokumentenvorlage FIBS 25.05.2025_NEU.dotx",
-            )
-            if os.path.exists(default_tpl):
-                template_path = default_tpl
+        template_path = _resolve_task_docx_template_path(
+            request.task_id, request.template_mode or "default"
+        )
+        doc_meta = _build_task_doc_metadata(task, request.markdown)
 
         await asyncio.to_thread(
-            convert_markdown_to_docx, request.markdown, output_docx, template_path
+            convert_markdown_to_docx,
+            request.markdown,
+            output_docx,
+            template_path,
+            doc_meta,
         )
 
         task.output_path = output_docx
@@ -1777,7 +2220,7 @@ async def custom_benchmark_evaluate(
     custom_rules_text: str | None = Form(None),
     pages: str | None = Form(None),
     ruleset: str = Form("uebertragungsregeln_09_2025"),
-    engines: str = Form("infinity,docling"),
+    engines: str = Form("lightonocr,docling"),
 ):
     """Evaluates selected extraction engines against a manual ground truth file.
 
@@ -1846,12 +2289,12 @@ async def custom_benchmark_evaluate(
     gt_path = os.path.join(task_dir, ground_truth_file.filename)
 
     if src_task is not None and has_existing_transfer:
-        existing_engine = (src_task.engine or "infinity").strip().lower()
+        existing_engine = (src_task.engine or "lightonocr").strip().lower()
         selected_engines = [existing_engine]
     else:
         selected_engines = [e.strip() for e in engines.split(",") if e.strip()]
         if not selected_engines:
-            selected_engines = ["infinity", "docling"]
+            selected_engines = ["lightonocr", "docling"]
 
     from backend.services.benchmark_task_manager import benchmark_task_manager
     benchmark_task = benchmark_task_manager.create_task(
@@ -1916,6 +2359,12 @@ async def custom_benchmark_evaluate(
                     source_labels or None,
                     True,
                 )
+                if os.path.exists(f"{source_path}.neighbors.json"):
+                    await asyncio.to_thread(
+                        shutil.copyfile,
+                        f"{source_path}.neighbors.json",
+                        os.path.join(task_dir, "neighbor_context.json"),
+                    )
                 cropped_count = (
                     await asyncio.to_thread(get_pdf_page_count, source_path) if os.path.exists(source_path) else 0
                 )
@@ -2022,7 +2471,7 @@ async def custom_benchmark_evaluate(
 
         existing_transfer: dict | None = None
         if src_task is not None and has_existing_transfer:
-            existing_engine = (src_task.engine or "infinity").strip().lower()
+            existing_engine = (src_task.engine or "lightonocr").strip().lower()
             existing_transfer = {
                 "source_task_id": src_task.task_id,
                 "original_name": src_task.original_name or source_filename,
@@ -2533,7 +2982,11 @@ async def analyze_feedback(
         try:
             yield ev(status="progress", percent=5, phase="Vergleiche Übertragungen…")
             change_summary = fs.compute_change_summary(original_md, revised_md)
-            lint_cmp = fs.compare_lint_reports(original_md, revised_md)
+            lint_cmp = fs.compare_lint_reports(
+                original_md,
+                revised_md,
+                custom_rules=custom_ruleset_content or None,
+            )
             yield ev(status="log", message=f"{change_summary['hunk_count']} Änderungsblöcke erkannt "
                                            f"(Ähnlichkeit {change_summary['similarity']:.1%}).")
             from backend.services.prompts import build_analysis_prompt

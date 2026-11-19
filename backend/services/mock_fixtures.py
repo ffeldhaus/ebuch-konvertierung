@@ -111,11 +111,20 @@ async def run_e2e_mock_extraction(task: dict[str, Any], input_path: str, output_
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(mock_blocks, f)
 
+    from backend.services.progress_service import compute_extraction_budget
+
+    budget = compute_extraction_budget(
+        task.get("engine") or "docling",
+        1,
+        1 if "<Bild>" in mock_md else 0,
+        describe_images=bool(task.get("describe_images", True)),
+    )
+    cap = budget.extraction_end_percent
     phases = [
-        (20, "Layout-Analyse"),
-        (50, "Dokumenten-Texterkennung"),
-        (80, "Extraktion & Formatierung"),
-        (100, "Extraktion abgeschlossen"),
+        (max(1, int(round(cap * 0.25))), "Layout-Analyse"),
+        (max(1, int(round(cap * 0.55))), "Dokumenten-Texterkennung"),
+        (max(1, int(round(cap * 0.85))), "Extraktion & Formatierung"),
+        (cap, "Extraktion abgeschlossen"),
     ]
 
     for percent, phase in phases:
@@ -123,13 +132,17 @@ async def run_e2e_mock_extraction(task: dict[str, Any], input_path: str, output_
             "percent": percent,
             "current": 1,
             "total": 1,
+            "unit": "Seiten",
             "phase": phase,
         }
         log_msg = f"[Mock] {phase} progress: {percent}%"
         task["logs"].append(log_msg)
 
-        progress_event = f'{{"status": "progress", "percent": {percent}, "current": 1, "total": 1, "phase": "{phase}"}}\n'
-        log_event = f'{{"status": "log", "message": "{log_msg}"}}\n'
+        progress_event = (
+            f'{{"status": "progress", "percent": {percent}, '
+            f'"current": 1, "total": 1, "unit": "Seiten", "phase": {json.dumps(phase)}}}\n'
+        )
+        log_event = f'{{"status": "log", "message": {json.dumps(log_msg)}}}\n'
 
         for queue in list(task["listeners"]):
             try:
@@ -144,9 +157,17 @@ async def run_e2e_mock_extraction(task: dict[str, Any], input_path: str, output_
     task["image_dir"] = os.path.join(auto_dir, "images")
     task["images"] = []
 
+    completed_event = json.dumps(
+        {
+            "status": "completed",
+            "markdown": mock_md,
+            "image_count": 0,
+            "progress_percent": cap,
+        }
+    )
     for queue in list(task["listeners"]):
         try:
-            await queue.put(f'{{"status": "completed", "markdown": {json.dumps(mock_md)}, "image_count": 0}}\n')
+            await queue.put(f"{completed_event}\n")
             await queue.put(None)
         except Exception:
             pass

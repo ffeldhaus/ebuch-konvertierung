@@ -102,7 +102,7 @@ def publish(task, event, *, record_log: bool = True) -> None:
             task.logs.append(msg)
     elif status == "progress":
         progress = dict(task.progress or {})
-        for key in ("percent", "phase", "current", "total"):
+        for key in ("percent", "phase", "current", "total", "unit"):
             if key in data:
                 progress[key] = data[key]
         task.progress = progress
@@ -131,8 +131,13 @@ def terminal_event(task) -> dict:
     if status == "completed":
         if task.standardised_markdown:
             return {"status": "completed", "stage": "standardisation", "markdown": task.standardised_markdown}
-        return {"status": "completed", "stage": "extraction", "markdown": task.raw_markdown or "",
-                "image_count": len(task.images or [])}
+        return {
+            "status": "completed",
+            "stage": "extraction",
+            "markdown": task.raw_markdown or "",
+            "image_count": len(task.images or []),
+            "progress_percent": (task.progress or {}).get("percent", 0),
+        }
     if status == "failed":
         return {"status": "error", "message": task.logs[-1] if task.logs else "Verarbeitung fehlgeschlagen."}
     if status == "aborted":
@@ -160,6 +165,7 @@ def attach_listener(task, replay: bool = True) -> asyncio.Queue:
             "phase": progress.get("phase", ""),
             "current": progress.get("current", 0),
             "total": progress.get("total", 0),
+            "unit": progress.get("unit", ""),
             "stage": task.job_kind,
         }))
         if task.stream_text:

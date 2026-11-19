@@ -1,11 +1,22 @@
+"""Generates synthetic mock DOCX, PDF, and image fixtures for local E2E testing."""
+
 import os
-import sys
-from PIL import Image, ImageDraw, ImageFont
+
 from docx import Document
-from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Inches, Pt
+from PIL import Image, ImageDraw
+from reportlab.graphics.shapes import Drawing, Line
+from reportlab.graphics.shapes import String as RLString
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Image as RLImage
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 # Initialize directories
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,11 +41,11 @@ draw = ImageDraw.Draw(img)
 draw.polygon([(300, 100), (200, 300), (400, 300)], fill=(220, 220, 220), outline=(100, 100, 100), width=2)
 draw.line([(50, 220), (250, 220)], fill=(255, 255, 255), width=4)
 draw.text((80, 190), "Weisses Licht", fill=(0, 0, 0))
-colors = [
+rainbow_colors = [
     (255, 0, 0), (255, 127, 0), (255, 255, 0),
     (0, 255, 0), (0, 0, 255), (75, 0, 130), (148, 0, 211)
 ]
-for i, color in enumerate(colors):
+for i, color in enumerate(rainbow_colors):
     y_offset = i * 6
     draw.line([(350, 250), (550, 180 + y_offset)], fill=color, width=3)
 draw.text((450, 150), "Spektrum", fill=(0, 0, 0))
@@ -227,10 +238,9 @@ p_math3.add_run(" · sin(β)")
 
 p_math4 = doc.add_paragraph("Hier ist eine komplexe Blockgleichung:")
 
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
 
 def set_cell_top_border(cell, color="4A5568", sz="6", val="single"):
+    """Sets the top border XML attributes on a python-docx table cell."""
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcBorders = OxmlElement('w:tcBorders')
@@ -243,6 +253,7 @@ def set_cell_top_border(cell, color="4A5568", sz="6", val="single"):
     tcPr.append(tcBorders)
 
 def set_cell_margins(cell, top=100, bottom=100, left=0, right=0):
+    """Sets dxa cell padding margins on a python-docx table cell."""
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcMar = OxmlElement('w:tcMar')
@@ -436,18 +447,11 @@ print("DOCX generated successfully.")
 pdf_path = os.path.join(test_data_dir, "test_educational.pdf")
 print(f"Generating mock PDF: {pdf_path}...")
 
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, PageBreak, Flowable
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-
 pdf = SimpleDocTemplate(pdf_path, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=54, bottomMargin=54)
 story = []
 styles = getSampleStyleSheet()
 
 # Register Unicode-capable fonts for ReportLab (supports ○, ◐, ●, ∫, ∞, √, π, α, β, λ on both macOS and Linux)
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 
 PDF_FONT_REGULAR = "Helvetica"
 PDF_FONT_BOLD = "Helvetica-Bold"
@@ -530,6 +534,7 @@ right_style = ParagraphStyle(
     textColor=colors.HexColor("#4A5568")
 )
 def add_footer(canvas, doc):
+    """Draws physical page footer labels on each mock PDF page."""
     canvas.saveState()
     canvas.setFont(PDF_FONT_REGULAR, 10)
     canvas.setFillColor(colors.HexColor("#4A5568"))
@@ -651,8 +656,6 @@ story.append(Paragraph("n<sub>1</sub> · sin(α) = n<sub>2</sub> · sin(β)", bo
 story.append(Paragraph("Hier ist eine komplexe Blockgleichung:", body_style))
 
 # Render integral equation with both Unicode text stream (∫, -∞, ∞, √, π) and visual overbar
-from reportlab.graphics.shapes import Drawing, Line, String as RLString
-
 d_eq = Drawing(300, 40)
 d_eq.add(RLString(16, 28, "∞", fontName=PDF_FONT_REGULAR, fontSize=8, textAnchor="middle"))
 d_eq.add(RLString(16, 8, "∫", fontName=PDF_FONT_REGULAR, fontSize=22, textAnchor="middle"))

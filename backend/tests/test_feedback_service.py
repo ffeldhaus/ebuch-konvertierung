@@ -200,7 +200,8 @@ def test_pipeline_context_matches_system_prompt_conventions():
     ctx = PIPELINE_CONTEXT
     assert "Formeln in <L>" not in ctx
     assert "niemals <L>" in ctx
-    assert "$…$" in ctx  # LaTeX delimiters
+    assert "OHNE $-Begrenzer" in ctx
+    assert "~a" in ctx and "\\xra{Text}" in ctx
     assert "_…_" in ctx
     assert "Fett *…*" not in ctx  # * / % are only for necessary differentiation
     assert "Beschreibung mit Bildtext:" in ctx

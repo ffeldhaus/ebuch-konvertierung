@@ -23,7 +23,9 @@ from backend.services.fibs_constants import (
     DEFAULT_IMAGE_TYPE,
     FIBS_HEADING_SIZES_PT,
     GEMMA_REQUEST_TOKEN_BUDGET,
+    LATEX_GREEK_TO_FIBS,
     MAX_PAGES_PER_CHUNK,
+    UNICODE_GREEK_TO_FIBS,
     VALID_CHEMICAL_ELEMENTS,
 )
 from backend.services.fibs_postprocess import (
@@ -167,7 +169,7 @@ def test_pydantic_models_validation_and_attribute_docstrings() -> None:
 def test_fibs_constants_and_postprocess_exports() -> None:
     """Verify extracted constants and post-processing functions behave identically."""
     assert DEFAULT_IMAGE_TYPE == "Abbildung"
-    assert GEMMA_REQUEST_TOKEN_BUDGET == 11_000
+    assert GEMMA_REQUEST_TOKEN_BUDGET == 16_000
     assert MAX_PAGES_PER_CHUNK == 2
     assert len(VALID_CHEMICAL_ELEMENTS) == 118
     assert {"Fe", "Og", "La", "U"}.issubset(VALID_CHEMICAL_ELEMENTS)
@@ -181,9 +183,17 @@ def test_fibs_constants_and_postprocess_exports() -> None:
     hier = infer_heading_hierarchy("# 1 Kapitel\n#### 1.1 Unterkapitel")
     assert "## 1.1 Unterkapitel" in hier
 
-    processed = post_process_structure("((1))\n\n**Wichtig** und ____")
+    processed = post_process_structure("((1))\n\n**Wichtig** und ____ sowie $\\alpha = 30^\\circ$ bei 50%")
     assert "_Wichtig_" in processed
     assert "_..._" in processed
+    assert "~a = 30°" in processed
+    assert "50 %" in processed
+    assert "$" not in processed
+    assert UNICODE_GREEK_TO_FIBS["α"] == "~a"
+    assert UNICODE_GREEK_TO_FIBS["µ"] == "~m"
+    assert UNICODE_GREEK_TO_FIBS["Δ"] == "~D"
+    assert LATEX_GREEK_TO_FIBS[r"\lambda"] == "~l"
+    assert LATEX_GREEK_TO_FIBS[r"\Omega"] == "~W"
 
 
 def test_post_process_structure_custom_rules_difficulty_overrides() -> None:

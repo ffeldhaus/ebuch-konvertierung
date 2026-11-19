@@ -100,7 +100,7 @@ SUP_TO_DIGIT: Final[dict[str, str]] = {
 }
 
 PROTECTED_ALL_CAPS_RE: Final[re.Pattern[str]] = re.compile(
-    r"\$\$.*?\$\$|\$[^$\n]+\$|<Bild>.*?</Bild>|<Rahmen>\s*\n_[^\n]+_|`[^`\n]*`|https?://\S+|\[[^\]\n]*\]",
+    r"\$\$.*?\$\$|\$[^$\n]+\$|<Bild>.*?</Bild>|<Rahmen>\s*\n_[^\n]+_|`[^`\n]*`|https?://\S+|\[[^\]\n]*\]|\\[a-zA-Z]+(?:\{(?:[^{}\n]|\{[^{}\n]*\})*\})*",
     re.DOTALL,
 )
 CAPS_TOKEN_PATTERN: Final[str] = r"[A-ZÄÖÜ]{2,}(?:-[A-ZÄÖÜ]{2,})*"
@@ -111,6 +111,59 @@ FOUR_CAPS_RE: Final[re.Pattern[str]] = re.compile(r"[A-ZÄÖÜ]{4,}")
 WORD_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-zÄÖÜäöüß]+")
 LINE_DECORATION_RE: Final[re.Pattern[str]] = re.compile(r"[\s_*>\-\t]")
 SENTENCE_END_PREFIX_RE: Final[re.Pattern[str]] = re.compile(r"[.!?:]\s*$")
+
+PROTECTED_ACRONYMS: Final[frozenset[str]] = frozenset({
+    "ADAC", "ADHS", "ADP", "AFB", "AIDS", "AMP", "ANSI", "ASCII", "ASEAN", "ASIC", "ATP",
+    "BIOS", "BIP", "BNE", "BRD", "CAMP", "CERN", "CGMP", "CHOH", "CMOS", "CMYK", "CONH",
+    "COOC", "COOH", "COVID", "CPU", "CRISPR", "DAX", "DDR", "DIN", "DIV", "DLR", "DNA",
+    "DOI", "DRAM", "DSGVO", "EDTA", "EEG", "EEPROM", "EFTA", "EKG", "ELISA", "EMG", "EPROM",
+    "EPSP", "ESA", "EWU", "FAD", "FADH", "FIBS", "FIFO", "FPGA", "GABA", "GATT", "GDP",
+    "GDPR", "GHS", "GPU", "GTP", "HDMI", "HEPES", "HTML", "HTTP", "HTTPS", "IBAN", "IEEE",
+    "IPCC", "IPSP", "ISBN", "ISO", "ISSN", "IUPAC", "JAWS", "JPEG", "JSON", "LAN", "LASER",
+    "LIDAR", "LIFO", "LKW", "MAK", "MASER", "MAX", "MDAX", "MERS", "MIDI", "MIN", "MMS",
+    "MOD", "MPEG", "MRNA", "MRSA", "MRT", "NAD", "NADH", "NADP", "NADPH", "NAFTA", "NAND",
+    "NASA", "NATO", "NIAID", "NOR", "NPU", "NVDA", "NVME", "OECD", "OPEC", "OSZE", "PAGE",
+    "PCR", "PIN", "PKW", "PNS", "RADAR", "RAID", "RAM", "RGBA", "RKI", "RNA", "ROM",
+    "RRNA", "RUBISCO", "SARS", "SATA", "SCUBA", "SDS", "SEPA", "SIRNA", "SONAR", "SPNV",
+    "SRAM", "STIKO", "STP", "SWIFT", "TAN", "TIFF", "TOML", "TRGS", "TRIPS", "TRIS", "TRNA",
+    "TÜV", "UDSSR", "UEFI", "UNHCR", "UNESCO", "UNICEF", "UNO", "URL", "USA", "USB",
+    "USMCA", "UTF", "VDE", "VLAN", "VNS", "WAN", "WEBP", "WHO", "WLAN", "XETRA", "XML",
+    "XNOR", "XOR", "YAML", "ZDF", "ZNS", "ÖPNV",
+})
+
+VERSALIEN_CONNECTORS: Final[frozenset[str]] = frozenset({
+    "und", "oder", "der", "die", "das", "des", "dem", "den", "ein", "eine", "einer",
+    "einem", "einen", "im", "in", "am", "an", "auf", "aus", "bei", "mit", "von", "vom",
+    "zum", "zur", "zu", "für", "über", "unter", "vor", "nach", "van", "de", "la",
+    "of", "the", "and", "for", "to",
+})
+
+NON_NAME_CAPITALIZED_WORDS: Final[frozenset[str]] = frozenset({
+    "der", "die", "das", "des", "dem", "den", "ein", "eine", "einer", "einem", "einen",
+    "eines", "kein", "keine", "dieser", "diese", "dieses", "jeder", "jede", "jedes",
+    "alle", "viele", "einige", "mehrere", "beide", "manche", "solche", "welche",
+    "im", "in", "am", "an", "auf", "aus", "bei", "mit", "nach", "seit", "von", "vom",
+    "vor", "zu", "zum", "zur", "für", "über", "unter", "durch", "gegen", "ohne", "um",
+    "zwischen", "während", "wegen", "trotz", "als", "wie", "wenn", "weil", "dass", "ob",
+    "oder", "und", "aber", "doch", "denn", "sondern", "auch", "nur", "noch", "schon",
+    "erst", "sehr", "hier", "dort", "heute", "immer", "nicht", "norm", "typ", "teil",
+    "abbildung", "tabelle", "kapitel", "abschnitt", "aufgabe", "übung", "beispiel",
+    "the", "this", "that", "these", "those", "from", "with", "into", "when", "where",
+    "while", "each", "every", "many", "most", "some",
+})
+
+PERSON_ROLE_PREFIXES: Final[frozenset[str]] = frozenset({
+    "herr", "frau", "dr", "prof", "professor", "professorin", "sir", "lord", "lady",
+    "graf", "fürst", "herzog", "könig", "königin", "kaiser", "kaiserin", "papst",
+    "philosoph", "physiker", "chemiker", "biologe", "mathematiker", "forscher",
+    "forscherin", "arzt", "ärztin", "autor", "autorin", "dichter", "entdecker",
+    "general", "präsident", "kanzler", "minister", "seefahrer", "astronom",
+})
+
+PERSON_PREFIX_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:(?:Dr|Prof|Dipl|Ing|Med)\.\s+|[A-ZÄÖÜ]\.\s+|"
+    r"([A-ZÄÖÜ][a-zäöüß]{1,20})(?:\s+[A-ZÄÖÜ]\.)?(?:\s+(?:von|van|de|del|della|da|di|du|la|le|zu))?\s+)$"
+)
 
 # German conjunctions and prepositions that follow a suspended hyphen (Ergänzungsstrich)
 SUSPENDED_HYPHEN_FOLLOWERS: Final[frozenset[str]] = frozenset({
@@ -171,7 +224,7 @@ DIFFICULTY_SYMBOL_MAP: Final[dict[str, str]] = {
 # LLM Token Budget & Page-Chunking Constants
 # ---------------------------------------------------------------------------
 
-GEMMA_REQUEST_TOKEN_BUDGET: Final[int] = int(os.environ.get("GEMMA_REQUEST_TOKEN_BUDGET", "11000"))
+GEMMA_REQUEST_TOKEN_BUDGET: Final[int] = int(os.environ.get("GEMMA_REQUEST_TOKEN_BUDGET", "16000"))
 GEMMA_MAX_OUTPUT_TOKENS: Final[int] = 8192
 CHARS_PER_TOKEN: Final[float] = 3.0
 OUTPUT_TOKEN_FACTOR: Final[float] = 1.3
@@ -216,6 +269,130 @@ UNICODE_GREEK_TO_LATEX: Final[dict[str, str]] = {
     "𝜔": r"\omega", "ω": r"\omega",
     "𝛺": r"\Omega", "Ω": r"\Omega",
 }
+
+UNICODE_GREEK_TO_FIBS: Final[dict[str, str]] = {
+    "𝛼": "~a", "α": "~a",
+    "𝛽": "~b", "β": "~b",
+    "𝛾": "~g", "γ": "~g", "Γ": "~G",
+    "𝛿": "~d", "δ": "~d",
+    "𝛥": "~D", "Δ": "~D", "∆": "~D",
+    "𝜀": "~e", "𝜖": "~e", "ε": "~e", "ϵ": "~e",
+    "ζ": "~z",
+    "η": "~h",
+    "𝜃": "~q", "θ": "~q", "ϑ": "~q", "Θ": "~Q",
+    "ι": "~i",
+    "κ": "~k",
+    "𝜆": "~l", "λ": "~l", "Λ": "~L",
+    "𝜇": "~m", "μ": "~m", "µ": "~m",
+    "ν": "~n",
+    "ξ": "~x", "Ξ": "~X",
+    "𝜋": "~p", "π": "~p", "Π": "~P",
+    "𝜌": "~r", "ρ": "~r",
+    "𝜎": "~s", "σ": "~s", "ς": "~s", "Σ": "~S",
+    "𝜏": "~t", "τ": "~t",
+    "υ": "~u", "Υ": "~U",
+    "𝜑": "~f", "𝜙": "~f", "φ": "~f", "ϕ": "~f", "Φ": "~F",
+    "χ": "~c",
+    "ψ": "~y", "Ψ": "~Y",
+    "𝜔": "~w", "ω": "~w",
+    "𝛺": "~W", "Ω": "~W", "Ω": "~W",
+}
+
+LATEX_GREEK_TO_FIBS: Final[dict[str, str]] = {
+    r"\alpha": "~a",
+    r"\beta": "~b",
+    r"\gamma": "~g",
+    r"\Gamma": "~G",
+    r"\delta": "~d",
+    r"\Delta": "~D",
+    r"\epsilon": "~e",
+    r"\varepsilon": "~e",
+    r"\zeta": "~z",
+    r"\eta": "~h",
+    r"\theta": "~q",
+    r"\vartheta": "~q",
+    r"\Theta": "~Q",
+    r"\iota": "~i",
+    r"\kappa": "~k",
+    r"\lambda": "~l",
+    r"\Lambda": "~L",
+    r"\mu": "~m",
+    r"\nu": "~n",
+    r"\xi": "~x",
+    r"\Xi": "~X",
+    r"\pi": "~p",
+    r"\Pi": "~P",
+    r"\rho": "~r",
+    r"\varrho": "~r",
+    r"\sigma": "~s",
+    r"\varsigma": "~s",
+    r"\Sigma": "~S",
+    r"\tau": "~t",
+    r"\upsilon": "~u",
+    r"\Upsilon": "~U",
+    r"\phi": "~f",
+    r"\varphi": "~f",
+    r"\Phi": "~F",
+    r"\chi": "~c",
+    r"\psi": "~y",
+    r"\Psi": "~Y",
+    r"\omega": "~w",
+    r"\Omega": "~W",
+}
+
+TILDE_GREEK_WORD_TO_FIBS: Final[dict[str, str]] = {
+    "alpha": "~a",
+    "beta": "~b",
+    "gamma": "~g",
+    "Gamma": "~G",
+    "delta": "~d",
+    "Delta": "~D",
+    "epsilon": "~e",
+    "zeta": "~z",
+    "eta": "~h",
+    "theta": "~q",
+    "Theta": "~Q",
+    "iota": "~i",
+    "kappa": "~k",
+    "lambda": "~l",
+    "Lambda": "~L",
+    "mu": "~m",
+    "my": "~m",
+    "nu": "~n",
+    "xi": "~x",
+    "Xi": "~X",
+    "pi": "~p",
+    "Pi": "~P",
+    "rho": "~r",
+    "sigma": "~s",
+    "Sigma": "~S",
+    "tau": "~t",
+    "upsilon": "~u",
+    "Upsilon": "~U",
+    "phi": "~f",
+    "Phi": "~F",
+    "chi": "~c",
+    "psi": "~y",
+    "Psi": "~Y",
+    "omega": "~w",
+    "Omega": "~W",
+}
+
+TILDE_GREEK_WORD_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<![A-Za-z0-9\\])~("
+    + "|".join(sorted(TILDE_GREEK_WORD_TO_FIBS, key=len, reverse=True))
+    + r")(?![a-zA-Z])"
+)
+
+DIDACTIC_BOX_HEADER_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[ \t]*[*_#]*[ \t]*(?:Steckbrief|Kurzbiografie|Biografie|Merksatz|Merke|Infobox|"
+    r"Exkurs|Methode|Hintergrund|Praxis|Wichtig|Tipp|Hinweis|Definition)[ \t]*:?[ \t]*[*_]*$",
+    re.IGNORECASE,
+)
+
+UNIT_PERCENT_PROTECTED_RE: Final[re.Pattern[str]] = re.compile(
+    r"```[\s\S]*?```|`[^`\n]*`|https?://\S+"
+)
 
 SI_UNIT_PATTERN: Final[str] = (
     r"(?:km/s|m/s(?:\^2|²)?|cm/s|m/s|Hz|kHz|MHz|GHz|eV|keV|MeV|J\s*[·⋅\*]\s*s|mol/L|L/mol)"
@@ -404,4 +581,33 @@ EUROBRAILLE_CHAR_FALLBACK_MAP: Final[dict[str, str]] = {
     "€": "EUR",
     "‰": "Promille",
 }
+
+# ---------------------------------------------------------------------------
+# Workload-Aware Pipeline Progress Constants
+# ---------------------------------------------------------------------------
+
+PROGRESS_EXTRACTION_INIT_SECONDS: Final[dict[str, float]] = {
+    "docling": 4.0,
+    "lightonocr": 6.0,
+    "lightonocr3": 6.0,
+    "infinity": 12.0,
+    "non_pdf": 0.5,
+}
+PROGRESS_EXTRACTION_SECONDS_PER_PAGE: Final[dict[str, float]] = {
+    "docling": 1.2,
+    "lightonocr": 14.0,
+    "lightonocr3": 14.0,
+    "infinity": 75.0,
+    "non_pdf": 0.2,
+}
+PROGRESS_VLM_INIT_SECONDS: Final[float] = 13.0
+PROGRESS_VLM_SECONDS_PER_IMAGE: Final[float] = 55.0
+PROGRESS_VLM_CACHED_SECONDS_PER_IMAGE: Final[float] = 0.2
+PROGRESS_GEMMA_INIT_SECONDS: Final[float] = 10.0
+PROGRESS_GEMMA_SECONDS_PER_CHUNK: Final[float] = 75.0
+PROGRESS_GEMMA_ESTIMATED_PAGES_PER_CHUNK: Final[float] = 1.8
+PROGRESS_MIN_EXTRACTION_PERCENT: Final[int] = 5
+PROGRESS_MAX_EXTRACTION_PERCENT: Final[int] = 70
+PROGRESS_FINALIZE_PERCENT: Final[int] = 99
+
 

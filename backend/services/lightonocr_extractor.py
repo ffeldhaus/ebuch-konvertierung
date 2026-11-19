@@ -226,6 +226,7 @@ def post_process_lightonocr_page(
     page_idx: int = 0,
     pdf_page: Any = None,
     grounding_meta_out: list[dict[str, Any]] | None = None,
+    docling_layout: Any = None,
 ) -> str:
     """Clean raw OCR markdown from LightOnOCR-3 and fuse with Docling layout.
 
@@ -240,10 +241,12 @@ def post_process_lightonocr_page(
         page_idx: 0-based page index.
         pdf_page: Optional open ``pypdfium2.PdfPage`` for vector figure cropping.
         grounding_meta_out: Optional list populated with grounding block metadata.
+        docling_layout: Optional Docling layout metadata dictionary for text/font fusion.
 
     Returns:
         Fused and post-processed page Markdown string.
     """
+    local_meta = grounding_meta_out if grounding_meta_out is not None else []
     text, bbox_cropped = parse_grounding_blocks(
         raw_text,
         page_pil_img=page_pil_img,
@@ -251,15 +254,25 @@ def post_process_lightonocr_page(
         page_idx=page_idx,
         has_existing_images=bool(page_images),
         pdf_page=pdf_page,
-        grounding_meta_out=grounding_meta_out,
+        grounding_meta_out=local_meta,
     )
     all_page_images = list(page_images) if page_images else list(bbox_cropped)
+    effective_docling = docling_layout
+    if isinstance(docling_layout, dict) and local_meta:
+        img_meta = [b for b in local_meta if b.get("type") == "image" and b.get("bbox_1000")]
+        if img_meta:
+            effective_docling = {
+                **docling_layout,
+                "layout_blocks": [*(docling_layout.get("layout_blocks") or []), *img_meta],
+            }
     return fuse_vlm_page_with_docling(
         text,
         page_images=all_page_images,
         phys_num=phys_num,
         page_tables=page_tables,
         opening_headers=opening_headers,
+        docling_layout=effective_docling,
+        page_idx=page_idx if effective_docling is not None else None,
     )
 
 
@@ -372,11 +385,13 @@ def main(cli_args: list[str] | None = None):
 
     all_markdown: list[str] = []
     blocks: list[dict[str, Any]] = []
-    # Seed blocks with Docling heading bbox metadata, layout blocks, and furniture metadata for downstream post-processing
-    blocks.extend(layout_info.get("heading_blocks", []))
-    blocks.extend(layout_info.get("layout_blocks", []))
-    for p_furn in layout_info.get("furniture_by_page", {}).values():
-        blocks.extend(p_furn)
+    heading_blocks_by_page: dict[int, list[dict[str, Any]]] = {}
+    for b in layout_info.get("heading_blocks", []):
+        heading_blocks_by_page.setdefault(int(b.get("page_idx", 0)), []).append(b)
+    layout_blocks_by_page: dict[int, list[dict[str, Any]]] = {}
+    for b in layout_info.get("layout_blocks", []):
+        layout_blocks_by_page.setdefault(int(b.get("page_idx", 0)), []).append(b)
+    furn_by_page = layout_info.get("furniture_by_page", {})
 
     physical_page_numbers: list[int | str] = []
     if is_pdf:
@@ -499,8 +514,8 @@ def main(cli_args: list[str] | None = None):
             page_idx=p_idx,
             pdf_page=raw_pdf_page,
             grounding_meta_out=grounding_meta,
+            docling_layout=layout_info,
         )
-        blocks.extend(grounding_meta)
         all_markdown.append(cleaned_text)
 
         try:
@@ -534,6 +549,19 @@ def main(cli_args: list[str] | None = None):
                 "page_idx": p_idx,
                 "page_no": phys_num,
             })
+
+        blocks.extend(grounding_meta)
+        blocks.extend(heading_blocks_by_page.get(p_idx, []))
+        blocks.extend(layout_blocks_by_page.get(p_idx, []))
+        blocks.extend(furn_by_page.get(p_idx, []))
+
+    extra_pages = sorted(
+        {pk for pk in (*heading_blocks_by_page, *layout_blocks_by_page, *furn_by_page) if not (0 <= pk < total_pages)}
+    )
+    for pk in extra_pages:
+        blocks.extend(heading_blocks_by_page.get(pk, []))
+        blocks.extend(layout_blocks_by_page.get(pk, []))
+        blocks.extend(furn_by_page.get(pk, []))
 
     if pdf is not None:
         try:

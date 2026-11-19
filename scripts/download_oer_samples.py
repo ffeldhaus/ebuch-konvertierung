@@ -7,6 +7,7 @@ Then removes the large temporary file to maintain repository lightness.
 
 import os
 import urllib.request
+
 from pypdf import PdfReader, PdfWriter
 
 TARGETS = [
@@ -34,6 +35,7 @@ TARGETS = [
 ]
 
 def main():
+    """Downloads open-licensed OER sample textbook pages into testdata."""
     for target in TARGETS:
         out_path = target["output"]
         if os.path.exists(out_path):

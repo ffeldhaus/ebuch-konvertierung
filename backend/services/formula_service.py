@@ -669,8 +669,6 @@ def convert_unicode_math_to_latex(text: str) -> str:
             unit_s = (m.group(4) or "").strip()
             if unit_s == "%":
                 return _mask_str(f"${v_lhs} {op_s} {num_s}\\,\\%$")
-            if unit_s in ("°", r"^\circ"):
-                return _mask_str(f"${v_lhs} {op_s} {num_s}^\\circ$")
             if unit_s in ("µm", "μm"):
                 return _mask_str(f"${v_lhs} {op_s} {num_s}\\,\\mu\\text{{m}}$")
             if unit_s:
@@ -678,24 +676,13 @@ def convert_unicode_math_to_latex(text: str) -> str:
             return _mask_str(f"${v_lhs} {op_s} {num_s}$")
 
         work = re.sub(
-            r"(?<![a-zA-Z0-9_äöüÄÖÜß])([a-zA-Zα-ωΑ-Ω]_[A-Za-z0-9]+|[dABkxmabvgNncfhpTUIRλα])\s*([=<>≈≠≤≥])\s*([-+]?[0-9]+(?:,[0-9]+)?)\s*(cm|nm|µm|μm|mm|mol|eV|FE|%|°)?(?=[,;\.\)\s\|]|$)",
+            r"(?<![a-zA-Z0-9_äöüÄÖÜß])([a-zA-Zα-ωΑ-Ω]_[A-Za-z0-9]+|[dABkxmabvgNncfhpTUIRλα])\s*([=<>≈≠≤≥])\s*([-+]?[0-9]+(?:,[0-9]+)?)\s*(cm|nm|µm|μm|mm|mol|eV|FE|%)?(?=[,;\.\)\s\|]|$)",
             _var_rel_repl,
             work,
         )
         work = re.sub(
             r"λ\s*=\s*([0-9]+(?:,[0-9]+)?)\s*nm\b",
             lambda m: _mask_str(f"$\\lambda = {m.group(1).replace(',', '{,}')}\\,\\text{{nm}}$"),
-            work,
-        )
-        # Wrap temperatures (e.g. '80 °C', '450 °C', '77 °C') and angles ('90°', '14,1°')
-        work = re.sub(
-            r"(?<![0-9A-Za-z\$])([-+]?\d+(?:,\d+)?)\s*°\s*C\b",
-            lambda m: _mask_str(f"${m.group(1).replace(',', '{,}')}\\,^\\circ\\text{{C}}$"),
-            work,
-        )
-        work = re.sub(
-            r"(?<![0-9A-Za-z\$])(\d+(?:,\d+)?)\s*°(?!\s*[CF]\b)",
-            lambda m: _mask_str(f"${m.group(1).replace(',', '{,}')}^\\circ$"),
             work,
         )
         # Wrap scientific powers of 10 with optional coefficient and Hz/J·s unit (e.g. '4,69 · 10^{14} Hz', '10^{14} Hz')
@@ -890,25 +877,129 @@ def convert_unicode_math_to_latex(text: str) -> str:
     return text
 
 
-def standardize_formulas(markdown: str) -> str:
+def _convert_to_fibs_bare_latex(text: str) -> str:
+    r"""Converts ``$...$`` / ``$$...$$`` LaTeX into bare FIBS 09/2025 / Augenbit notation.
+
+    Strips ``$`` and ``$$`` math delimiters, unwraps ``\text{...}``, ``{,}``, and ``\,``,
+    maps Greek letters and micro units to FIBS tilde notation (``~a``, ``~m``, ``~D``, ``~l``),
+    and normalizes arrows (``\xra{...}``, ``\to``, ``\lra``).
+
+    Args:
+        text: Markdown text after Stage-1 LaTeX cleanup.
+
+    Returns:
+        Markdown text in bare FIBS 09/2025 notation without ``$`` math delimiters.
+    """
+    from backend.services.fibs_formatting import normalize_fibs_units_and_percent
+
+    protected_spans: list[str] = []
+
+    def _mask(m: re.Match[str]) -> str:
+        protected_spans.append(m.group(0))
+        return f"__FIBS_BARE_PROT_{len(protected_spans) - 1}__"
+
+    work = fc.UNIT_PERCENT_PROTECTED_RE.sub(_mask, text)
+
+    # 1. Convert LaTeX Greek commands before stripping $ so '$\mu$g' / '$\mu\text{m}$' keep boundaries
+    work = re.sub(
+        r"\\mu\s*\\(?:text|mathrm)\s*\{\s*([a-zA-Z/]+)\s*\}",
+        r"~m\1",
+        work,
+    )
+    for cmd in sorted(fc.LATEX_GREEK_TO_FIBS, key=len, reverse=True):
+        repl = fc.LATEX_GREEK_TO_FIBS[cmd]
+        work = re.sub(rf"{re.escape(cmd)}(?![a-zA-Z])", lambda _, r=repl: r, work)
+
+    # 2. Convert \xrightarrow{...} -> \xra{...} (stripping inner \text{...} and spacing commands)
+    def _xra_repl(m: re.Match[str]) -> str:
+        lbl = m.group(1)
+        for _ in range(3):
+            lbl = re.sub(r"\\(?:text|mathrm)\s*\{([^{}]*)\}", r"\1", lbl)
+        lbl = lbl.replace("{,}", ",").replace(r"\,", " ").replace(r"\;", " ")
+        lbl = lbl.replace(r"\rightarrow", r"\to").replace(r"\longrightarrow", r"\to")
+        lbl = lbl.replace("→", r"\to").replace("⟶", r"\to")
+        lbl = re.sub(r"\s+", " ", lbl).strip()
+        return rf"\xra{{{lbl}}}"
+
+    work = re.sub(
+        r"\\xrightarrow(?:\[[^\]]*\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
+        _xra_repl,
+        work,
+    )
+
+    # 3. Unwrap \text{...}, \mathrm{...}, and \left / \right sizing commands
+    for _ in range(3):
+        work = re.sub(r"\\(?:text|mathrm)\s*\{([^{}]*)\}", r"\1", work)
+    work = re.sub(
+        r"\\(?:left|right)\s*([()\[\]|.])",
+        lambda m: "" if m.group(1) == "." else m.group(1),
+        work,
+    )
+    work = re.sub(r"\\(?:left|right)(?=\\[{}])", "", work)
+
+    # 4. Strip $$...$$ and $...$ math delimiters (keeping display equations on their own line)
+    work = re.sub(r"\$\$\s*([\s\S]*?)\s*\$\$", lambda m: m.group(1).strip(), work)
+    work = re.sub(r"(?<!\\)\$(?!\$)([^\$\n]+?)(?<!\\)\$", lambda m: m.group(1).strip(), work)
+    work = work.replace(r"\$", "$")
+
+    # 5. Unwrap MathJax decimal commas, thin spaces, escaped %, and remaining ^\circ
+    work = work.replace("{,}", ",")
+    work = re.sub(r"\\(?:[,;!]|(?:quad|qquad)(?![a-zA-Z]))", " ", work)
+    work = work.replace(r"\%", "%")
+    work = re.sub(r"\^\s*\{?\\circ\}?", "°", work)
+
+    # 6. Normalize reaction and structural arrows per FIBS Section 8.2.1
+    work = re.sub(r"\\rightleftharpoons(?![a-zA-Z])", lambda _: r"\lra", work)
+    work = re.sub(r"\s*⇌\s*", lambda _: r" \lra ", work)
+    work = re.sub(r"\\(?:longrightarrow|rightarrow)(?![a-zA-Z])", lambda _: r"\to", work)
+    work = re.sub(r"\s*[⟶→]\s*", lambda _: r" \to ", work)
+
+    # 7. Convert Unicode micro units ('0,001µg' -> '0,001 ~mg', '2µm' -> '2 ~mm'), Unicode Greek, & tilde Greek words ('~beta' -> '~b')
+    work = re.sub(r"(\d)[ \t]*[µμ](?=[a-zA-Z])", r"\1 ~m", work)
+    if any(ch in work for ch in fc.UNICODE_GREEK_TO_FIBS):
+        work = "".join(fc.UNICODE_GREEK_TO_FIBS.get(ch, ch) for ch in work)
+    if "~" in work:
+        work = fc.TILDE_GREEK_WORD_RE.sub(
+            lambda m: fc.TILDE_GREEK_WORD_TO_FIBS[m.group(1)],
+            work,
+        )
+
+    # 8. Collapse redundant spaces (preserving tabs) and re-apply degree/percent rules
+    work = re.sub(r"(?<=\S)[ ]{2,}(?=\S)", " ", work)
+    work = normalize_fibs_units_and_percent(work)
+
+    for idx, val in enumerate(protected_spans):
+        work = work.replace(f"__FIBS_BARE_PROT_{idx}__", val)
+    return work
+
+
+def standardize_formulas(markdown: str, *, fibs_mode: bool = False) -> str:
     r"""Standardize all math and chemistry formulas according to Übertragungsregeln Stand 09/2025.
 
     Steps:
-      1. Removes any legacy ``<L>`` and ``</L>`` tags.
-      2. Converts raw Unicode/PDF text formulas into LaTeX (``$...$`` and ``$$...$$``).
+      1. Removes any legacy ``<L>`` and ``</L>`` tags and normalizes degrees/percentages.
+      2. Converts raw Unicode/PDF text formulas into LaTeX.
       3. Cleans and normalizes LaTeX formula syntax within display and inline math.
+      4. When ``fibs_mode=True``, unwraps ``$...$`` / ``$$...$$`` into bare FIBS/Augenbit
+         LaTeX with tilde Greek notation (``~a``, ``~m``, ``~D``) and FIBS arrows
+         (``\to``, ``\lra``, ``\xra{...}``).
 
     Args:
         markdown: Input Markdown text.
+        fibs_mode: When True, emit bare FIBS 09/2025 notation without ``$`` delimiters;
+            when False (Stage-1 raw OCR), preserve ``$...$`` on mathematical equations.
 
     Returns:
-        Markdown text with standardized LaTeX formulas.
+        Markdown text with standardized formulas.
     """
     if not markdown:
         return markdown
 
-    # 1. Remove all <L> and </L> tags
+    from backend.services.fibs_formatting import normalize_fibs_units_and_percent
+
+    # 1. Remove all <L> and </L> tags and normalize plain/wrapped degrees and percentages
     text = strip_l_tags(markdown)
+    text = normalize_fibs_units_and_percent(text)
 
     # 2. Convert raw Unicode math expressions into LaTeX
     text = convert_unicode_math_to_latex(text)
@@ -973,6 +1064,10 @@ def standardize_formulas(markdown: str) -> str:
         return f"${inner_cleaned}$"
 
     text = re.sub(r"(?<!\\)\$(?!\$)([^\$\n]+?)(?<!\\)\$", clean_inline_math, text)
-    text = re.sub(r"(?<=\S)[ \t]{2,}(?=\S)", " ", text)
+    text = normalize_fibs_units_and_percent(text)
 
+    if fibs_mode:
+        return _convert_to_fibs_bare_latex(text)
+
+    text = re.sub(r"(?<=\S)[ ]{2,}(?=\S)", " ", text)
     return text

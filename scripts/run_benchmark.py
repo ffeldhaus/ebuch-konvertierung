@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-import os
-import sys
-import time
-import json
-import re
+"""Multi-engine OCR and FIBS standardisation benchmark runner and leaderboard updater."""
+
+import argparse
 import difflib
 import glob
-import argparse
+import json
 import logging
+import os
+import re
+import sys
 import tempfile
+import time
 import zipfile
+
 try:
     import resource
 except ImportError:
     resource = None  # type: ignore[assignment]
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any
 
 # Enforce strict offline inference during benchmark execution (AGENTS.md §2)
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -26,11 +29,14 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from backend.services.extraction_postprocess import apply_extraction_postprocess
-from backend.services.a11y_linter import lint_markdown
-from backend.services.formula_service import standardize_formulas
-from backend.services.diff_service import strip_ground_truth_preamble, extract_document_components
-from backend.services.llm_service import release_gpu_memory
+from backend.services.a11y_linter import lint_markdown  # noqa: E402
+from backend.services.diff_service import (  # noqa: E402
+    extract_document_components,
+    strip_ground_truth_preamble,
+)
+from backend.services.extraction_postprocess import apply_extraction_postprocess  # noqa: E402
+from backend.services.formula_service import standardize_formulas  # noqa: E402
+from backend.services.llm_service import release_gpu_memory  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("benchmark_runner")
@@ -47,9 +53,8 @@ os.makedirs(GOLDEN_DIR, exist_ok=True)
 # 1. Programmatic Evaluation Metrics
 # -------------------------------------------------------------
 
-def evaluate_headings(pred_md: str, gold_md: str) -> Dict[str, Any]:
-    """
-    Calculates precision, recall, and hierarchical structure accuracy for headings.
+def evaluate_headings(pred_md: str, gold_md: str) -> dict[str, Any]:
+    """Calculates precision, recall, and hierarchical structure accuracy for headings.
     Rather than requiring rigid absolute heading numbers (e.g. H2 vs H3), it evaluates:
     1. Text F1 (precision & recall of heading text titles using 1-to-1 matching).
     2. Hierarchy Consistency: Subheadings in gold remain strictly deeper than their parent
@@ -119,7 +124,7 @@ def evaluate_headings(pred_md: str, gold_md: str) -> Dict[str, Any]:
 
 
 def _normalize_formula_for_comparison(f_str: str) -> str:
-    """Normalizes LaTeX wrappers (\\text{...}, \\mathrm{...}, <L>, spacing, decimal commas) for semantic formula comparison."""
+    r"""Normalizes LaTeX wrappers (\text{...}, \mathrm{...}, <L>, spacing, decimal commas) for semantic formula comparison."""
     s = re.sub(r"<\/?L>", "", f_str)
     s = re.sub(r"\\(?:text|mathrm)\s*\{\s*([^\}]*?)\s*\}", r"\1", s)
     s = s.replace("{,}", ",").replace("\\,", "").replace("\\;", "").replace("\\quad", "").replace("\\qquad", "")
@@ -128,7 +133,7 @@ def _normalize_formula_for_comparison(f_str: str) -> str:
     return s
 
 
-def evaluate_formulas(pred_md: str, gold_md: str) -> Dict[str, Any]:
+def evaluate_formulas(pred_md: str, gold_md: str) -> dict[str, Any]:
     """Calculates STEM formula extraction accuracy and LaTeX math precision."""
     gold_md = strip_ground_truth_preamble(gold_md)
     # Strip legacy <L> tags and find all formula blocks in pred (<L>...</L>, $$...$$, $...$)
@@ -164,7 +169,7 @@ def evaluate_formulas(pred_md: str, gold_md: str) -> Dict[str, Any]:
     }
 
 
-def evaluate_tables(pred_md: str, gold_md: str) -> Dict[str, Any]:
+def evaluate_tables(pred_md: str, gold_md: str) -> dict[str, Any]:
     """Calculates table detection and structural cell content recovery across extracted tables."""
     gold_md = strip_ground_truth_preamble(gold_md)
     comp_gold = extract_document_components(gold_md)
@@ -211,9 +216,9 @@ def evaluate_tables(pred_md: str, gold_md: str) -> Dict[str, Any]:
     }
 
 
-def load_golden_image_metadata(external_data_dir: Optional[str] = None) -> Dict[str, Any]:
+def load_golden_image_metadata(external_data_dir: str | None = None) -> dict[str, Any]:
     """Loads ground truth image metadata containing bounding boxes, dimensions, and captions."""
-    merged: Dict[str, Any] = {}
+    merged: dict[str, Any] = {}
     cand_dirs = [os.path.join(PROJECT_ROOT, "testdata", "golden")]
     ext_dir = external_data_dir or os.environ.get("EBUCH_TESTDATEN_DIR") or os.path.abspath(os.path.join(PROJECT_ROOT, "..", "ebuch-testdaten"))
     if ext_dir and os.path.isdir(ext_dir):
@@ -222,7 +227,7 @@ def load_golden_image_metadata(external_data_dir: Optional[str] = None) -> Dict[
         meta_path = os.path.join(gdir, "golden_image_metadata.json")
         if os.path.exists(meta_path):
             try:
-                with open(meta_path, "r", encoding="utf-8") as f:
+                with open(meta_path, encoding="utf-8") as f:
                     merged.update(json.load(f))
             except Exception:
                 pass
@@ -232,11 +237,10 @@ def load_golden_image_metadata(external_data_dir: Optional[str] = None) -> Dict[
 def evaluate_images(
     pred_md: str,
     gold_md: str,
-    dataset_name: Optional[str] = None,
-    image_dir: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Calculates image detection count, presence, aspect ratio / dimension accuracy,
+    dataset_name: str | None = None,
+    image_dir: str | None = None
+) -> dict[str, Any]:
+    """Calculates image detection count, presence, aspect ratio / dimension accuracy,
     and E-Buch standard compliance against golden ground truth metadata without requiring slow VLM execution.
     """
     gold_md = strip_ground_truth_preamble(gold_md)
@@ -336,7 +340,7 @@ def evaluate_images(
     }
 
 
-def evaluate_boxes(pred_md: str, gold_md: str) -> Dict[str, Any]:
+def evaluate_boxes(pred_md: str, gold_md: str) -> dict[str, Any]:
     """Calculates <Rahmen> callout box detection and content recovery."""
     gold_md = strip_ground_truth_preamble(gold_md)
     comp_gold = extract_document_components(gold_md)
@@ -390,8 +394,7 @@ def normalize_text_for_word_eval(text: str) -> str:
 
 
 def _strip_images_and_tag_markers_for_text_eval(md: str) -> str:
-    """
-    Strips variable image blocks (<Bild>...</Bild>, ![...](...)) and structural tag markers
+    """Strips variable image blocks (<Bild>...</Bild>, ![...](...)) and structural tag markers
     (<Rahmen>, </Rahmen>, <Tabelle>, </Tabelle>, table resolution boilerplate) while keeping
     all textbook text inside boxes and tables so word_recall and reading-flow continuity
     are never falsely penalized when a box/table tag differs between raw and FIBS profiles.
@@ -415,9 +418,8 @@ def _strip_images_and_tag_markers_for_text_eval(md: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", s).strip()
 
 
-def evaluate_text_and_continuity(pred_md: str, gold_md: str) -> Dict[str, Any]:
-    """
-    Evaluates pure text body fidelity, word recall (completeness / missing content detection),
+def evaluate_text_and_continuity(pred_md: str, gold_md: str) -> dict[str, Any]:
+    """Evaluates pure text body fidelity, word recall (completeness / missing content detection),
     character similarity, and page boundary continuity with variable image descriptions isolated.
     """
     from collections import Counter
@@ -492,23 +494,24 @@ def evaluate_text_and_continuity(pred_md: str, gold_md: str) -> Dict[str, Any]:
 def evaluate_a11y(
     pred_md: str,
     *,
-    raw_markdown: Optional[str] = None,
-    expected_pages: Optional[int] = None,
-    table_max_cells: Optional[int] = None,
-) -> Dict[str, Any]:
+    raw_markdown: str | None = None,
+    expected_pages: int | None = None,
+    table_max_cells: int | None = None,
+    custom_rules: str | None = None,
+) -> dict[str, Any]:
     """Runs the FIBS 09/2025 accessibility & source-aware completeness linter on predicted markdown."""
     report = lint_markdown(
         pred_md,
         raw_markdown=raw_markdown,
         expected_pages=expected_pages,
         table_max_cells=table_max_cells,
+        custom_rules=custom_rules,
     )
     return report.model_dump()
 
 
-def evaluate_page_monotonicity(pred_md: str, gold_md: str) -> Dict[str, Any]:
-    """
-    Evaluates whether extracted ((num)) page boundary markers form a strictly
+def evaluate_page_monotonicity(pred_md: str, gold_md: str) -> dict[str, Any]:
+    """Evaluates whether extracted ((num)) page boundary markers form a strictly
     increasing, step-consistent monotonic sequence matching the document's pages.
     """
     gold_md = strip_ground_truth_preamble(gold_md)
@@ -559,9 +562,8 @@ def evaluate_page_monotonicity(pred_md: str, gold_md: str) -> Dict[str, Any]:
     }
 
 
-def evaluate_docx_bookmarks(pred_md: str) -> Dict[str, Any]:
-    """
-    Converts predicted Markdown to a native Word DOCX via `convert_markdown_to_docx`
+def evaluate_docx_bookmarks(pred_md: str) -> dict[str, Any]:
+    """Converts predicted Markdown to a native Word DOCX via `convert_markdown_to_docx`
     and verifies that every `((num))` page boundary is enclosed in a `page_{num}`
     OpenXML bookmark (`w:bookmarkStart`) for screen readers (NVDA, JAWS).
     """
@@ -579,7 +581,7 @@ def evaluate_docx_bookmarks(pred_md: str) -> Dict[str, Any]:
     # Ensure inline ((num)) markers also appear as standalone lines if needed by DOCX converter
     normalized_md = re.sub(r"(?<!\n)\s*(\(\(\d+\)\))\s*(?!\n)", r"\n\n\1\n\n", pred_md)
 
-    found_bookmarks: List[str] = []
+    found_bookmarks: list[str] = []
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             out_docx = os.path.join(tmp_dir, "bench_verify.docx")
@@ -604,9 +606,8 @@ def evaluate_docx_bookmarks(pred_md: str) -> Dict[str, Any]:
     }
 
 
-def strip_catalog_title_from_golden(gold_md: str, catalog_title: Optional[str] = None) -> str:
-    """
-    Strips synthetic `# {catalog_title}` H1 headers prepended in external catalog
+def strip_catalog_title_from_golden(gold_md: str, catalog_title: str | None = None) -> str:
+    """Strips synthetic `# {catalog_title}` H1 headers prepended in external catalog
     ground-truth files immediately after the first `((num))` page marker.
     """
     if not gold_md or not catalog_title:
@@ -629,9 +630,8 @@ def strip_catalog_title_from_golden(gold_md: str, catalog_title: Optional[str] =
     return cleaned
 
 
-def slice_golden_markdown_to_pages(gold_md: str, physical_pages: List[int]) -> str:
-    """
-    Slices a multi-page golden ground-truth Markdown document to retain only the
+def slice_golden_markdown_to_pages(gold_md: str, physical_pages: list[int]) -> str:
+    """Slices a multi-page golden ground-truth Markdown document to retain only the
     sections corresponding to `physical_pages` (`((num))` or `((num)) / ((num+1))` markers).
     """
     if not gold_md or not physical_pages:
@@ -642,7 +642,7 @@ def slice_golden_markdown_to_pages(gold_md: str, physical_pages: List[int]) -> s
         return gold_md
 
     preamble = parts[0]
-    kept_chunks: List[str] = []
+    kept_chunks: list[str] = []
     for idx in range(1, len(parts), 2):
         marker_line = parts[idx]
         body = parts[idx + 1] if (idx + 1) < len(parts) else ""
@@ -677,11 +677,10 @@ def get_peak_memory_mb() -> float:
 def run_docling_extraction(
     pdf_path: str,
     output_dir: str,
-    task: Optional[Any] = None,
+    task: Any | None = None,
     in_process: bool = False,
 ) -> tuple[str, float]:
-    """
-    Runs Docling extractor (either in-process reusing cached DocumentConverter when
+    """Runs Docling extractor (either in-process reusing cached DocumentConverter when
     `in_process=True` and `task is None`, or as a subprocess streaming live output)
     and returns (markdown, duration).
     """
@@ -696,7 +695,7 @@ def run_docling_extraction(
         duration = round(time.time() - start_time, 2)
         base_name = os.path.splitext(os.path.basename(pdf_path))[0]
         md_file = os.path.join(output_dir, f"{base_name}.md")
-        with open(md_file, "r", encoding="utf-8") as f:
+        with open(md_file, encoding="utf-8") as f:
             content = f.read()
         return content, duration
 
@@ -733,13 +732,13 @@ def run_docling_extraction(
 
     base_name = os.path.splitext(os.path.basename(pdf_path))[0]
     md_file = os.path.join(output_dir, f"{base_name}.md")
-    with open(md_file, "r", encoding="utf-8") as f:
+    with open(md_file, encoding="utf-8") as f:
         content = f.read()
 
     return content, duration
 
 
-def run_infinity_extraction(pdf_path: str, output_dir: str, task: Optional[Any] = None) -> tuple[str, float]:
+def run_infinity_extraction(pdf_path: str, output_dir: str, task: Any | None = None) -> tuple[str, float]:
     """Runs Infinity-Parser2-Flash extractor subprocess, streaming live output to task if provided, and returns (markdown, duration)."""
     os.makedirs(output_dir, exist_ok=True)
     python_exe = sys.executable or "python"
@@ -785,13 +784,13 @@ def run_infinity_extraction(pdf_path: str, output_dir: str, task: Optional[Any] 
         
     base_name = os.path.splitext(os.path.basename(pdf_path))[0]
     md_file = os.path.join(output_dir, f"{base_name}.md")
-    with open(md_file, "r", encoding="utf-8") as f:
+    with open(md_file, encoding="utf-8") as f:
         content = f.read()
         
     return content, duration
 
 
-def run_lightonocr_extraction(pdf_path: str, output_dir: str, task: Optional[Any] = None) -> tuple[str, float]:
+def run_lightonocr_extraction(pdf_path: str, output_dir: str, task: Any | None = None) -> tuple[str, float]:
     """Runs LightOnOCR-3 extractor subprocess, streaming live output to task if provided, and returns (markdown, duration)."""
     os.makedirs(output_dir, exist_ok=True)
     python_exe = sys.executable or "python"
@@ -837,13 +836,13 @@ def run_lightonocr_extraction(pdf_path: str, output_dir: str, task: Optional[Any
 
     base_name = os.path.splitext(os.path.basename(pdf_path))[0]
     md_file = os.path.join(output_dir, f"{base_name}.md")
-    with open(md_file, "r", encoding="utf-8") as f:
+    with open(md_file, encoding="utf-8") as f:
         content = f.read()
 
     return content, duration
 
 
-def _parse_judge_json_robustly(content: str) -> Optional[Dict[str, Any]]:
+def _parse_judge_json_robustly(content: str) -> dict[str, Any] | None:
     """Parses LLM judge JSON output robustly, sanitizing unescaped control characters and markdown fences."""
     if not content:
         return None
@@ -870,8 +869,8 @@ def _parse_judge_json_robustly(content: str) -> Optional[Dict[str, Any]]:
 def _compute_programmatic_reference_for_judge(
     pred_md: str,
     gold_md: str,
-    programmatic_metrics: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    programmatic_metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Builds or normalizes objective programmatic reference metrics for LLM-as-a-Judge grounding and calibration."""
     if programmatic_metrics:
         return programmatic_metrics
@@ -891,10 +890,9 @@ def build_judge_prompt(
     pred_md: str,
     gold_md: str,
     profile: str = "uebertragungsregeln_09_2025",
-    programmatic_metrics: Optional[Dict[str, Any]] = None,
+    programmatic_metrics: dict[str, Any] | None = None,
 ) -> str:
-    """
-    Constructs a profile-aware, rubric-anchored prompt for the Gemma 4 12B LLM-as-a-Judge
+    """Constructs a profile-aware, rubric-anchored prompt for the Gemma 4 12B LLM-as-a-Judge
     with multi-page sampling (head + middle + tail) and objective programmatic reference metrics.
     """
     gold_md = strip_ground_truth_preamble(gold_md)
@@ -1002,11 +1000,10 @@ Antworte ausschließlich in einer einzigen einzeiligen JSON-Struktur ohne Zeilen
 
 
 def calibrate_judge_scores_with_programmatic_reference(
-    raw_judge: Dict[str, Any],
-    programmatic_metrics: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    Calibrates raw LLM judge scores against objective programmatic reference metrics so the LLM judge
+    raw_judge: dict[str, Any],
+    programmatic_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    """Calibrates raw LLM judge scores against objective programmatic reference metrics so the LLM judge
     cannot hallucinate extreme penalties (e.g. scoring 20% when objective recall/F1 is 100%) or
     unbounded score inflation when content is missing.
     """
@@ -1073,10 +1070,9 @@ def evaluate_with_gemma_judge(
     pred_md: str,
     gold_md: str,
     profile: str = "uebertragungsregeln_09_2025",
-    programmatic_metrics: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """
-    Evaluates output against golden truth using local Gemma 4 (via rapid-mlx if available),
+    programmatic_metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Evaluates output against golden truth using local Gemma 4 (via rapid-mlx if available),
     with full document multi-page context, profile-aware rubrics (`raw` vs `uebertragungsregeln_09_2025`),
     and objective programmatic reference calibration.
     """
@@ -1107,7 +1103,7 @@ def evaluate_with_gemma_judge(
         }
 
     try:
-        from backend.services.llm_service import start_rapid_mlx, get_model_path, reset_idle_timer, _run_torch_cuda_llm
+        from backend.services.llm_service import _run_torch_cuda_llm, get_model_path, reset_idle_timer, start_rapid_mlx
         client = start_rapid_mlx()
         content = ""
         if client:
@@ -1155,14 +1151,14 @@ def evaluate_with_gemma_judge(
 DEFAULT_EXTERNAL_DATA_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "..", "ebuch-testdaten"))
 
 
-def resolve_external_data_dir(external_data_dir: Optional[str] = None) -> Optional[str]:
+def resolve_external_data_dir(external_data_dir: str | None = None) -> str | None:
     """Resolves the companion private publisher repository (`../ebuch-testdaten`) if available and readable on disk."""
     cand = external_data_dir or os.environ.get("EBUCH_TESTDATEN_DIR") or DEFAULT_EXTERNAL_DATA_DIR
     if cand and os.path.isdir(cand):
         cat_file = os.path.join(cand, "catalog.json")
         try:
             if os.path.exists(cat_file) and os.access(cat_file, os.R_OK):
-                with open(cat_file, "r", encoding="utf-8") as f:
+                with open(cat_file, encoding="utf-8") as f:
                     f.read(16)
                 return os.path.abspath(cand)
         except Exception:
@@ -1170,9 +1166,8 @@ def resolve_external_data_dir(external_data_dir: Optional[str] = None) -> Option
     return None
 
 
-def load_external_catalog(external_data_dir: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
-    """
-    Loads `catalog.json` from `../ebuch-testdaten` and returns a mapping keyed by
+def load_external_catalog(external_data_dir: str | None = None) -> dict[str, dict[str, Any]]:
+    """Loads `catalog.json` from `../ebuch-testdaten` and returns a mapping keyed by
     both `<id>.pdf` and `<id>` -> catalog entry dict.
     """
     ext_root = resolve_external_data_dir(external_data_dir)
@@ -1182,9 +1177,9 @@ def load_external_catalog(external_data_dir: Optional[str] = None) -> Dict[str, 
     if not os.path.exists(cat_path):
         return {}
     try:
-        with open(cat_path, "r", encoding="utf-8") as f:
+        with open(cat_path, encoding="utf-8") as f:
             data = json.load(f)
-        mapping: Dict[str, Dict[str, Any]] = {}
+        mapping: dict[str, dict[str, Any]] = {}
         for doc in data.get("documents", []):
             doc_id = doc.get("id", "")
             pdf_fn = os.path.basename(doc.get("pdf_filename", f"{doc_id}.pdf"))
@@ -1200,10 +1195,9 @@ def load_external_catalog(external_data_dir: Optional[str] = None) -> Dict[str, 
 
 
 def prepare_cropped_pdf_for_indices(
-    pdf_path: str, page_indices: List[int], output_pdf_path: str
-) -> Tuple[str, List[int]]:
-    """
-    Extracts 0-based `page_indices` from `pdf_path` into `output_pdf_path` using `pypdfium2`
+    pdf_path: str, page_indices: list[int], output_pdf_path: str
+) -> tuple[str, list[int]]:
+    """Extracts 0-based `page_indices` from `pdf_path` into `output_pdf_path` using `pypdfium2`
     so long publisher samples can be benchmarked on their designated `benchmark_page_indices`.
     Returns `(cropped_pdf_path, valid_0_based_indices)`.
     """
@@ -1233,10 +1227,9 @@ def prepare_cropped_pdf_for_indices(
 def run_vlm_descriptions_for_benchmark(
     markdown_text: str,
     image_dir: str,
-    cache_json_path: Optional[str] = None,
+    cache_json_path: str | None = None,
 ) -> str:
-    """
-    Runs the production VLM image description stage (`vlm_describer.py` + `fibs_formatting`)
+    """Runs the production VLM image description stage (`vlm_describer.py` + `fibs_formatting`)
     on extracted `![](images/...)` links, converting them into multi-line FIBS `<Bild>` tags
     and dropping purely decorative images without caption context.
     """
@@ -1257,8 +1250,8 @@ def run_vlm_descriptions_for_benchmark(
     if not unique_matches:
         return markdown_text
 
-    image_paths_list: List[str] = []
-    matched_file_map: Dict[str, str] = {}
+    image_paths_list: list[str] = []
+    matched_file_map: dict[str, str] = {}
     for match in unique_matches:
         img_filename = os.path.basename(match.group(2))
         candidate_path = os.path.join(image_dir, img_filename)
@@ -1266,7 +1259,7 @@ def run_vlm_descriptions_for_benchmark(
         if os.path.exists(candidate_path) and candidate_path not in image_paths_list:
             image_paths_list.append(candidate_path)
 
-    json_data: Dict[str, str] = {}
+    json_data: dict[str, str] = {}
     if os.environ.get("E2E_MOCK") == "true":
         json_data = {
             p: "BILDART: Abbildung\nTEXT_IM_BILD: –\nDEKORATIV: nein\nBESCHREIBUNG:\nLehrbuchabbildung zum Abschnitt."
@@ -1276,6 +1269,7 @@ def run_vlm_descriptions_for_benchmark(
         release_gpu_memory()
         try:
             import subprocess
+
             from backend.services.fibs_formatting import image_contexts_for_markdown
 
             vlm_contexts = image_contexts_for_markdown(markdown_text, matched_file_map)
@@ -1337,8 +1331,8 @@ def inject_benchmark_page_numbers(
     pred_md: str,
     pdf_path: str,
     output_dir: str,
-    physical_pages_override: Optional[List[int]] = None,
-    directory_info: Optional[Dict[str, Any]] = None,
+    physical_pages_override: list[int] | None = None,
+    directory_info: dict[str, Any] | None = None,
 ) -> str:
     """Injects page boundary markers ((num)) based on metadata, catalog physical pages, or physical page offset."""
     pages_str = ",".join(str(p) for p in physical_pages_override) if physical_pages_override else ""
@@ -1346,8 +1340,9 @@ def inject_benchmark_page_numbers(
         return pred_md
 
     try:
-        from backend.services.extraction_service import insert_page_numbers_from_metadata, detect_physical_start_page
         import glob
+
+        from backend.services.extraction_service import detect_physical_start_page, insert_page_numbers_from_metadata
         json_files = glob.glob(os.path.join(output_dir, "**", "*content_list*.json"), recursive=True)
         if json_files and os.path.exists(json_files[0]):
             return insert_page_numbers_from_metadata(
@@ -1370,7 +1365,7 @@ def inject_benchmark_page_numbers(
     return pred_md
 
 
-def _empty_engine_result_bucket(engine: str) -> Dict[str, Any]:
+def _empty_engine_result_bucket(engine: str) -> dict[str, Any]:
     return {
         "engine": engine,
         "total_duration": 0.0,
@@ -1395,7 +1390,7 @@ def _empty_engine_result_bucket(engine: str) -> Dict[str, Any]:
     }
 
 
-def _recompute_engine_score_lists(eng_data: Dict[str, Any]) -> None:
+def _recompute_engine_score_lists(eng_data: dict[str, Any]) -> None:
     """Rebuilds aggregate score lists and totals from `details_by_doc` (used when resuming checkpoints)."""
     eng_data["total_duration"] = 0.0
     eng_data["total_pages"] = 0
@@ -1432,12 +1427,12 @@ def _recompute_engine_score_lists(eng_data: Dict[str, Any]) -> None:
             eng_data["ueb_judge_scores"].append(um.get("judge", {}).get("overall_judge_score", 0.0))
 
 
-def load_checkpoint_state(checkpoint_path: str) -> Optional[Dict[str, Any]]:
+def load_checkpoint_state(checkpoint_path: str) -> dict[str, Any] | None:
     """Loads an existing benchmark checkpoint or `run_{id}.json` record from disk."""
     if not checkpoint_path or not os.path.exists(checkpoint_path):
         return None
     try:
-        with open(checkpoint_path, "r", encoding="utf-8") as f:
+        with open(checkpoint_path, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         logger.warning(f"Failed to load checkpoint from {checkpoint_path}: {e}")
@@ -1445,12 +1440,11 @@ def load_checkpoint_state(checkpoint_path: str) -> Optional[Dict[str, Any]]:
 
 
 def slice_datasets_for_batch(
-    datasets: List[str],
-    batch_size: Optional[int] = None,
+    datasets: list[str],
+    batch_size: int | None = None,
     batch_index: int = 0,
-) -> List[str]:
-    """
-    Returns the slice of `datasets` for the requested batch (`batch_index` is 0-based).
+) -> list[str]:
+    """Returns the slice of `datasets` for the requested batch (`batch_index` is 0-based).
     If `batch_size` is None or <= 0, returns all datasets.
     """
     if not batch_size or batch_size <= 0:
@@ -1461,21 +1455,22 @@ def slice_datasets_for_batch(
 
 
 def run_comprehensive_benchmark(
-    engines: List[str],
-    datasets: List[str],
+    engines: list[str],
+    datasets: list[str],
     keep_temp: bool = False,
     reuse_extractions: bool = False,
-    external_data_dir: Optional[str] = None,
-    checkpoint_file: Optional[str] = None,
+    external_data_dir: str | None = None,
+    checkpoint_file: str | None = None,
     resume: bool = False,
-    batch_size: Optional[int] = None,
+    batch_size: int | None = None,
     batch_index: int = 0,
-    max_docs: Optional[int] = None,
+    max_docs: int | None = None,
     skip_standardisation: bool = False,
     describe_images: bool = False,
     allow_fallback: bool = True,
     use_catalog_page_slice: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
+    """Executes the benchmark across the requested engines and datasets."""
     from backend.services.task_manager import acquire_sleep_assertion_sync, release_sleep_assertion_sync
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1497,7 +1492,7 @@ def run_comprehensive_benchmark(
         active_datasets = active_datasets[:max_docs]
 
     # Load checkpoint if resuming or appending to an existing checkpoint file
-    results: Dict[str, Dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
     target_runs_dir = os.path.join(ext_root, "benchmarks", "runs") if (has_external_docs and ext_root) else RUNS_DIR
     os.makedirs(target_runs_dir, exist_ok=True)
 
@@ -1574,13 +1569,13 @@ def run_comprehensive_benchmark(
 
                 # Load Raw Golden Truth
                 if os.path.exists(raw_golden_path):
-                    with open(raw_golden_path, "r", encoding="utf-8") as f:
+                    with open(raw_golden_path, encoding="utf-8") as f:
                         raw_gold_md = f.read()
                 elif os.path.exists(raw_alt_path):
-                    with open(raw_alt_path, "r", encoding="utf-8") as f:
+                    with open(raw_alt_path, encoding="utf-8") as f:
                         raw_gold_md = f.read()
                 elif os.path.exists(fallback_golden_path):
-                    with open(fallback_golden_path, "r", encoding="utf-8") as f:
+                    with open(fallback_golden_path, encoding="utf-8") as f:
                         raw_gold_md = f.read()
                 else:
                     logger.warning(f"Golden truth not found for {clean_base}. Skipping.")
@@ -1588,13 +1583,13 @@ def run_comprehensive_benchmark(
 
                 # Load Übertragungsregeln 09/2025 Golden Truth
                 if os.path.exists(ueb_golden_path):
-                    with open(ueb_golden_path, "r", encoding="utf-8") as f:
+                    with open(ueb_golden_path, encoding="utf-8") as f:
                         ueb_gold_md = f.read()
                 elif os.path.exists(ueb_alt_path):
-                    with open(ueb_alt_path, "r", encoding="utf-8") as f:
+                    with open(ueb_alt_path, encoding="utf-8") as f:
                         ueb_gold_md = f.read()
                 elif os.path.exists(fallback_golden_path):
-                    with open(fallback_golden_path, "r", encoding="utf-8") as f:
+                    with open(fallback_golden_path, encoding="utf-8") as f:
                         ueb_gold_md = f.read()
                 else:
                     ueb_gold_md = raw_gold_md
@@ -1603,7 +1598,7 @@ def run_comprehensive_benchmark(
 
                 # Check external catalog metadata for title stripping and 4-page benchmark slicing
                 cat_entry = catalog_map.get(clean_base) or catalog_map.get(f"{clean_base}.pdf")
-                physical_pages_override: Optional[List[int]] = None
+                physical_pages_override: list[int] | None = None
                 effective_pdf_path = pdf_path
                 if cat_entry:
                     cat_title = cat_entry.get("title")
@@ -1645,7 +1640,7 @@ def run_comprehensive_benchmark(
                     import shutil
                     doc_stem = os.path.splitext(doc_name)[0]
                     search_json_dirs = list(dict.fromkeys([active_runs_dir, RUNS_DIR]))
-                    candidate_jsons: List[str] = []
+                    candidate_jsons: list[str] = []
                     for sdir in search_json_dirs:
                         candidate_jsons.extend(glob.glob(os.path.join(sdir, "checkpoint_*.json")))
                         candidate_jsons.extend(glob.glob(os.path.join(sdir, "run_2*.json")))
@@ -1660,7 +1655,7 @@ def run_comprehensive_benchmark(
                         if os.path.basename(rj_path) == f"run_{run_id}.json":
                             continue
                         try:
-                            with open(rj_path, "r", encoding="utf-8") as rjf:
+                            with open(rj_path, encoding="utf-8") as rjf:
                                 rj_data = json.load(rjf)
                             doc_rec = rj_data.get("details", {}).get(engine, {}).get("details_by_doc", {}).get(doc_name)
                             if doc_rec and doc_rec.get("raw_md") and "formula-not-decoded" not in doc_rec["raw_md"]:
@@ -1676,7 +1671,7 @@ def run_comprehensive_benchmark(
                             pass
 
                     if pred_md is None:
-                        matched_files: List[str] = []
+                        matched_files: list[str] = []
                         for sdir in search_json_dirs:
                             matched_files.extend(
                                 glob.glob(os.path.join(sdir, f"run_*_{engine}_{doc_stem}", f"{doc_stem}.md"))
@@ -1689,7 +1684,7 @@ def run_comprehensive_benchmark(
                             latest_file = matched_files[-1]
                             src_dir = os.path.dirname(latest_file)
                             logger.info(f"Reusing existing raw extraction from {latest_file}")
-                            with open(latest_file, "r", encoding="utf-8") as rf:
+                            with open(latest_file, encoding="utf-8") as rf:
                                 raw_content = rf.read()
                             from backend.services.extraction_postprocess import clean_markdown_fences
                             pred_md = clean_markdown_fences(raw_content)
@@ -1697,7 +1692,7 @@ def run_comprehensive_benchmark(
                                 dur_file = os.path.join(os.path.dirname(cand_md), ".duration.txt")
                                 if os.path.exists(dur_file):
                                     try:
-                                        with open(dur_file, "r", encoding="utf-8") as df:
+                                        with open(dur_file, encoding="utf-8") as df:
                                             val = float(df.read().strip())
                                         if val > 0:
                                             duration = val
@@ -1789,25 +1784,32 @@ def run_comprehensive_benchmark(
                 standardisation_backend = "skipped"
                 chunk_count = 0
                 std_duration = 0.0
+                doc_base = os.path.splitext(doc_name)[0].replace("_scanned", "")
+                doc_rules_path = os.path.join(active_test_data_dir, f"{doc_base}_rules.txt")
+                doc_rules_content: str | None = None
+                if os.path.exists(doc_rules_path):
+                    with open(doc_rules_path, encoding="utf-8") as rf:
+                        doc_rules_content = rf.read()
                 if skip_standardisation:
                     from backend.services.fibs_postprocess import post_process_structure
-                    std_ueb = post_process_structure(pred_md, raw_markdown=pred_md, directory_info=directory_info)
+                    std_ueb = post_process_structure(
+                        pred_md,
+                        raw_markdown=pred_md,
+                        directory_info=directory_info,
+                        custom_rules=doc_rules_content,
+                    )
                     standardisation_backend = "fast_postprocess_only"
                 else:
                     bench_task_dir = None
                     std_start = time.time()
                     try:
                         from backend.services.llm_service import standardise_markdown
-                        doc_base = os.path.splitext(doc_name)[0].replace("_scanned", "")
-                        doc_rules_path = os.path.join(active_test_data_dir, f"{doc_base}_rules.txt")
                         bench_task_id = f"bench_{engine}_{doc_base}"
                         bench_task_dir = os.path.join(PROJECT_ROOT, "assets", "output", bench_task_id)
                         os.makedirs(bench_task_dir, exist_ok=True)
-                        if os.path.exists(doc_rules_path):
-                            with open(doc_rules_path, "r", encoding="utf-8") as rf:
-                                custom_rules_content = rf.read()
+                        if doc_rules_content is not None:
                             with open(os.path.join(bench_task_dir, "custom_ruleset.txt"), "w", encoding="utf-8") as wf:
-                                wf.write(custom_rules_content)
+                                wf.write(doc_rules_content)
 
                         md_for_std = pred_md
                         if describe_images and os.path.isdir(img_dir):
@@ -1860,6 +1862,7 @@ def run_comprehensive_benchmark(
                     std_ueb,
                     raw_markdown=pred_md,
                     expected_pages=page_count,
+                    custom_rules=doc_rules_content,
                 )
                 ueb_mono = evaluate_page_monotonicity(std_ueb, ueb_gold_md)
                 ueb_docx = evaluate_docx_bookmarks(std_ueb)
@@ -1960,22 +1963,21 @@ def run_comprehensive_benchmark(
         release_sleep_assertion_sync(sleep_owner)
 
 
-def _empty_engine_result_dbd(engine: str, existing: Dict[str, Any]) -> Dict[str, Any]:
+def _empty_engine_result_dbd(engine: str, existing: dict[str, Any]) -> dict[str, Any]:
     bucket = _empty_engine_result_bucket(engine)
     bucket["details_by_doc"] = dict(existing.get("details_by_doc", {}))
     _recompute_engine_score_lists(bucket)
     return bucket
 
 
-def _is_metric_active(m: Optional[Dict[str, Any]]) -> bool:
+def _is_metric_active(m: dict[str, Any] | None) -> bool:
     if not isinstance(m, dict):
         return False
     return int(m.get("gold_count", 0) or 0) > 0 or int(m.get("pred_count", 0) or 0) > 0
 
 
-def compute_doc_composite(doc_metrics: Dict[str, Any], include_boxes: bool = True) -> float:
-    """
-    Computes the per-document composite score while excluding non-applicable
+def compute_doc_composite(doc_metrics: dict[str, Any], include_boxes: bool = True) -> float:
+    """Computes the per-document composite score while excluding non-applicable
     structural categories (where both gold_count == 0 and pred_count == 0)
     and re-normalizing the active category weights to 100%.
     """
@@ -1985,7 +1987,7 @@ def compute_doc_composite(doc_metrics: Dict[str, Any], include_boxes: bool = Tru
     j_score = float(doc_metrics.get("judge", {}).get("overall_judge_score", c_score))
     a_score = float(doc_metrics.get("a11y", {}).get("score", 100.0))
 
-    weighted_components: List[Tuple[float, float]] = [
+    weighted_components: list[tuple[float, float]] = [
         (w_score, 0.15),
         (c_score, 0.10),
         (j_score, 0.18 if include_boxes else 0.20),
@@ -2020,13 +2022,13 @@ def compute_doc_composite(doc_metrics: Dict[str, Any], include_boxes: bool = Tru
 
 
 def _programmatic_judge_fallback(
-    h_m: Dict[str, Any],
-    f_m: Dict[str, Any],
-    t_m: Dict[str, Any],
-    c_m: Dict[str, Any],
-    i_m: Dict[str, Any],
-    b_m: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    h_m: dict[str, Any],
+    f_m: dict[str, Any],
+    t_m: dict[str, Any],
+    c_m: dict[str, Any],
+    i_m: dict[str, Any],
+    b_m: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     h_s = h_m["score"]
     f_s = f_m["score"]
     t_s = t_m["score"]
@@ -2090,19 +2092,19 @@ OPEN_DOC_CATEGORIES = {
 
 
 def save_benchmark_snapshot(
-    results: Dict[str, Any],
+    results: dict[str, Any],
     run_id: str,
     timestamp: str,
-    engines: List[str],
-    datasets: List[str],
+    engines: list[str],
+    datasets: list[str],
     update_md: bool = True,
-    runs_dir: Optional[str] = None,
-    checkpoint_file: Optional[str] = None,
+    runs_dir: str | None = None,
+    checkpoint_file: str | None = None,
     has_external_docs: bool = False,
     skip_standardisation: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Persists intermediate or final benchmark results to disk (run_{run_id}.json) and updates LEADERBOARD.md."""
-    def compute_summary_for_docs(doc_filter_fn, label_suffix: str = "") -> List[Dict[str, Any]]:
+    def compute_summary_for_docs(doc_filter_fn, label_suffix: str = "") -> list[dict[str, Any]]:
         sub_summary = []
         for eng, data in results.items():
             matching_docs = [d for d in data["details_by_doc"].keys() if doc_filter_fn(d)]
@@ -2208,7 +2210,7 @@ def save_benchmark_snapshot(
     summary_scanned = compute_summary_for_docs(lambda d: d.endswith("_scanned.pdf"), "Scanned")
     summary_overall = compute_summary_for_docs(lambda d: True, "Overall")
 
-    category_breakdown: Dict[str, List[Dict[str, Any]]] = {}
+    category_breakdown: dict[str, list[dict[str, Any]]] = {}
     for cat_label, cat_docs in OPEN_DOC_CATEGORIES.items():
         cat_rows = compute_summary_for_docs(lambda d, cd=cat_docs: d in cd, cat_label)
         if cat_rows:
@@ -2299,7 +2301,6 @@ def check_recent_crash_reports(start_time: float) -> None:
     """Checks ~/Library/Logs/DiagnosticReports/ (macOS) for any Python crashes during benchmark run."""
     if sys.platform != "darwin":
         return
-    import glob
     crash_dir = os.path.expanduser("~/Library/Logs/DiagnosticReports")
     if not os.path.exists(crash_dir):
         return
@@ -2329,7 +2330,7 @@ BENCHMARK_LICENSE_TAGS = {
 }
 
 
-def render_standings_table(rows: List[Dict[str, Any]], metric_key: str, is_diff: bool = False) -> str:
+def render_standings_table(rows: list[dict[str, Any]], metric_key: str, is_diff: bool = False) -> str:
     """Renders a formatted Markdown table for a set of benchmark summary rows."""
     if not rows:
         return "*(No documents evaluated for this category in this run. Run with `--include-scanned` to benchmark rasterized image PDFs on-demand.)*\n"
@@ -2377,7 +2378,7 @@ def render_standings_table(rows: List[Dict[str, Any]], metric_key: str, is_diff:
     return table_md
 
 
-def _classify_saved_run(rj: Dict[str, Any]) -> str:
+def _classify_saved_run(rj: dict[str, Any]) -> str:
     """Classifies a historical run JSON into one of the leaderboard tiers and backfills docs_evaluated."""
     details = rj.get("details", {})
     for list_key in ("summary_digital", "summary_scanned", "summary"):
@@ -2416,16 +2417,13 @@ def _classify_saved_run(rj: Dict[str, Any]) -> str:
 
 
 def _load_latest_runs_by_tier(
-    current_run: Dict[str, Any], external_runs_dir: Optional[str] = None
-) -> Dict[str, Dict[str, Any]]:
-    """
-    Scans `benchmarks/runs/run_*.json` and `checkpoint_*.json` (plus `../ebuch-testdaten/benchmarks/runs/`
+    current_run: dict[str, Any], external_runs_dir: str | None = None
+) -> dict[str, dict[str, Any]]:
+    """Scans `benchmarks/runs/run_*.json` and `checkpoint_*.json` (plus `../ebuch-testdaten/benchmarks/runs/`
     if readable) sorted chronologically by `timestamp` so that `LEADERBOARD.md` always displays the
     latest result for EACH benchmark tier without small/fast runs overwriting large multi-engine standings.
     """
-    import glob
-
-    tiers: Dict[str, Dict[str, Any]] = {}
+    tiers: dict[str, dict[str, Any]] = {}
     search_dirs = [RUNS_DIR]
     ext_dir = resolve_external_data_dir()
     if ext_dir:
@@ -2443,10 +2441,10 @@ def _load_latest_runs_by_tier(
         except Exception:
             pass
 
-    loaded_records: List[Dict[str, Any]] = []
+    loaded_records: list[dict[str, Any]] = []
     for fpath in all_files:
         try:
-            with open(fpath, "r", encoding="utf-8") as f:
+            with open(fpath, encoding="utf-8") as f:
                 data = json.load(f)
             if not data.get("summary_digital") and not data.get("summary"):
                 continue
@@ -2485,7 +2483,7 @@ def _load_latest_runs_by_tier(
     return tiers
 
 
-def render_executive_tier_overview(tiers: Dict[str, Dict[str, Any]]) -> str:
+def render_executive_tier_overview(tiers: dict[str, dict[str, Any]]) -> str:
     """Renders the top-level Executive Quality Overview comparing Small/Fast and Large/Full benchmark tiers."""
     tier_specs = [
         ("fast", "⚡ **Tier 1: Fast Regression** (`--mode fast`)", "Docling + Deterministic FIBS (`open_all`)"),
@@ -2517,7 +2515,7 @@ def render_executive_tier_overview(tiers: Dict[str, Dict[str, Any]]) -> str:
     return md
 
 
-def render_category_breakdown_table(cat_run: Optional[Dict[str, Any]], include_external: bool = False) -> str:
+def render_category_breakdown_table(cat_run: dict[str, Any] | None, include_external: bool = False) -> str:
     """Renders per-category scores across textbook types (Core, OpenStax, Grundschule, Sek I, Sek II)."""
     if not cat_run or not cat_run.get("category_breakdown"):
         return "*(Run `python scripts/run_benchmark.py` to populate the textbook category breakdown.)*\n"
@@ -2541,7 +2539,7 @@ def render_category_breakdown_table(cat_run: Optional[Dict[str, Any]], include_e
     return md
 
 
-def update_leaderboard(current_run: Dict[str, Any], external_runs_dir: Optional[str] = None):
+def update_leaderboard(current_run: dict[str, Any], external_runs_dir: str | None = None):
     """Updates benchmarks/LEADERBOARD.md as a multi-tier dashboard covering both small/fast and large/full runs."""
     tiers = _load_latest_runs_by_tier(current_run, external_runs_dir=external_runs_dir)
 
@@ -2642,7 +2640,7 @@ Evaluations are performed against **Golden Ground Truth** references using both 
     past_runs = []
     if os.path.exists(LEADERBOARD_PATH):
         try:
-            with open(LEADERBOARD_PATH, "r", encoding="utf-8") as f:
+            with open(LEADERBOARD_PATH, encoding="utf-8") as f:
                 existing_text = f.read()
             hist_match = re.search(r"## 📜 Historical Runs Log\s*\n+(.*)", existing_text, re.DOTALL)
             if hist_match:
@@ -2693,11 +2691,11 @@ Evaluations are performed against **Golden Ground Truth** references using both 
 
 
 def augment_scanned_page_image(pil_img: Any, page_idx: int, seed: int = 42) -> Any:
-    """
-    Applies deterministic textbook scan artifacts (warm paper tint, subtle alternating skew,
+    """Applies deterministic textbook scan artifacts (warm paper tint, subtle alternating skew,
     spine/gutter shadow along the inner edge, and low-amplitude sensor grain) to a 300-DPI page image.
     """
     import random
+
     from PIL import Image, ImageEnhance, ImageFilter
 
     rng = random.Random(seed + page_idx * 17)
@@ -2842,19 +2840,20 @@ SUITE_DATASETS = {
 SUITE_DATASETS["all"] = list(SUITE_DATASETS["open_all"])
 
 
-def resolve_suite_datasets(suite: str, external_data_dir: Optional[str] = None) -> List[str]:
-    """
-    Resolves dataset filenames for a named suite:
-      - `smoke`: 1 open doc + 1 multi-format schoolbook (+ 1 external publisher doc if available)
-      - `core`: 4 baseline documents
-      - `schoolbooks`: 12 multi-format schoolbooks
-      - `open_all` / `all`: all 19 open repository documents
-      - `external`: all 50 proprietary publisher PDFs from `../ebuch-testdaten/catalog.json`
-      - `full`: all 19 open documents + all 50 proprietary publisher PDFs (69 total)
+def resolve_suite_datasets(suite: str, external_data_dir: str | None = None) -> list[str]:
+    """Resolves dataset filenames for a named benchmark suite.
+
+    Supported suites:
+    - `smoke`: 1 open doc + 1 multi-format schoolbook (+ 1 external publisher doc if available)
+    - `core`: 4 baseline documents
+    - `schoolbooks`: 12 multi-format schoolbooks
+    - `open_all` / `all`: all 19 open repository documents
+    - `external`: all 50 proprietary publisher PDFs from `../ebuch-testdaten/catalog.json`
+    - `full`: all 19 open documents + all 50 proprietary publisher PDFs (69 total)
     """
     ext_root = resolve_external_data_dir(external_data_dir)
     cat_map = load_external_catalog(ext_root)
-    ext_docs: List[str] = []
+    ext_docs: list[str] = []
     if ext_root and cat_map:
         seen = set()
         for key, entry in cat_map.items():
@@ -2874,7 +2873,8 @@ def resolve_suite_datasets(suite: str, external_data_dir: Optional[str] = None) 
     return list(SUITE_DATASETS.get(suite, SUITE_DATASETS["open_all"]))
 
 
-def main(cli_args: Optional[List[str]] = None):
+def main(cli_args: list[str] | None = None):
+    """Parses CLI flags and runs the requested benchmark profile."""
     parser = argparse.ArgumentParser(description="E-Buch Multi-Engine Benchmarking Suite")
     parser.add_argument(
         "--mode",

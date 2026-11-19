@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import inspect
+import json
 import logging
 import os
 import re
@@ -693,22 +694,29 @@ def _head(text: str, max_chars: int) -> str:
     return head[:cut] if cut > max_chars // 2 else head
 
 
+CONTEXT_CHAR_LIMIT: int = int(fc.CONTEXT_MAX_TOKENS * fc.CHARS_PER_TOKEN)
+
+
 def build_standardisation_chunks(
     markdown: str,
     system_prompt: str,
     token_budget: int | None = None,
+    neighbor_context: dict[str, str] | None = None,
 ) -> list[StandardisationChunk]:
     """Plans page-wise Gemma standardisation chunks with neighbor-page context.
 
     Short documents that fit inside ``MAX_PAGES_PER_CHUNK`` and ``token_budget``
-    become a single chunk without context banners. Longer documents are grouped
-    into chunks of whole pages (or paragraph groups for oversized pages) with
-    read-only previous and following page context.
+    become a single chunk without context banners unless external ``neighbor_context``
+    is provided. Longer documents are grouped into chunks of whole pages (or
+    paragraph groups for oversized pages) with read-only previous and following
+    page context.
 
     Args:
         markdown: Full extracted Markdown document.
         system_prompt: Active system prompt string (used to account for fixed tokens).
         token_budget: Optional override for ``GEMMA_REQUEST_TOKEN_BUDGET``.
+        neighbor_context: Optional external neighbor context dict containing
+            ``prev_page``, ``prev_text``, ``next_page``, and/or ``next_text``.
 
     Returns:
         List of ``StandardisationChunk`` Pydantic models.
@@ -717,14 +725,18 @@ def build_standardisation_chunks(
     fixed = estimate_tokens(system_prompt) + fc.FRAME_TOKENS
     content_budget = max(budget - fixed, 600)
 
+    context_reserve = min(2 * fc.CONTEXT_MAX_TOKENS, content_budget // 3)
+    text_limit = max(content_budget - context_reserve, 300)
+    context_chars = min(CONTEXT_CHAR_LIMIT, int(context_reserve / 2 * fc.CHARS_PER_TOKEN))
+
     segments = split_markdown_pages(markdown)
     all_pages = [s.page for s in segments if s.page is not None]
     if (
         len(all_pages) <= fc.MAX_PAGES_PER_CHUNK
-        and _cost(markdown) <= content_budget
+        and _cost(markdown) <= (text_limit if neighbor_context else content_budget)
         and output_token_allowance(markdown) < fc.GEMMA_MAX_OUTPUT_TOKENS
     ):
-        return [
+        chunks = [
             StandardisationChunk(
                 index=1,
                 text=markdown,
@@ -732,83 +744,99 @@ def build_standardisation_chunks(
                 estimated_request_tokens=fixed + _cost(markdown),
             )
         ]
-
-    context_reserve = min(2 * fc.CONTEXT_MAX_TOKENS, content_budget // 3)
-    text_limit = max(content_budget - context_reserve, 300)
-    context_chars = int(context_reserve / 2 * fc.CHARS_PER_TOKEN)
-
-    units: list[dict[str, Any]] = []
-    for seg in segments:
-        if _cost(seg.text) <= text_limit:
-            units.append(
-                {"page": seg.page, "text": seg.text, "part": None, "starts_page": True}
-            )
-            continue
-        paragraph_units = _split_page_into_paragraph_units(seg.text)
-        groups: list[str] = []
-        for para in paragraph_units:
-            if groups and _cost(groups[-1] + para) <= text_limit:
-                groups[-1] += para
-            else:
-                groups.append(para)
-        for part, group in enumerate(groups, 1):
-            if _cost(group) > text_limit:
-                logger.warning(
-                    f"Seite {seg.page}: Block mit ~{estimate_tokens(group)} Tokens überschreitet "
-                    "das Abschnittsbudget und wird ungeteilt übertragen."
+    else:
+        units: list[dict[str, Any]] = []
+        for seg in segments:
+            if _cost(seg.text) <= text_limit:
+                units.append(
+                    {"page": seg.page, "text": seg.text, "part": None, "starts_page": True}
                 )
-            units.append(
-                {
-                    "page": seg.page,
-                    "text": group,
-                    "part": part if len(groups) > 1 else None,
-                    "starts_page": part == 1,
-                }
-            )
-
-    grouped: list[list[dict[str, Any]]] = []
-    for unit in units:
-        if grouped:
-            current = grouped[-1]
-            text = "".join(u["text"] for u in current) + unit["text"]
-            pages = {u["page"] for u in current + [unit] if u["starts_page"]}
-            mergeable = unit["part"] is None and all(u["part"] is None for u in current)
-            if mergeable and _cost(text) <= text_limit and len(pages) <= fc.MAX_PAGES_PER_CHUNK:
-                current.append(unit)
                 continue
-        grouped.append([unit])
+            paragraph_units = _split_page_into_paragraph_units(seg.text)
+            groups: list[str] = []
+            for para in paragraph_units:
+                if groups and _cost(groups[-1] + para) <= text_limit:
+                    groups[-1] += para
+                else:
+                    groups.append(para)
+            for part, group in enumerate(groups, 1):
+                if _cost(group) > text_limit:
+                    logger.warning(
+                        f"Seite {seg.page}: Block mit ~{estimate_tokens(group)} Tokens überschreitet "
+                        "das Abschnittsbudget und wird ungeteilt übertragen."
+                    )
+                units.append(
+                    {
+                        "page": seg.page,
+                        "text": group,
+                        "part": part if len(groups) > 1 else None,
+                        "starts_page": part == 1,
+                    }
+                )
 
-    chunks: list[StandardisationChunk] = []
-    flat_index = 0
-    for i, group in enumerate(grouped):
-        text = "".join(u["text"] for u in group)
-        first_idx, last_idx = flat_index, flat_index + len(group) - 1
-        flat_index += len(group)
-        prev_unit = units[first_idx - 1] if first_idx > 0 else None
-        next_unit = units[last_idx + 1] if last_idx + 1 < len(units) else None
-        pages: list[str | None] = []
-        for u in group:
-            if u["page"] not in pages:
-                pages.append(u["page"])
-        prev_ctx = _tail(prev_unit["text"], context_chars) if prev_unit else ""
-        next_ctx = _head(next_unit["text"], context_chars) if next_unit else ""
-        chunk = StandardisationChunk(
-            index=i + 1,
-            text=text,
-            pages=pages,
-            part=group[0]["part"] if len(group) == 1 else None,
-            prev_context=prev_ctx,
-            next_context=next_ctx,
-            prev_page=prev_unit["page"] if prev_unit else None,
-            next_page=next_unit["page"] if next_unit else None,
-            estimated_request_tokens=(
-                fixed
-                + _cost(text)
-                + estimate_tokens(prev_ctx)
-                + estimate_tokens(next_ctx)
-            ),
-        )
-        chunks.append(chunk)
+        grouped: list[list[dict[str, Any]]] = []
+        for unit in units:
+            if grouped:
+                current = grouped[-1]
+                text = "".join(u["text"] for u in current) + unit["text"]
+                pages = {u["page"] for u in current + [unit] if u["starts_page"]}
+                mergeable = unit["part"] is None and all(u["part"] is None for u in current)
+                if mergeable and _cost(text) <= text_limit and len(pages) <= fc.MAX_PAGES_PER_CHUNK:
+                    current.append(unit)
+                    continue
+            grouped.append([unit])
+
+        chunks = []
+        flat_index = 0
+        for i, group in enumerate(grouped):
+            text = "".join(u["text"] for u in group)
+            first_idx, last_idx = flat_index, flat_index + len(group) - 1
+            flat_index += len(group)
+            prev_unit = units[first_idx - 1] if first_idx > 0 else None
+            next_unit = units[last_idx + 1] if last_idx + 1 < len(units) else None
+            pages_list: list[str | None] = []
+            for u in group:
+                if u["page"] not in pages_list:
+                    pages_list.append(u["page"])
+            prev_ctx = _tail(prev_unit["text"], context_chars) if prev_unit else ""
+            next_ctx = _head(next_unit["text"], context_chars) if next_unit else ""
+            chunk = StandardisationChunk(
+                index=i + 1,
+                text=text,
+                pages=pages_list,
+                part=group[0]["part"] if len(group) == 1 else None,
+                prev_context=prev_ctx,
+                next_context=next_ctx,
+                prev_page=prev_unit["page"] if prev_unit else None,
+                next_page=next_unit["page"] if next_unit else None,
+                estimated_request_tokens=(
+                    fixed
+                    + _cost(text)
+                    + estimate_tokens(prev_ctx)
+                    + estimate_tokens(next_ctx)
+                ),
+            )
+            chunks.append(chunk)
+
+    if neighbor_context and chunks:
+        ext_prev_text = str(neighbor_context.get("prev_text") or "").strip()
+        ext_prev_page = str(neighbor_context.get("prev_page") or "").strip() or None
+        ext_next_text = str(neighbor_context.get("next_text") or "").strip()
+        ext_next_page = str(neighbor_context.get("next_page") or "").strip() or None
+        cap = max(context_chars, 300)
+        if not chunks[0].prev_context and ext_prev_text:
+            capped_prev = _tail(ext_prev_text, min(cap, CONTEXT_CHAR_LIMIT))
+            chunks[0].prev_context = capped_prev
+            if ext_prev_page and not chunks[0].prev_page:
+                chunks[0].prev_page = ext_prev_page
+            chunks[0].estimated_request_tokens += estimate_tokens(capped_prev)
+        if not chunks[-1].next_context and ext_next_text:
+            capped_next = _head(ext_next_text, min(cap, CONTEXT_CHAR_LIMIT))
+            chunks[-1].next_context = capped_next
+            if ext_next_page and not chunks[-1].next_page:
+                chunks[-1].next_page = ext_next_page
+            chunks[-1].estimated_request_tokens += estimate_tokens(capped_next)
+
     return chunks
 
 
@@ -947,6 +975,137 @@ def _trim_to_own_pages(text: str, chunk: StandardisationChunk) -> str:
             )
             lines = lines[first_own:]
     return "\n".join(lines).strip()
+
+
+def _count_page_image_blocks(seg_text: str) -> int:
+    """Counts ``<Bild>...</Bild>`` blocks plus standalone Markdown image links in ``seg_text``."""
+    bild_matches = list(re.finditer(r"<Bild\b[^>]*>[\s\S]*?</Bild>", seg_text, flags=re.IGNORECASE))
+    without_bild = re.sub(r"<Bild\b[^>]*>[\s\S]*?</Bild>", "", seg_text, flags=re.IGNORECASE)
+    md_imgs = re.findall(r"!\[[^\]]*\]\([^)\n]+\)", without_bild)
+    return len(bild_matches) + len(md_imgs)
+
+
+def _enforce_chunk_page_bild_boundaries(text: str, chunk: StandardisationChunk) -> str:
+    """Relocates excess trailing ``<Bild>`` blocks pulled from ``P2`` onto ``P1`` back onto ``P2``.
+
+    When a multi-page Gemma chunk ``[P1, P2]`` causes the model to emit ``P2``'s
+    ``<Bild>`` block(s) before ``((P2))`` (leaving ``P1`` with excess ``<Bild>`` blocks
+    and ``P2`` missing its ``<Bild>`` blocks), deterministically moves the excess
+    trailing ``<Bild>`` block(s) (along with any immediately preceding figure caption)
+    back after ``((P2))`` (under ``P2``'s first heading when present).
+
+    Args:
+        text: Cleaned LLM output for ``chunk``.
+        chunk: Planned ``StandardisationChunk`` containing source ``chunk.text`` and ``pages``.
+
+    Returns:
+        Markdown string with per-page ``<Bild>`` counts restored across chunk page boundaries.
+    """
+    valid_pages = [p for p in chunk.pages if p]
+    if len(valid_pages) < 2 or not text or "<Bild" not in text:
+        return text
+
+    in_segs = split_markdown_pages(chunk.text)
+    in_by_page = {s.page: s.text for s in in_segs if s.page in valid_pages}
+    expected_counts = {p: _count_page_image_blocks(in_by_page.get(p, "")) for p in valid_pages}
+    if sum(expected_counts.values()) == 0:
+        return text
+
+    from backend.services.fibs_postprocess import normalize_heading_page_markers
+
+    norm_text = normalize_heading_page_markers(text)
+    out_segs = split_markdown_pages(norm_text)
+    out_by_page = {s.page: idx for idx, s in enumerate(out_segs) if s.page in valid_pages}
+
+    caption_line_re = re.compile(
+        r"^(?:#{3,6}\s+)?(?:\*\*|_)?(?:Abb(?:ildung)?\.?\s*\d+|Bild\s*\d+|Grafik\s*\d+|"
+        r"Fig(?:ur|ure|\.)?\s*\d+|[MBQ]\s*\d+\b|\d{1,2}\s+[A-ZÄÖÜ])",
+        re.IGNORECASE,
+    )
+
+    relocated_any = False
+    for k in range(len(valid_pages) - 1):
+        p1, p2 = valid_pages[k], valid_pages[k + 1]
+        if p1 not in out_by_page or p2 not in out_by_page:
+            continue
+        idx1, idx2 = out_by_page[p1], out_by_page[p2]
+        p1_text = out_segs[idx1].text
+        p2_text = out_segs[idx2].text
+
+        bilds_p1 = list(re.finditer(r"<Bild\b[^>]*>[\s\S]*?</Bild>", p1_text, flags=re.IGNORECASE))
+        actual_p2 = _count_page_image_blocks(p2_text)
+        excess_p1 = len(bilds_p1) - expected_counts.get(p1, 0)
+        deficit_p2 = expected_counts.get(p2, 0) - actual_p2
+        if excess_p1 <= 0 or deficit_p2 <= 0:
+            continue
+
+        move_n = min(excess_p1, deficit_p2)
+        relocated_units: list[str] = []
+        for m_bild in reversed(bilds_p1[-move_n:]):
+            prefix_trimmed = p1_text[: m_bild.start()].rstrip(" \t\n")
+            line_start = prefix_trimmed.rfind("\n") + 1
+            prev_line = prefix_trimmed[line_start:].strip()
+            if line_start > 0 and caption_line_re.match(prev_line):
+                unit_str = f"{prev_line}\n\n{m_bild.group(0).strip()}"
+                cut_start = line_start
+            else:
+                unit_str = m_bild.group(0).strip()
+                cut_start = m_bild.start()
+            relocated_units.append(unit_str)
+            tail_after = p1_text[m_bild.end() :].lstrip("\n")
+            p1_text = p1_text[:cut_start].rstrip() + ("\n\n" + tail_after if tail_after else "")
+
+        relocated_units.reverse()
+        relocated_block = "\n\n".join(relocated_units)
+        out_segs[idx1].text = re.sub(r"\n{3,}", "\n\n", p1_text.rstrip()) + "\n\n"
+
+        p2_lines = p2_text.splitlines()
+        insert_after_idx = 0
+        first_ne_idx: int | None = None
+        for l_idx in range(1, len(p2_lines)):
+            if p2_lines[l_idx].strip():
+                first_ne_idx = l_idx
+                break
+
+        if first_ne_idx is not None and re.match(r"^#{1,4}\s+", p2_lines[first_ne_idx].strip()):
+            insert_after_idx = first_ne_idx
+            if not relocated_block.lstrip().startswith("#"):
+                for nxt_idx in range(first_ne_idx + 1, len(p2_lines)):
+                    nxt_s = p2_lines[nxt_idx].strip()
+                    if not nxt_s:
+                        continue
+                    if re.match(
+                        r"^####\s+(?:[MBQ]?\d+|Abb|Bild|Grafik|Material)",
+                        nxt_s,
+                        re.IGNORECASE,
+                    ):
+                        insert_after_idx = nxt_idx
+                    break
+        else:
+            p2_src = in_by_page.get(p2, "")
+            m_src_img = re.search(r"<Bild\b|!\[", p2_src, flags=re.IGNORECASE)
+            src_before_img = p2_src[: m_src_img.start()] if m_src_img else ""
+            src_before_body = fc.PAGE_MARKER_START_RE.sub("", src_before_img, count=1).strip()
+            if src_before_body:
+                for l_idx in range(1, len(p2_lines)):
+                    if re.match(r"^#{1,4}\s+", p2_lines[l_idx].strip()):
+                        insert_after_idx = l_idx
+                        break
+
+        head_part = "\n".join(p2_lines[: insert_after_idx + 1]).rstrip()
+        tail_part = "\n".join(p2_lines[insert_after_idx + 1 :]).lstrip("\n")
+        if tail_part:
+            out_segs[idx2].text = f"{head_part}\n\n{relocated_block}\n\n{tail_part}\n"
+        else:
+            out_segs[idx2].text = f"{head_part}\n\n{relocated_block}\n"
+        logger.info(
+            f"Relocated {move_n} excess <Bild> block(s) from page (({p1})) back onto (({p2}))."
+        )
+        relocated_any = True
+
+    if not relocated_any:
+        return text
+    return "".join(s.text for s in out_segs).strip()
 
 
 def _load_custom_rules(task_id: str | None) -> str | None:
@@ -1199,6 +1358,7 @@ def _prepare_standardisation_plan(
     directory_info: dict[str, Any] | None,
     on_progress: Callable[[dict[str, Any]], None] | None,
     custom_rules: str | None = None,
+    neighbor_context: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any] | None, str | None, str, list[StandardisationChunk], bool]:
     """Resolves settings, directory metadata, system prompt, and chunks for standardisation.
 
@@ -1212,6 +1372,7 @@ def _prepare_standardisation_plan(
         directory_info: Optional detected TOC/directory metadata.
         on_progress: Optional progress callback.
         custom_rules: Optional book-specific custom rules string.
+        neighbor_context: Optional external neighbor page context dictionary.
 
     Returns:
         Tuple of ``(resolved_table_max_cells, resolved_directory_info, resolved_custom_rules, system_prompt, chunks, is_single_chunk)``.
@@ -1237,6 +1398,21 @@ def _prepare_standardisation_plan(
         except Exception:
             pass
 
+    if neighbor_context is None and task_id:
+        for cand_nb in (
+            os.path.join(BASE_DIR, "assets", "output", task_id, "neighbor_context.json"),
+            os.path.join(BASE_DIR, "assets", "uploads", "selected", f"{task_id}.pdf.neighbors.json"),
+        ):
+            if os.path.exists(cand_nb):
+                try:
+                    with open(cand_nb, encoding="utf-8") as nbf:
+                        loaded_nb = json.load(nbf)
+                    if isinstance(loaded_nb, dict):
+                        neighbor_context = loaded_nb
+                        break
+                except Exception as nb_err:
+                    logger.debug(f"Could not read neighbor context {cand_nb}: {nb_err}")
+
     resolved_custom_rules = (
         custom_rules if custom_rules is not None else _load_custom_rules(task_id)
     )
@@ -1248,9 +1424,14 @@ def _prepare_standardisation_plan(
         directory_info=directory_info,
         custom_rules=resolved_custom_rules,
     )
-    chunks = build_standardisation_chunks(raw_markdown, chunk_prompt)
+    chunks = build_standardisation_chunks(
+        raw_markdown,
+        chunk_prompt,
+        neighbor_context=neighbor_context,
+    )
     total = len(chunks)
-    single = total == 1
+    has_ext_ctx = bool(chunks and (chunks[0].prev_context or chunks[-1].next_context))
+    single = total == 1 and not has_ext_ctx
     system_prompt = (
         _build_system_prompt(
             ruleset_key,
@@ -1344,6 +1525,7 @@ def standardise_markdown(
     allow_fallback: bool | None = None,
     directory_info: dict[str, Any] | None = None,
     custom_rules: str | None = None,
+    neighbor_context: dict[str, str] | None = None,
 ) -> str:
     """Applies FIBS 09/2025 translation rules to extracted Markdown using Gemma 4.
 
@@ -1363,6 +1545,7 @@ def standardise_markdown(
         allow_fallback: Whether to permit the deterministic fallback if no LLM is available.
         directory_info: Optional pre-loaded directory/TOC metadata dictionary.
         custom_rules: Optional book-specific custom rules string.
+        neighbor_context: Optional external neighbor context dictionary for cropped PDFs.
 
     Returns:
         Standardised and post-processed E-Buch Markdown string.
@@ -1381,6 +1564,7 @@ def standardise_markdown(
             directory_info,
             on_progress,
             custom_rules=custom_rules,
+            neighbor_context=neighbor_context,
         )
     )
     total = len(chunks)
@@ -1435,6 +1619,7 @@ def standardise_markdown(
                 out = _clean_chunk_output(out or "")
                 if not single:
                     out = _trim_to_own_pages(out, chunk)
+                out = _enforce_chunk_page_bild_boundaries(out, chunk)
                 if not out.strip():
                     raise StandardisationError("leere Antwort von Gemma")
                 outputs.append(out)
@@ -1513,6 +1698,7 @@ def standardise_markdown(
         raw_markdown=raw_markdown,
         directory_info=directory_info,
         custom_rules=resolved_custom_rules,
+        ruleset_key=ruleset_key,
     )
 
 
@@ -1531,6 +1717,7 @@ async def standardise_markdown_async(
     allow_fallback: bool | None = None,
     directory_info: dict[str, Any] | None = None,
     custom_rules: str | None = None,
+    neighbor_context: dict[str, str] | None = None,
 ) -> str:
     """Asynchronous counterpart to ``standardise_markdown`` using ``AsyncOpenAI``.
 
@@ -1549,12 +1736,13 @@ async def standardise_markdown_async(
         allow_fallback: Whether to permit the deterministic fallback if no LLM is available.
         directory_info: Optional pre-loaded directory/TOC metadata dictionary.
         custom_rules: Optional book-specific custom rules string.
+        neighbor_context: Optional external neighbor context dictionary for cropped PDFs.
 
     Returns:
         Standardised and post-processed E-Buch Markdown string.
     """
     if standardise_markdown is not _DEFAULT_STANDARDISE_MARKDOWN:
-        res = standardise_markdown(
+        call_kwargs: dict[str, Any] = dict(
             raw_markdown=raw_markdown,
             ruleset_key=ruleset_key,
             image_paths=image_paths,
@@ -1567,6 +1755,12 @@ async def standardise_markdown_async(
             directory_info=directory_info,
             custom_rules=custom_rules,
         )
+        sig_params = inspect.signature(standardise_markdown).parameters
+        if "neighbor_context" in sig_params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig_params.values()
+        ):
+            call_kwargs["neighbor_context"] = neighbor_context
+        res = standardise_markdown(**call_kwargs)
         if inspect.isawaitable(res):
             res = await res
         return res
@@ -1587,6 +1781,7 @@ async def standardise_markdown_async(
         directory_info,
         on_progress,
         custom_rules,
+        neighbor_context,
     )
     total = len(chunks)
 
@@ -1641,6 +1836,7 @@ async def standardise_markdown_async(
                 out = _clean_chunk_output(out or "")
                 if not single:
                     out = _trim_to_own_pages(out, chunk)
+                out = _enforce_chunk_page_bild_boundaries(out, chunk)
                 if not out.strip():
                     raise StandardisationError("leere Antwort von Gemma")
                 outputs.append(out)
@@ -1722,6 +1918,7 @@ async def standardise_markdown_async(
         raw_markdown=raw_markdown,
         directory_info=directory_info,
         custom_rules=resolved_custom_rules,
+        ruleset_key=ruleset_key,
     )
 
 

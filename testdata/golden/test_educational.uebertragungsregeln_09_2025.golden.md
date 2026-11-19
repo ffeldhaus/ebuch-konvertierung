@@ -8,24 +8,24 @@ Das Phänomen der Lichtbrechung (Refraktion) ist die Richtungsänderung einer We
 
 ### Wichtige Grundregeln
 
--	Licht breitet sich im Vakuum mit $c = 299.792 \, \text{km/s}$ aus.
+-	Licht breitet sich im Vakuum mit c = 299.792 km/s aus.
 -	Beim Übergang in ein dichteres Medium verringert sich die Lichtgeschwindigkeit.
--	Der Brechungsindex $n$ beschreibt das Verhältnis der Lichtgeschwindigkeit im Vakuum zu der im Medium.
+-	Der Brechungsindex n beschreibt das Verhältnis der Lichtgeschwindigkeit im Vakuum zu der im Medium.
 
 ### Versuch: Zerlegung durch ein Prisma
 
 Betrachten wir das nachfolgende Experiment zur Dispersion:
 
+#### Abbildung 4.1: Versuchsaufbau zur optischen Dispersion mit einem Glasprisma.
+
 <Bild> Zeichnung:
 Beschreibung mit Bildtext: Versuchsaufbau zur optischen Dispersion mit einem Glasprisma. Ein weißer Lichtstrahl tritt von links in ein Prisma ein und wird beim Austritt in ein Spektrum von Spektralfarben (Rot bis Violett) zerlegt.
 </Bild>
 
-Abbildung 4.1: Versuchsaufbau zur optischen Dispersion mit einem Glasprisma.
-
 ### Merksatz:
 
 <Rahmen>
-Die Abhängigkeit des Brechungsindex $n$ von der Frequenz (bzw. Wellenlänge) des Lichts bezeichnet man als Dispersion. Rotes Licht wird weniger stark gebrochen als blaues Licht, weshalb ein breites Farbspektrum entsteht.
+Die Abhängigkeit des Brechungsindex n von der Frequenz (bzw. Wellenlänge) des Lichts bezeichnet man als Dispersion. Rotes Licht wird weniger stark gebrochen als blaues Licht, weshalb ein breites Farbspektrum entsteht.
 </Rahmen>
 
 ((46))
@@ -34,27 +34,27 @@ Die Abhängigkeit des Brechungsindex $n$ von der Frequenz (bzw. Wellenlänge) de
 
 <Tabelle>
 Symbol	Bedeutung	Typischer Wert / Einheit
-$c$	Lichtgeschwindigkeit im Vakuum	$2.9979 \times 10^8 \, \text{m/s}$
-$n_{\text{Glas}}$	Brechungsindex von Kronglas	1.51 - 1.54
-$\lambda$	Wellenlänge des sichtbaren Lichts	380 - 780 nm
+c	Lichtgeschwindigkeit im Vakuum	2.9979 \times 10^8 m/s
+n_{Glas}	Brechungsindex von Kronglas	1.51 - 1.54
+~l	Wellenlänge des sichtbaren Lichts	380 - 780 nm
 </Tabelle>
 
 Im optischen Dichte-Experiment{1} wurde nachgewiesen, dass Licht beim Übergang von Luft in Wasser gebrochen wird. Dieser Effekt lässt sich mathematisch durch das Snelliussche Brechungsgesetz beschreiben{2}.
 
 #### Mathematische Formeln im Fließtext:
 
-Hier ist eine inline Formel: $n_1 \cdot \sin(\alpha) = n_2 \cdot \sin(\beta)$
+Hier ist eine inline Formel: n_1 \cdot \sin(~a) = n_2 \cdot \sin(~b)
 
 Hier ist ein MathML-Render-Beispiel für dieselbe Formel:
 
-$$n_1 \cdot \sin(\alpha) = n_2 \cdot \sin(\beta)$$
+n_1 \cdot \sin(~a) = n_2 \cdot \sin(~b)
 
 Hier ist eine komplexe Blockgleichung:
 
-$$\int_{-\infty}^{\infty} e^{-x^2} \, dx = \sqrt{\pi + x^2 - 1}$$
+\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{~p + x^2 - 1}
 
 <Anmerkung> 1 Optisches Dichte-Experiment: Erstmalig systematisch beschrieben von Willebrord Snellius im Jahr 1621. </Anmerkung>
-<Anmerkung> 2 Snelliussche Brechungsgesetz: $n_1 \cdot \sin(\alpha) = n_2 \cdot \sin(\beta)$. </Anmerkung>
+<Anmerkung> 2 Snelliussche Brechungsgesetz: n_1 \cdot \sin(~a) = n_2 \cdot \sin(~b). </Anmerkung>
 
 ((47))
 
@@ -85,9 +85,9 @@ Aufgabenstellung für die Arbeitsgruppen:
 
 <Rahmen>
 _Arbeitsauftrag:_
-○ [leicht] Aufgabe 1: Bestimmen Sie die Lichtgeschwindigkeit in Glas.
-◐ [mittel] Aufgabe 2: Berechnen Sie den Grenzwinkel der Totalreflexion für Glas.
-● [schwer] Aufgabe 3: Skizzieren Sie den Strahlengang für ein gleichschenkliges Prisma.
+[leicht] Aufgabe 1: Bestimmen Sie die Lichtgeschwindigkeit in Glas.
+[mittel] Aufgabe 2: Berechnen Sie den Grenzwinkel der Totalreflexion für Glas.
+[schwer] Aufgabe 3: Skizzieren Sie den Strahlengang für ein gleichschenkliges Prisma.
 </Rahmen>
 
 Ergänzende Beobachtungen zu optischen Grenzflächeneffekten:
@@ -118,6 +118,6 @@ Die Totalreflexion tritt auf, wenn Licht von einem optisch dichteren in ein dün
 
 <Rahmen>
 _Fortgeschrittener Arbeitsauftrag:_
-◐ [mittel] Aufgabe 4: Erklären Sie den Unterschied zwischen Reflexion und Absorption.
-● [schwer] Aufgabe 5: Leiten Sie den Zusammenhang zwischen Absorption und Brechungsindex her.
+[mittel] Aufgabe 4: Erklären Sie den Unterschied zwischen Reflexion und Absorption.
+[schwer] Aufgabe 5: Leiten Sie den Zusammenhang zwischen Absorption und Brechungsindex her.
 </Rahmen>

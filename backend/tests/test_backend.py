@@ -1152,9 +1152,12 @@ def test_docx_page_bookmarks():
     xmls = [p._p.xml for p in doc.paragraphs]
     assert any('w:name="page_45"' in x for x in xmls)
     assert any('w:name="page_46"' in x for x in xmls)
-    # Verify page break was inserted before ((46))
+    # FIBS 09/2025 §5.4.1: no hard Word page breaks before ((num)); 1 blank line precedes ((num))
     full_xml = "".join(xmls)
-    assert 'w:type="page"' in full_xml
+    assert 'w:type="page"' not in full_xml
+    p_texts = [p.text for p in doc.paragraphs]
+    idx_46 = p_texts.index("((46))")
+    assert idx_46 > 0 and p_texts[idx_46 - 1] == ""
 
 def test_in_memory_pdf_render_cache():
     from backend.services.pdf_render_service import render_single_page_bytes, _PAGE_BYTES_CACHE
@@ -1454,18 +1457,25 @@ def test_docx_export_formatting_rules(tmp_path):
 
     doc = Document(docx_file)
 
-    # 1. No empty paragraph spacers after headings or between paragraphs
+    # 1. FIBS 09/2025 §5.5: No empty paragraph immediately after headings, 1 empty paragraph before new section heading
     paragraph_texts = [p.text for p in doc.paragraphs]
-    for idx, p_text in enumerate(paragraph_texts):
-        assert p_text.strip() != "", f"Empty paragraph found at index {idx}"
+    idx_h1 = paragraph_texts.index("1. Hauptkapitel")
+    assert paragraph_texts[idx_h1 + 1] != "", "Must not insert blank line after heading"
+    idx_h2 = paragraph_texts.index("1.1 Unterkapitel")
+    assert paragraph_texts[idx_h2 - 1] == "", "Expected 1 blank line before new section heading"
+    assert paragraph_texts[idx_h2 + 1] != "", "Must not insert blank line after heading"
 
-    # 2. Check no underline on runs for _hervorgehobenem_
+    # 2. Check Word bold (without underline) on inner run of _hervorgehobenem_
+    found_bold_highlight = False
     for p in doc.paragraphs:
         for run in p.runs:
-            if "_hervorgehobenem_" in run.text:
+            if "hervorgehobenem" in run.text:
                 assert run.underline is not True, "Highlighted text must not be underlined in Word"
+                assert run.bold is True, "Inner run of _Wort_ must be bold in Word"
+                found_bold_highlight = True
             if "*fettem*" in run.text:
                 assert run.bold is True
+    assert found_bold_highlight
 
     # 3. <Rahmen>...</Rahmen> is rendered in a single paragraph with manual line breaks
     rahmen_paragraphs = [p for p in doc.paragraphs if "<Rahmen>" in p.text]

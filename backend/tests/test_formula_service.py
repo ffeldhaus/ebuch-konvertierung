@@ -124,8 +124,9 @@ def test_coalesce_split_equations_reactions_and_html_entities():
     assert "$d < 15\\,\\text{cm}$" in res
     assert "$d_{\\text{rechts}} > d_{\\text{links}}$" in res
     assert "$v = 50\\,\\%$" in res
-    assert "$90^\\circ$" in res
-    assert "$80\\,^\\circ\\text{C}$" in res
+    assert "90°" in res
+    assert "80 °C" in res
+    assert "^\\circ" not in res
     assert "$v_{\\text{hin}} = v_{\\text{rück}}$" in res
     assert "$K_c \\approx 4{,}0$" in res
     assert "$E_{\\text{kin,max}} = h \\cdot f - W_A = e \\cdot U_G$" in res
@@ -144,6 +145,71 @@ def test_strip_hallucinated_ocr_pseudo_formulas():
     assert "XYZ_1A_2" not in res
     assert "$H_2SO_4$" in res
     assert "$CH_3COOH$" in res
+
+
+def test_plain_degrees_temperatures_and_percentages_both_modes():
+    """Verifies 3b: temperatures, angles, and percentages never emit ^\\circ and follow FIBS spacing."""
+    raw = (
+        "Siedepunkt bei $80\\,^\\circ\\text{C}$, Stickstoff bei -196°C und Papier bei 451°F.\n"
+        "Drehung um etwa 45 ° um die Achse in die $90^\\circ$-Stellung bei 0 ° N und $14{,}1^\\circ$.\n"
+        "Anteil 50%, Lösung $50\\,\\%$, aber 5%-Klausel und 100%ig bleiben zusammen."
+    )
+    for mode in (False, True):
+        res = standardize_formulas(raw, fibs_mode=mode)
+        assert "^\\circ" not in res
+        assert "80 °C" in res
+        assert "-196 °C" in res
+        assert "451 °F" in res
+        assert "etwa 45° um" in res
+        assert "90°-Stellung" in res
+        assert "0° N" in res
+        assert "14,1°" in res
+        assert "Anteil 50 %," in res
+        assert "Lösung 50 %," in res
+        assert "5%-Klausel" in res
+        assert "100%ig" in res
+
+
+def test_fibs_mode_bare_latex_tilde_greek_micro_and_arrows():
+    """Verifies 3a & 7a: fibs_mode=True emits bare Augenbit-LaTeX without $...$, tilde Greek, and FIBS arrows."""
+    raw = (
+        "Dosis: 0,001 $\\mu$g bzw. 0,001µg und Spaltbreite 2 $\\mu$m bzw. 2µm sowie $1{,}67\\,\\mu\\text{m}$.\n"
+        "Beugung: $\\Delta s = d \\cdot \\sin(\\alpha_1) = k \\cdot \\lambda$ und $\\gamma + \\beta = \\delta$.\n"
+        "$$\\text{CH}_3\\text{COOH} + \\text{C}_2\\text{H}_5\\text{OH} \\rightleftharpoons \\text{CH}_3\\text{COOC}_2\\text{H}_5 + \\text{H}_2\\text{O}$$\n"
+        "$$2\\,\\text{SO}_2\\text{(g)} + \\text{O}_2\\text{(g)} \\xrightarrow{\\text{Kat., } 450\\,^\\circ\\text{C}} 2\\,\\text{SO}_3\\text{(g)}$$\n"
+        "Signalweg: $A \\xrightarrow{\\text{ATP} \\rightarrow \\text{ADP}} B \\longrightarrow C$."
+    )
+    res = standardize_formulas(raw, fibs_mode=True)
+    assert "$" not in res
+    assert "\\text{" not in res
+    assert "{,}" not in res
+    assert "\\," not in res
+    assert "0,001 ~mg bzw. 0,001 ~mg" in res
+    assert "2 ~mm bzw. 2 ~mm sowie 1,67 ~mm" in res
+    assert "~D s = d \\cdot \\sin(~a_1) = k \\cdot ~l" in res
+    assert "~g + ~b = ~d" in res
+    assert "CH_3COOH + C_2H_5OH \\lra CH_3COOC_2H_5 + H_2O" in res
+    assert "2 SO_2(g) + O_2(g) \\xra{Kat., 450 °C} 2 SO_3(g)" in res
+    assert "A \\xra{ATP \\to ADP} B \\to C" in res
+
+
+def test_tilde_greek_spelled_out_words_normalized_to_fibs_single_letter():
+    """Verifies 14d: half-converted '~alpha', '~beta', '~Omega' tokens map to '~a', '~b', '~W'."""
+    sample = (
+        "Messung an ~alpha-Strahlung, ~beta-Teilchen, ~gamma-Quanten, ~Delta-Werten, "
+        "~mu-Mesonen und ~Omega-Widerstand (nicht ~betrachten oder `~beta` oder https://example.org/~alpha/doc)."
+    )
+    out = standardize_formulas(sample, fibs_mode=True)
+    assert "~a-Strahlung" in out
+    assert "~b-Teilchen" in out
+    assert "~g-Quanten" in out
+    assert "~D-Werten" in out
+    assert "~m-Mesonen" in out
+    assert "~W-Widerstand" in out
+    assert "~betrachten" in out
+    assert "`~beta`" in out
+    assert "https://example.org/~alpha/doc" in out
+
 
 
 

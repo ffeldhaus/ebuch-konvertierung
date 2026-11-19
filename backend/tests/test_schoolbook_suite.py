@@ -258,7 +258,8 @@ def test_schoolbook_golden_files_exist_and_pass_a11y_linter_100_percent(
         assert f"(({p_num}))" in raw_md
         assert f"(({p_num}))" in ueb_md
 
-    # Verify 100/100 FIBS 09/2025 accessibility linter compliance
+    # Verify 100/100 FIBS 09/2025 accessibility linter compliance and zero $-math delimiters
+    assert "$" not in ueb_md
     report = lint_markdown(ueb_md)
     assert report.score == 100, f"Linter issues in {base_name}: {report.issues}"
     assert report.passed is True
@@ -364,14 +365,17 @@ def test_sek2_chemie_and_biologie_fibs_challenges():
     assert "[Gefahrstoffsymbol: Achtung]" in chem_md
 
     # Chemical equations with equilibrium arrows, reaction conditions, ion charges & oxidation numbers
-    assert "\\rightleftharpoons" in chem_md
-    assert "\\xrightarrow{\\text{Kat., } 450\\,^\\circ\\text{C}}" in chem_md
-    assert "\\overset{+\\text{VI}}{\\text{Cr}}_2\\overset{-\\text{II}}{\\text{O}}_7^{2-}" in chem_md
+    assert "$" not in chem_md
+    assert "\\lra" in chem_md
+    assert "\\xra{Kat., 450 °C}" in chem_md
+    assert "\\overset{+VI}{Cr}_2\\overset{-II}{O}_7^{2-}" in chem_md
 
     bio_path = os.path.join(GOLDEN_DIR, "sek2_biologie.uebertragungsregeln_09_2025.golden.md")
     with open(bio_path, "r", encoding="utf-8") as f:
         bio_md = f.read()
 
+    assert "$" not in bio_md
+    assert "~mmol/min" in bio_md
     assert "v = \\frac{v_{\\max} \\cdot [S]}{K_M + [S]}" in bio_md
     # Page-spanning table merged into a single <Tabelle> on page 412 before ((413))
     assert bio_md.count("<Tabelle>") == 1

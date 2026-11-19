@@ -465,20 +465,26 @@ def compute_change_summary(
     }
 
 
-def compare_lint_reports(original: str, revised: str) -> dict[str, Any]:
+def compare_lint_reports(
+    original: str,
+    revised: str,
+    *,
+    custom_rules: str | None = None,
+) -> dict[str, Any]:
     """Compare E-Buch accessibility linter results of original vs. revised transfer.
 
     Args:
         original: Automatic E-Buch transfer Markdown.
         revised: Manually corrected E-Buch transfer Markdown.
+        custom_rules: Optional Buchkonferenz / document-specific ruleset text.
 
     Returns:
         Dictionary containing original/revised scores and fixed/introduced rule counts.
     """
     from backend.services.a11y_linter import lint_markdown
 
-    rep_o = lint_markdown(original)
-    rep_r = lint_markdown(revised)
+    rep_o = lint_markdown(original, custom_rules=custom_rules)
+    rep_r = lint_markdown(revised, custom_rules=custom_rules)
     rules_o = Counter(i.rule for i in rep_o.issues)
     rules_r = Counter(i.rule for i in rep_r.issues)
     fixed = {rule: cnt - rules_r.get(rule, 0) for rule, cnt in rules_o.items() if cnt > rules_r.get(rule, 0)}

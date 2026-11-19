@@ -1,15 +1,15 @@
-import os
-import sys
-import pytest
-from unittest.mock import patch, MagicMock
+"""Unit tests for Infinity-Parser2-Flash extraction and layout fusion."""
 
+import os
+from unittest.mock import MagicMock, patch
+
+from backend.services.custom_benchmark_service import run_single_engine_extraction
 from backend.services.extraction_postprocess import (
     clean_markdown_fences,
     fuse_vlm_page_with_docling,
 )
-from backend.services.custom_benchmark_service import run_single_engine_extraction
 from backend.services.fibs_postprocess import post_process_structure
-from scripts.run_benchmark import run_infinity_extraction, BENCHMARK_LICENSE_TAGS
+from scripts.run_benchmark import BENCHMARK_LICENSE_TAGS, run_infinity_extraction
 
 
 def test_clean_markdown_fences():
@@ -63,6 +63,7 @@ def test_run_infinity_extraction_success(tmp_path):
 
 
 def test_extract_pdf_pictures_layout_aware(tmp_path):
+    """Verifies layout-aware PDF picture extraction on test_educational.pdf."""
     from backend.services.infinity_parser_extractor import extract_pdf_pictures_layout_aware
 
     img_out = str(tmp_path / "extracted_imgs")
@@ -138,20 +139,29 @@ def test_post_process_page_markdown_running_headers_and_word_hyphenation():
     assert "((85))" in processed
 
 
+def test_infinity_prompt_preserves_source_language():
+    """Verifies PROMPT_DOC2MD explicitly instructs preserving the original document language."""
+    from backend.services.infinity_parser_extractor import PROMPT_DOC2MD
+
+    assert "Markdown" in PROMPT_DOC2MD
+    assert "original language" in PROMPT_DOC2MD.lower()
+    assert "without translating" in PROMPT_DOC2MD.lower()
+
+
 def test_post_process_page_markdown_remaining_images_and_marker_injection():
-    """Verifies that remaining images without captions are injected cleanly."""
+    """Verifies that remaining images without captions are injected immediately below top headings."""
     # With pre-existing page marker
     raw_with_marker = "((10))\n\n# Kapitel 1\nEinleitungstext."
     res = fuse_vlm_page_with_docling(raw_with_marker, ["standalone1.png", "standalone2.png"], phys_num=10)
     assert "((10))" in res
-    assert "![](images/standalone1.png)" in res
+    assert res.index("# Kapitel 1") < res.index("![](images/standalone1.png)") < res.index("Einleitungstext.")
     assert "![](images/standalone2.png)" in res
 
     # Without pre-existing marker
     raw_no_marker = "# Kapitel 2\nWeiterer Text."
     res2 = fuse_vlm_page_with_docling(raw_no_marker, ["standalone3.png"], phys_num=11)
     assert res2.startswith("((11))")
-    assert "![](images/standalone3.png)" in res2
+    assert res2.index("# Kapitel 2") < res2.index("![](images/standalone3.png)") < res2.index("Weiterer Text.")
 
     # Inline heading newline expansion in clean_markdown_fences
     inline_headings = "Paragraph text. ## Subheading\nAnother text. ### Deep heading"
@@ -161,11 +171,7 @@ def test_post_process_page_markdown_remaining_images_and_marker_injection():
 
 
 def test_infinity_unextracted_image_placeholder_and_fake_caption_bild():
-    """
-    Regression test for TODO:
-    - 'Infinity-Platzhalter ! [Chemical Structure](#) ergeben leere <Bild>-Blöcke'
-    - 'Bildunterschriften ohne extrahiertes Bild werden zu Schein-Bildern'
-    """
+    """Verifies handling of unextracted image placeholders and fake caption Bild blocks."""
     # 1. Spaced placeholder '! [Chemical Structure](#)' with an extracted image maps to ![](images/...)
     raw_with_img = "## Reaktionsmechanismus\n\n! [Chemical Structure](#)\n\nAbb. 1: Strukturformel."
     res_with_img = fuse_vlm_page_with_docling(raw_with_img, ["chem_1.png"], phys_num=12)

@@ -18,6 +18,7 @@ from backend.services.fibs_postprocess import post_process_structure, split_mark
 from backend.services.llm_service import (
     StandardisationAborted,
     StandardisationError,
+    _build_system_prompt,
     _trim_to_own_pages,
     build_chunk_user_message,
     build_standardisation_chunks,
@@ -366,4 +367,152 @@ def test_four_page_document_splits_into_two_page_chunks_and_recovers_dropped_rah
     assert recovered.count("</Rahmen>") == 2
     assert "gegenüber vom Park" in recovered
     assert "überqueren" in recovered
+
+
+def test_real_system_prompt_with_custom_rules_keeps_eight_normal_pages_whole():
+    """Verifies that the default 16k token budget handles real system prompt + ~2.5k custom rules
+    without splitting 5k-6k char pages (with <Bild> blocks) into sub-page parts.
+    """
+    custom_rules = "\n".join(
+        f"- Zusatzregel {i}: Formatiere Aufgaben und Merksätze der Mechanik einheitlich nach Vorgabe."
+        for i in range(1, 31)
+    )
+    assert 2200 <= len(custom_rules) <= 3000
+
+    system_prompt = _build_system_prompt(
+        "uebertragungsregeln_09_2025",
+        None,
+        6,
+        chunked=True,
+        custom_rules=custom_rules,
+    )
+
+    para = (
+        "Bei einer gleichmäßig beschleunigten Bewegung nimmt die Geschwindigkeit proportional zur Zeit zu. "
+        "Der zurückgelegte Weg wächst quadratisch mit der verstrichenen Zeitspanne an. "
+    )
+    bild_block = (
+        "<Bild> Diagramm:\n"
+        "Beschreibung: Zeit-Geschwindigkeits-Diagramm einer linearen Beschleunigung.\n"
+        "x-Achse: Zeit t in s.\n"
+        "y-Achse: Geschwindigkeit v in m/s.\n"
+        "</Bild>"
+    )
+    pages_dict = {}
+    for idx, p_num in enumerate(range(62, 70)):
+        repeat_n = 28 if idx % 2 == 0 else 32
+        body = f"## {idx + 1}.1 Kinematik und Dynamik (Teil {idx + 1})\n\n" + (para * repeat_n) + "\n\n" + bild_block
+        assert 4800 <= len(body) <= 6200
+        pages_dict[p_num] = body
+
+    md = _book(pages_dict)
+    chunks = build_standardisation_chunks(md, system_prompt=system_prompt)
+    assert len(chunks) >= 4
+    assert all(c.part is None for c in chunks)
+    assert "".join(c.text for c in chunks) == md
+
+
+def test_chunk_page_boundary_bild_guard_relocates_pulled_bild_to_p2(monkeypatch):
+    """Verifies 5b: excess trailing <Bild> blocks pulled by Gemma from P2 onto P1
+    are relocated back after ((P2)) under P2's first heading.
+    """
+    raw_2pages = (
+        "((302))\n\n"
+        "## 6.2 Regelung physiologischer Größen\n\n"
+        "Fließtext auf Seite 302.\n\n"
+        "<Bild> Grafik:\nBeschreibung: Erstes Diagramm auf Seite 302.\n</Bild>\n\n"
+        "((303))\n\n"
+        "### Material: Reaktionskette\n\n"
+        "<Bild> Strukturdiagramm:\nBeschreibung: Zweites Diagramm auf Seite 303.\n</Bild>\n\n"
+        "Erläuterungstext auf Seite 303.\n"
+    )
+
+    class PulledBildClient(RecordingClient):
+        pass
+
+    client = PulledBildClient()
+
+    def create(**kwargs):
+        client.calls.append(kwargs)
+        pulled_out = (
+            "((302))\n\n"
+            "## 6.2 Regelung physiologischer Größen\n\n"
+            "Fließtext auf Seite 302.\n\n"
+            "<Bild> Grafik:\nBeschreibung: Erstes Diagramm auf Seite 302.\n</Bild>\n\n"
+            "#### M2 Reaktionsschema\n\n"
+            "<Bild> Strukturdiagramm:\nBeschreibung: Zweites Diagramm auf Seite 303.\n</Bild>\n\n"
+            "((303))\n\n"
+            "### Material: Reaktionskette\n\n"
+            "Erläuterungstext auf Seite 303.\n"
+        )
+        return [_Chunk(pulled_out)]
+
+    client.chat.completions.create = create
+    monkeypatch.setattr(llm, "start_rapid_mlx", lambda: client)
+
+    res = standardise_markdown(raw_2pages, table_max_cells=0)
+    segs = split_markdown_pages(res)
+    by_page = {s.page: s.text for s in segs if s.page}
+    assert by_page["302"].count("<Bild>") == 1
+    assert "Erstes Diagramm auf Seite 302." in by_page["302"]
+    assert "Zweites Diagramm auf Seite 303." not in by_page["302"]
+    assert by_page["303"].count("<Bild>") == 1
+    assert "Zweites Diagramm auf Seite 303." in by_page["303"]
+    # Placed under P2's first heading ('### Material: Reaktionskette')
+    assert by_page["303"].index("### Material: Reaktionskette") < by_page["303"].index("<Bild>")
+
+
+def test_external_neighbor_context_populates_outer_chunks_and_syncs_sidecar(monkeypatch, tmp_path):
+    """Verifies 1d: external neighbor_context populates chunks[0].prev_context and
+    chunks[-1].next_context (capped to CONTEXT_CHAR_LIMIT) and syncs .neighbors.json in main.py.
+    """
+    import json
+
+    import backend.main as main_mod
+
+    long_prev = "Vorheriger Absatz. " * 300
+    long_next = "Folgender Absatz. " * 300
+    nb_ctx = {
+        "prev_page": "44",
+        "prev_text": long_prev,
+        "next_page": "47",
+        "next_text": long_next,
+    }
+    md = _book({45: "Inhalt auf Seite 45.", 46: "Inhalt auf Seite 46."})
+    chunks = build_standardisation_chunks(md, system_prompt="S" * 200, neighbor_context=nb_ctx)
+    assert len(chunks) == 1
+    assert chunks[0].prev_page == "44"
+    assert chunks[0].next_page == "47"
+    assert 0 < len(chunks[0].prev_context) <= llm.CONTEXT_CHAR_LIMIT
+    assert 0 < len(chunks[0].next_context) <= llm.CONTEXT_CHAR_LIMIT
+
+    client = RecordingClient()
+    monkeypatch.setattr(llm, "start_rapid_mlx", lambda: client)
+    out = standardise_markdown(md, table_max_cells=0, neighbor_context=nb_ctx)
+    sent_user = client.calls[0]["messages"][1]["content"]
+    assert "[KONTEXT: VORHERIGE SEITE" in sent_user
+    assert "[KONTEXT: FOLGENDE SEITE" in sent_user
+    assert "Inhalt auf Seite 45." in out
+    assert "Vorheriger Absatz." not in out
+
+    # Verify main._load_or_sync_neighbor_context copies selected/<id>.pdf.neighbors.json -> task_dir/neighbor_context.json
+    up_dir = tmp_path / "uploads"
+    out_dir = tmp_path / "output"
+    sel_dir = up_dir / "selected"
+    sel_dir.mkdir(parents=True)
+    out_dir.mkdir(parents=True)
+    monkeypatch.setattr(main_mod, "UPLOAD_DIR", str(up_dir))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", str(out_dir))
+
+    sel_pdf = sel_dir / "task-nb-1.pdf"
+    sel_pdf.write_bytes(b"%PDF-1.4")
+    (sel_dir / "task-nb-1.pdf.neighbors.json").write_text(
+        json.dumps({"prev_page": "10", "prev_text": "Ende Seite 10."}),
+        encoding="utf-8",
+    )
+    synced = main_mod._load_or_sync_neighbor_context("task-nb-1")
+    assert synced == {"prev_page": "10", "prev_text": "Ende Seite 10."}
+    assert (out_dir / "task-nb-1" / "neighbor_context.json").exists()
+
+
 

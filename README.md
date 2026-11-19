@@ -98,8 +98,8 @@ npm start
 
 Or run them in two separate terminals:
 ```bash
-# Terminal 1 – FastAPI Backend (port 8000)
-.venv/bin/uvicorn backend.main:app --reload --port 8000
+# Terminal 1 – FastAPI Backend (port 8000; without --reload so code edits never abort active conversions)
+.venv/bin/uvicorn backend.main:app --port 8000
 
 # Terminal 2 – Vite Frontend (port 3000)
 npm run dev

@@ -63,6 +63,10 @@ Am nächsten Morgen glitzerte der nasse Schlick in der Wintersonne, und die Seev
 
 ### Aufgabe 2: Hervorhebungen bestimmen (fett, kursiv, unterstrichen)
 
+<Anmerkung>
+In der folgenden Aufgabe bedeuten: *Wort* = fett, %Wort% = kursiv, #Wort# = unterstrichen.
+</Anmerkung>
+
 Bestimme in den drei Beispielsätzen die Wortart der fett gedruckten Wörter, die Funktion der kursiv gesetzten Ausdrücke und das Satzglied der unterstrichenen Wortgruppen:
 a) Der *erfahrene* Kapitän steuert das Rettungsboot %trotz der Dunkelheit% #durch die enge Fahrrinne#.
 b) Viele *wachsame* Inselbewohner sichern %vor dem nahenden Hochwasser% #alle Fenster und Türen#.

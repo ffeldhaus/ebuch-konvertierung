@@ -7,6 +7,7 @@ import tempfile
 from backend.services.extraction_postprocess import (
     apply_extraction_postprocess,
     associate_image_captions,
+    clean_duplicate_itemization,
     clean_markdown_fences,
     clean_running_headers_and_footers,
     convert_html_tables_to_markdown,
@@ -754,6 +755,676 @@ def test_vlm_diagram_prompt_and_custom_rules_prompt_strengthening():
     assert "##### Aufgaben" in block
     assert "#### M1" in block
     assert "#### Stichwort" in block
+
+
+def test_running_footer_with_internal_dash_and_pipe_is_stripped_with_trailing_captions():
+    """Verifies stripping of running footers with internal dashes and pipe separators,
+    including when 1-2 figure caption lines trail behind the footer and across pages.
+    """
+    footer = "Mechanik – Energieerhaltung | 43"
+    raw_vlm = (
+        "## 3.2 Erhaltungssatz der mechanischen Energie\n\n"
+        "Kinetische Energie und potenzielle Energie wandeln sich ineinander um.\n\n"
+        "Berechne die Differenz 100 - 43 als Übungswert für die Messreihe.\n\n"
+        "Für ein abgeschlossenes System bleibt die Gesamtenergie konstant.\n\n"
+        "Alle Reibungsverluste werden im idealisierten Modell vernachlässigt.\n\n"
+        f"{footer}\n\n"
+        "Abbildung 3.1: Pendelversuch zur Umwandlung von Lage- und Bewegungsenergie.\n\n"
+        "Abbildung 3.2: Energieflussdiagramm des Fadenpendels."
+    )
+    fused = fuse_vlm_page_with_docling(raw_vlm, [], phys_num=43)
+    assert footer not in fused
+    assert "Berechne die Differenz 100 - 43" in fused
+    assert "Abbildung 3.1: Pendelversuch" in fused
+    assert "Abbildung 3.2: Energieflussdiagramm" in fused
+
+    pages_md = (
+        "((41))\n\nErster Absatz.\n\nZweiter Absatz.\n\nDritter Absatz.\n\n"
+        "41 | Mechanik – Energieerhaltung\n\n"
+        "Abbildung 3.0: Einstiegsversuch.\n\n"
+        "((42))\n\nVierter Absatz.\n\nFünfter Absatz.\n\nSechster Absatz.\n\n"
+        "Mechanik – Energieerhaltung | 42\n\n"
+        "Abbildung 3.1: Zwischenstand.\n\n"
+        "Abbildung 3.2: Vergleichsmessung.\n\n"
+        "((43))\n\nSiebter Absatz.\n\nAchter Absatz.\n\nNeunter Absatz.\n\n"
+        "Mechanik – Energieerhaltung – 43"
+    )
+    cleaned = clean_running_headers_and_footers(pages_md)
+    assert "Mechanik – Energieerhaltung" not in cleaned
+    assert "Abbildung 3.0: Einstiegsversuch." in cleaned
+    assert "Abbildung 3.1: Zwischenstand." in cleaned
+    assert "Abbildung 3.2: Vergleichsmessung." in cleaned
+
+
+def test_clean_duplicate_itemization_reorders_swapped_column_tasks_and_preserves_normal_groups():
+    """Verifies Step 7 reorders column-swapped numbered task runs (4..10 + intro + 1..3 -> intro + 1..10)
+    while leaving separate normal 1..2 + 1..2 exercise groups untouched.
+    """
+    swapped_md = (
+        "((65))\n\n"
+        "## B Aufgaben zur Wärmelehre\n\n"
+        "4 Berechne die benötigte Wärmemenge für 2 kg Wasser.\n\n"
+        "5 Vergleiche die spezifischen Wärmekapazitäten von Kupfer und Eisen.\n"
+        "6 Erkläre den Temperaturverlauf im Mischkalorimeter.\n"
+        "7 Zeichne ein Temperatur-Zeit-Diagramm der Abkühlung.\n"
+        "8 Bestimme den Siedepunkt bei vermindertem Druck.\n"
+        "9 Beschreibe den Energieübertrag durch Wärmestrahlung.\n"
+        "10 Formuliere eine Hypothese zum Schmelzvorgang.\n\n"
+        "Bearbeite die folgenden Grundaufgaben mithilfe der Stoffwerttabelle.\n\n"
+        "1 Nenne die Einheit der thermischen Energie.\n\n"
+        "2 Lies die Wärmekapazität von Aluminium ab.\n"
+        "3 Ordne die Materialien nach ihrer Wärmeleitfähigkeit.\n\n"
+        "## C Weitere Übungen\n\n"
+        "1 Erste einfache Übungsaufgabe.\n"
+        "2 Zweite einfache Übungsaufgabe.\n\n"
+        "1 Nächste kurze Kontrollfrage.\n"
+        "2 Zweite kurze Kontrollfrage.\n"
+    )
+    cleaned = clean_duplicate_itemization(swapped_md)
+    assert cleaned.index("Bearbeite die folgenden Grundaufgaben") < cleaned.index("1 Nenne die Einheit")
+    last_pos = cleaned.index("Bearbeite die folgenden Grundaufgaben")
+    for expected in (
+        "1 Nenne die Einheit",
+        "2 Lies die Wärmekapazität",
+        "3 Ordne die Materialien",
+        "4 Berechne die benötigte",
+        "5 Vergleiche die spezifischen",
+        "6 Erkläre den Temperaturverlauf",
+        "7 Zeichne ein Temperatur-Zeit-Diagramm",
+        "8 Bestimme den Siedepunkt",
+        "9 Beschreibe den Energieübertrag",
+        "10 Formuliere eine Hypothese",
+    ):
+        pos = cleaned.index(expected)
+        assert pos > last_pos, f"Expected '{expected}' after previous item"
+        last_pos = pos
+
+    c_tail = cleaned[cleaned.index("## C Weitere Übungen") :]
+    assert (
+        "1 Erste einfache Übungsaufgabe.\n2 Zweite einfache Übungsaufgabe.\n\n"
+        "1 Nächste kurze Kontrollfrage.\n2 Zweite kurze Kontrollfrage."
+    ) in c_tail
+
+
+def test_foreign_language_hallucination_guard_rebuilds_from_pdf_blocks():
+    """Verifies 1a: English VLM hallucination on a German PDF page is discarded and rebuilt in reading order."""
+    docling_layout = {
+        "text_blocks_by_page": {
+            0: [
+                {
+                    "type": "section_header",
+                    "text": "Wärmeleitung und Konvektion in Gebäuden",
+                    "page_idx": 0,
+                    "bbox_1000": [80, 90, 760, 130],
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "Thermische Energie strömt stets von Bereichen höherer Temperatur zu Bereichen "
+                        "niedrigerer Temperatur durch Wärmeleitung, Konvektion und Wärmestrahlung."
+                    ),
+                    "page_idx": 0,
+                    "bbox_1000": [80, 160, 470, 420],
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "Moderne Wärmedämmverbundsysteme reduzieren den Wärmedurchgangskoeffizienten "
+                        "von Außenwänden erheblich und senken den jährlichen Heizenergiebedarf."
+                    ),
+                    "page_idx": 0,
+                    "bbox_1000": [510, 160, 900, 420],
+                },
+            ]
+        }
+    }
+    hallucinated_vlm = (
+        "![](images/thermo_0.png)\n\n"
+        "Elephants are large herbivorous mammals native to sub-Saharan Africa and Southeast Asia. "
+        "Aristotle was an ancient Greek philosopher and polymath whose writings covered metaphysics."
+    )
+    fused = fuse_vlm_page_with_docling(
+        hallucinated_vlm,
+        page_images=[],
+        phys_num=58,
+        docling_layout=docling_layout,
+        page_idx=0,
+    )
+    assert "Elephants" not in fused
+    assert "Aristotle" not in fused
+    assert "## Wärmeleitung und Konvektion in Gebäuden" in fused
+    assert "Wärmedämmverbundsysteme reduzieren" in fused
+    assert "![](images/thermo_0.png)" in fused
+    assert fused.index("## Wärmeleitung und Konvektion") < fused.index("![](images/thermo_0.png)")
+
+
+def test_missing_column_and_top_title_recovery_without_loop():
+    """Verifies 1a: missing columns, tasks, and top titles are recovered in reading order even when had_loop is False."""
+    docling_layout = {
+        "text_blocks_by_page": {
+            0: [
+                {
+                    "type": "title",
+                    "text": "Mechanische Schwingungen von Fadenpendeln",
+                    "page_idx": 0,
+                    "bbox_1000": [80, 85, 780, 125],
+                },
+                {
+                    "type": "text",
+                    "text": "Bei kleinen Auslenkwinkeln verläuft die Rückstellkraft näherungsweise proportional zur Auslenkung.",
+                    "page_idx": 0,
+                    "bbox_1000": [80, 160, 470, 380],
+                },
+                {
+                    "type": "text",
+                    "text": "Die Schwingungsdauer hängt ausschließlich von der Pendellänge und der Fallbeschleunigung ab.",
+                    "page_idx": 0,
+                    "bbox_1000": [510, 160, 900, 380],
+                },
+                {
+                    "type": "text",
+                    "text": "A1 Berechnen Sie die Periodendauer für ein Pendel der Länge zwei Meter.",
+                    "page_idx": 0,
+                    "bbox_1000": [510, 410, 900, 470],
+                },
+            ]
+        }
+    }
+    partial_vlm = "Bei kleinen Auslenkwinkeln verläuft die Rückstellkraft näherungsweise proportional zur Auslenkung."
+    fused = fuse_vlm_page_with_docling(
+        partial_vlm,
+        page_images=[],
+        phys_num=72,
+        docling_layout=docling_layout,
+        page_idx=0,
+    )
+    assert "## Mechanische Schwingungen von Fadenpendeln" in fused
+    assert "Die Schwingungsdauer hängt ausschließlich" in fused
+    assert "A1 Berechnen Sie die Periodendauer" in fused
+    assert (
+        fused.index("## Mechanische Schwingungen")
+        < fused.index("Bei kleinen Auslenkwinkeln")
+        < fused.index("Die Schwingungsdauer hängt")
+        < fused.index("A1 Berechnen Sie")
+    )
+
+
+def test_intra_line_ngram_loop_and_multiline_heading_cycle_cleaning():
+    """Verifies 1b: intra-line n-gram loops (>250 chars) and multi-line cycles with # headings are cleaned."""
+    from backend.services.extraction_postprocess import clean_vlm_repetition_loops
+
+    intra_loop_line = "![] (https://www.physik-portal.example/diagramm" + ("-100" * 65) + ".png)"
+    cycle_block = (
+        "## Material A\n\n"
+        "### Material B\n\n"
+        "#### Das Magnetfeld stromdurchflossener Spulen\n\n"
+        "Magnetische Feldlinien bilden stets geschlossene Kurven im Raum."
+    )
+    raw = f"Einleitender Satz zur Magnetostatik.\n\n{intra_loop_line}\n\n{cycle_block}\n\n{cycle_block}\n\n{cycle_block}"
+    cleaned, had_loop = clean_vlm_repetition_loops(raw)
+    assert had_loop is True
+    assert "-100-100" not in cleaned
+    assert "physik-portal.example" not in cleaned
+    assert cleaned.count("## Material A") == 1
+    assert cleaned.count("#### Das Magnetfeld stromdurchflossener Spulen") == 1
+    assert "Einleitender Satz zur Magnetostatik." in cleaned
+
+
+def test_in_figure_text_label_deduplication_preserves_captions_and_tasks():
+    """Verifies 1b: orphan diagram labels from figure_bboxes are stripped while captions, headings, and tasks stay."""
+    docling_layout = {
+        "layout_blocks": [
+            {
+                "type": "image",
+                "text": "![](images/picture_0_0_induktion.png)",
+                "page_idx": 0,
+                "bbox_1000": [100, 150, 880, 520],
+            }
+        ],
+        "figure_texts_by_page": {
+            0: ["Spannungsmessgerät", "Kupferspule", "Permanentmagnet", "Eisenkern"]
+        },
+        "heading_blocks": [
+            {
+                "type": "title",
+                "text": "Elektromagnetische Induktion",
+                "page_idx": 0,
+                "bbox": [0, 0, 300, 18],
+                "bbox_1000": [80, 80, 620, 120],
+                "is_body_sized": False,
+            }
+        ],
+        "text_blocks_by_page": {
+            0: [
+                {
+                    "type": "section_header",
+                    "text": "Elektromagnetische Induktion",
+                    "page_idx": 0,
+                    "bbox_1000": [80, 80, 620, 120],
+                },
+                {
+                    "type": "text",
+                    "text": "Bewegt man einen Magneten relativ zu einer Spule, wird eine elektrische Spannung induziert.",
+                    "page_idx": 0,
+                    "bbox_1000": [80, 580, 880, 660],
+                },
+            ]
+        },
+    }
+    raw_vlm = (
+        "## Elektromagnetische Induktion\n\n"
+        "Spannungsmessgerät\n"
+        "Kupferspule\n"
+        "Eisenkern\n\n"
+        "1 Versuchsaufbau zur elektromagnetischen Induktion\n\n"
+        "Bewegt man einen Magneten relativ zu einer Spule, wird eine elektrische Spannung induziert.\n\n"
+        "1 Erläutern Sie die Ursache der gemessenen Induktionsspannung.\n\n"
+        "A1 Bestimmen Sie die Polung bei umgekehrter Bewegungsrichtung."
+    )
+    fused = fuse_vlm_page_with_docling(
+        raw_vlm,
+        page_images=["picture_0_0_induktion.png"],
+        phys_num=91,
+        docling_layout=docling_layout,
+        page_idx=0,
+    )
+    assert "Spannungsmessgerät" not in fused
+    assert "Kupferspule" not in fused
+    assert "Eisenkern" not in fused
+    assert "## Elektromagnetische Induktion" in fused
+    assert "![](images/picture_0_0_induktion.png)\n\n1 Versuchsaufbau zur elektromagnetischen Induktion" in fused
+    assert "1 Erläutern Sie die Ursache der gemessenen Induktionsspannung." in fused
+    assert "A1 Bestimmen Sie die Polung bei umgekehrter Bewegungsrichtung." in fused
+
+
+def test_pdf_font_span_emphasis_enrichment_single_handle(tmp_path):
+    """Verifies 1c: pypdfium2 FPDFText_GetFontInfo extracts Bold/Italic spans while skipping headings and >=25-word italic intros."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    from backend.services.extraction_postprocess import extract_pdf_page_details
+
+    pdf_file = str(tmp_path / "font_spans_test.pdf")
+    c = canvas.Canvas(pdf_file, pagesize=A4)
+    _pw, ph = A4
+
+    # Large bold heading (16pt -> must NOT become inline **...** span)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(60, ph - 80, " Elektrische Leitfähigkeit von Metallen")
+
+    # Whole-paragraph italic intro (>= 25 words -> must NOT become inline *...* span)
+    c.setFont("Helvetica-Oblique", 10)
+    c.drawString(60, ph - 115, "In diesem einführenden Abschnitt untersuchen wir ausführlich das Verhalten verschiedener")
+    c.drawString(60, ph - 130, "metallischer Leiter unter wechselnden thermischen Bedingungen im physikalischen Schülerlabor")
+    c.drawString(60, ph - 145, "anhand präziser Widerstandsmessungen mit kalibrierten digitalen Messinstrumenten und Stromquellen.")
+
+    # Body paragraph with inline bold ('Widerstandswert') and multi-word italic ('Cuprum metallicum')
+    y_body = ph - 185
+    c.setFont("Helvetica", 10)
+    c.drawString(60, y_body, "Der spezifische ")
+    x_cur = 60 + c.stringWidth("Der spezifische ", "Helvetica", 10)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(x_cur, y_body, "Widerstandswert")
+    x_cur += c.stringWidth("Widerstandswert", "Helvetica-Bold", 10)
+    c.setFont("Helvetica", 10)
+    c.drawString(x_cur, y_body, " einer Probe aus ")
+    x_cur += c.stringWidth(" einer Probe aus ", "Helvetica", 10)
+    c.setFont("Helvetica-Oblique", 10)
+    c.drawString(x_cur, y_body, "Cuprum metallicum")
+    x_cur += c.stringWidth("Cuprum metallicum", "Helvetica-Oblique", 10)
+    c.setFont("Helvetica", 10)
+    c.drawString(x_cur, y_body, " steigt linear an.")
+    c.showPage()
+    c.save()
+
+    details = extract_pdf_page_details(pdf_file)
+    spans = details["font_spans_by_page"].get(0, [])
+    span_map = {s["text"]: s["style"] for s in spans}
+    assert span_map.get("Widerstandswert") == "bold"
+    assert span_map.get("Cuprum metallicum") == "italic"
+    assert not any("Leitfähigkeit" in s["text"] for s in spans)
+    assert not any("einführenden Abschnitt" in s["text"] for s in spans)
+
+    unformatted_vlm = (
+        "## Elektrische Leitfähigkeit von Metallen\n\n"
+        "In diesem einführenden Abschnitt untersuchen wir ausführlich das Verhalten verschiedener "
+        "metallischer Leiter unter wechselnden thermischen Bedingungen im physikalischen Schülerlabor "
+        "anhand präziser Widerstandsmessungen mit kalibrierten digitalen Messinstrumenten und Stromquellen.\n\n"
+        "Der spezifische Widerstandswert einer Probe aus Cuprum metallicum steigt linear an."
+    )
+    fused = fuse_vlm_page_with_docling(
+        unformatted_vlm,
+        page_images=[],
+        phys_num=14,
+        docling_layout={"font_spans_by_page": {0: spans}},
+        page_idx=0,
+    )
+    assert "**Widerstandswert**" in fused
+    assert "*Cuprum metallicum*" in fused
+    assert "## Elektrische Leitfähigkeit von Metallen" in fused
+    assert "*In diesem einführenden Abschnitt" not in fused
+
+
+def test_bare_number_captions_and_material_heading_bbox_image_matching():
+    """Verifies 2a: bare-number captions pair with images while tasks/steps do not, and unmatched images match Material headings by y0."""
+    raw_captions_and_tasks = (
+        "## Optische Instrumente\n\n"
+        "1 Historisches Spiegelteleskop mit Messingtubus\n\n"
+        "2 Strahlengang an einer achromatischen Sammellinse\n\n"
+        "### 1 Präzisionsmikrometer\n\n"
+        "1. Licht tritt parallel zur optischen Achse in das Objektiv ein.\n\n"
+        "1 Erläutern Sie die Entstehung des Zwischenbildes.\n\n"
+        "2 Vergleichen Sie Linsenteleskop und Spiegelteleskop.\n\n"
+        "3 Wie verändert sich die Vergrößerung bei kleinerer Okularbrennweite?"
+    )
+    fused = fuse_vlm_page_with_docling(
+        raw_captions_and_tasks,
+        page_images=["img_tel.png", "img_lens.png", "img_mic.png"],
+        phys_num=63,
+    )
+    assert "![](images/img_tel.png)\n\n1 Historisches Spiegelteleskop mit Messingtubus" in fused
+    assert "![](images/img_lens.png)\n\n2 Strahlengang an einer achromatischen Sammellinse" in fused
+    assert "![](images/img_mic.png)\n\n1 Präzisionsmikrometer" in fused
+    assert "### 1 Präzisionsmikrometer" not in fused
+    assert "1. Licht tritt parallel" in fused
+    assert "1 Erläutern Sie" in fused
+
+    # Unmatched images matched by bbox_1000 y0 to Material A and Material B headings
+    material_vlm = (
+        "## Material A: Wellenausbreitung im Wasserbecken\n\n"
+        "Kreisförmige Wellenfronten breiten sich gleichmäßig aus.\n\n"
+        "## Material B: Interferenz an der Doppelblende\n\n"
+        "Hinter den Öffnungen überlagern sich die Elementarwellen."
+    )
+    mat_layout = {
+        "heading_blocks": [
+            {
+                "type": "title",
+                "text": "Material A: Wellenausbreitung im Wasserbecken",
+                "page_idx": 0,
+                "bbox": [0, 0, 350, 16],
+                "bbox_1000": [80, 90, 820, 125],
+                "is_body_sized": False,
+            },
+            {
+                "type": "title",
+                "text": "Material B: Interferenz an der Doppelblende",
+                "page_idx": 0,
+                "bbox": [0, 0, 350, 16],
+                "bbox_1000": [80, 510, 820, 545],
+                "is_body_sized": False,
+            },
+        ],
+        "layout_blocks": [
+            {
+                "type": "image",
+                "text": "![](images/picture_0_0_matA.png)",
+                "page_idx": 0,
+                "bbox_1000": [120, 150, 780, 440],
+            },
+            {
+                "type": "image",
+                "text": "![](images/picture_0_1_matB.png)",
+                "page_idx": 0,
+                "bbox_1000": [120, 570, 780, 860],
+            },
+        ],
+    }
+    fused_mat = fuse_vlm_page_with_docling(
+        material_vlm,
+        page_images=["picture_0_0_matA.png", "picture_0_1_matB.png"],
+        phys_num=64,
+        docling_layout=mat_layout,
+        page_idx=0,
+    )
+    pos_hdr_a = fused_mat.index("## Material A")
+    pos_img_a = fused_mat.index("![](images/picture_0_0_matA.png)")
+    pos_hdr_b = fused_mat.index("## Material B")
+    pos_img_b = fused_mat.index("![](images/picture_0_1_matB.png)")
+    assert pos_hdr_a < pos_img_a < pos_hdr_b < pos_img_b
+
+
+def test_neighbor_page_context_sidecar_extraction_and_loading(tmp_path):
+    """Verifies 1d: extract_pdf_pages writes .neighbors.json and load_pdf_neighbor_context loads it cleanly."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    from backend.services.extraction_service import extract_pdf_pages, load_pdf_neighbor_context
+
+    src_pdf = str(tmp_path / "source_4p.pdf")
+    c = canvas.Canvas(src_pdf, pagesize=A4)
+    page_texts = [
+        "Vorwort auf römischer Seite I.",
+        "Inhalt auf Buchseite 10 beginnt mit einem getrennten Wort.",
+        "Inhalt auf Buchseite 11 führt das Kapitel fort.",
+        "Nachfolgeseite 12 schließt den Abschnitt ab.",
+    ]
+    for pt in page_texts:
+        c.setFont("Helvetica", 11)
+        c.drawString(72, 700, pt)
+        c.showPage()
+    c.save()
+
+    labels = ["I", "10", "11", "12"]
+
+    # Middle selection (pages 10-11 -> prev=I, next=12)
+    mid_out = str(tmp_path / "mid.pdf")
+    assert extract_pdf_pages(src_pdf, "10-11", mid_out, page_labels=labels) is True
+    mid_ctx = load_pdf_neighbor_context(mid_out)
+    assert mid_ctx["prev_page"] == "I"
+    assert "Vorwort auf römischer Seite I." in mid_ctx["prev_text"]
+    assert mid_ctx["next_page"] == "12"
+    assert "Nachfolgeseite 12" in mid_ctx["next_text"]
+
+    # Start selection (page I -> no prev keys, only next=10)
+    first_out = str(tmp_path / "first.pdf")
+    assert extract_pdf_pages(src_pdf, "I", first_out, page_labels=labels) is True
+    first_ctx = load_pdf_neighbor_context(first_out)
+    assert "prev_page" not in first_ctx
+    assert "prev_text" not in first_ctx
+    assert first_ctx["next_page"] == "10"
+
+    # End selection (page 12 -> prev=11, no next keys)
+    last_out = str(tmp_path / "last.pdf")
+    assert extract_pdf_pages(src_pdf, "12", last_out, page_labels=labels) is True
+    last_ctx = load_pdf_neighbor_context(last_out)
+    assert last_ctx["prev_page"] == "11"
+    assert "next_page" not in last_ctx
+    assert "next_text" not in last_ctx
+
+
+def test_off_page_spread_clip_filtering_and_severe_truncation_rebuild(tmp_path):
+    """Verifies off-page spread text filtering, short etymology marginalia detection, and <25% recall PDF rebuild."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    from backend.services.extraction_postprocess import (
+        _is_marginalia_or_glossary_note,
+        extract_pdf_page_details,
+    )
+
+    # 1. Off-page spread text (x < 0 and x > page_width) is excluded from pdf_text_by_page
+    spread_pdf = str(tmp_path / "spread_clip.pdf")
+    c = canvas.Canvas(spread_pdf, pagesize=A4)
+    pw, ph = A4
+    c.setFont("Helvetica", 11)
+    c.drawString(-420, ph - 120, "Verborgener Nachbartext auf der linken Druckbogenseite")
+    c.drawString(pw + 80, ph - 140, "Verborgener Randtext rechts außerhalb des Zuschnitts")
+    c.drawString(72, ph - 160, "Sichtbarer Haupttext innerhalb des gültigen Seitenbereichs")
+    c.showPage()
+    c.save()
+
+    details = extract_pdf_page_details(spread_pdf)
+    page_txt = "\n".join(b["text"] for b in details["pdf_blocks_by_page"].get(0, []))
+    assert "Sichtbarer Haupttext innerhalb des gültigen Seitenbereichs" in page_txt
+    assert "Verborgener Nachbartext" not in page_txt
+    assert "Verborgener Randtext" not in page_txt
+
+    # 2. Short Latin/Greek etymologies and 'Term = Definition' marginalia are recognized
+    assert _is_marginalia_or_glossary_note("lat. attrahere = anziehen") is True
+    assert _is_marginalia_or_glossary_note("griech. thermos = warm") is True
+    assert _is_marginalia_or_glossary_note("Induktion = Erzeugung einer elektrischen Spannung") is True
+
+    # 3. Severe VLM truncation (<25% recall on dense >=50-word PDF page) rebuilds all paragraphs & headings
+    p1 = (
+        "Elektrische Schwingkreise bestehen im einfachsten Fall aus einer idealen Induktivität "
+        "und einem verlustfreien Plattenkondensator in geschlossener Reihenschaltung."
+    )
+    p2 = (
+        "Während einer vollständigen Periode pendelt die gespeicherte Feldenergie periodisch "
+        "zwischen dem elektrischen Kondensatorfeld und dem magnetischen Spulenfeld hin und her."
+    )
+    p3 = (
+        "In realen Bauelementen bewirkt der ohmsche Leitungswiderstand eine fortlaufende "
+        "Umwandlung elektromagnetischer Energie in thermische Verlustwärme der Drähte."
+    )
+    p4 = (
+        "Durch rückgekoppelte Verstärkerschaltungen lässt sich diese Dämpfung kompensieren, "
+        "sodass ungedämpfte harmonische Sinusschwingungen konstanter Amplitude entstehen."
+    )
+    docling_layout = {
+        "text_blocks_by_page": {
+            0: [
+                {
+                    "type": "title",
+                    "text": "Elektromagnetische Schwingkreise und Dämpfung",
+                    "page_idx": 0,
+                    "bbox_1000": [80, 75, 780, 115],
+                },
+                {"type": "text", "text": p1, "page_idx": 0, "bbox_1000": [80, 150, 480, 320]},
+                {"type": "text", "text": p2, "page_idx": 0, "bbox_1000": [80, 340, 480, 510]},
+                {"type": "text", "text": p3, "page_idx": 0, "bbox_1000": [510, 150, 910, 320]},
+                {"type": "text", "text": p4, "page_idx": 0, "bbox_1000": [510, 340, 910, 510]},
+            ]
+        }
+    }
+    severely_truncated_vlm = "![](images/circuit_0.png)\n\nKondensatorplatte"
+    fused = fuse_vlm_page_with_docling(
+        severely_truncated_vlm,
+        page_images=["circuit_0.png"],
+        phys_num=108,
+        docling_layout=docling_layout,
+        page_idx=0,
+    )
+    assert "## Elektromagnetische Schwingkreise und Dämpfung" in fused
+    assert "Plattenkondensator in geschlossener Reihenschaltung" in fused
+    assert "magnetischen Spulenfeld hin und her" in fused
+    assert "thermische Verlustwärme der Drähte" in fused
+    assert "ungedämpfte harmonische Sinusschwingungen" in fused
+
+
+def test_skeleton_cycle_dedup_mermaid_strip_callout_rescue_and_diagram_headings():
+    """Verifies 14b, 14c, and spurious in-diagram '#' heading & raw Mermaid stripping."""
+    from backend.services.extraction_postprocess import (
+        clean_markdown_fences,
+        clean_vlm_repetition_loops,
+    )
+
+    # 1. 14c: Incrementing '#### Material A..Z' stub loop drops completely when titled Material heading precedes
+    stub_loop = "\n\n".join(f"#### Material {chr(65 + (i % 26))}" for i in range(30))
+    page_with_loop = (
+        "((15))\n\n"
+        "### Material A • Wärmeleitung in Metallen\n\n"
+        "Kupfer leitet thermische Energie besonders effektiv.\n\n"
+        "![](images/pic_1.png)\n\n"
+        f"{stub_loop}\n\n"
+        "![](images/pic_2.png)\n\n"
+        "#### Material B\n\n"
+        "#### Material C\n\n"
+        "#### Material D\n\n"
+        "#### Material E\n\n"
+        "#### Material F\n\n"
+        "#### Material G\n\n"
+        "Nachfolgender Absatz bleibt vollständig erhalten."
+    )
+    cleaned_loop, had_loop = clean_vlm_repetition_loops(page_with_loop)
+    assert had_loop is True
+    assert "### Material A • Wärmeleitung in Metallen" in cleaned_loop
+    assert "![](images/pic_1.png)" in cleaned_loop
+    assert "![](images/pic_2.png)" in cleaned_loop
+    assert "\n#### Material A\n" not in cleaned_loop
+    assert "\n#### Material G\n" not in cleaned_loop
+    assert "Nachfolgender Absatz bleibt vollständig erhalten." in cleaned_loop
+
+    # Distinct TOC lines must NOT collapse
+    toc_md = "\n".join([
+        "1.1 Kinematik der Punktmasse",
+        "1.2 Dynamik und Kraftgesetze",
+        "1.3 Arbeit und mechanische Energie",
+        "1.4 Impulserhaltung beim Stoß",
+        "1.5 Kreisbewegung und Gravitation",
+        "1.6 Mechanische Schwingungen",
+        "1.7 Wellenausbreitung in Medien",
+    ])
+    toc_cleaned, toc_loop = clean_vlm_repetition_loops(toc_md)
+    assert toc_loop is False
+    assert "1.7 Wellenausbreitung in Medien" in toc_cleaned
+
+    # 2. Raw Mermaid leak stripped cleanly
+    raw_mermaid = (
+        "Einleitungstext vor dem Diagramm.\n\n"
+        "mermaid graph TD\n"
+        "    A[Sensor] --> B[Regler]\n"
+        "    B --> C[Stellglied]\n\n"
+        "![3 Regelkreis der Temperatursteuerung](images/ctrl.png)\n\n"
+        "3 Regelkreis der Temperatursteuerung"
+    )
+    no_mermaid = clean_markdown_fences(raw_mermaid)
+    assert "mermaid graph" not in no_mermaid
+    assert "A[Sensor]" not in no_mermaid
+    assert "![3 Regelkreis der Temperatursteuerung](images/ctrl.png)" in no_mermaid
+
+    # 3. 14b + Additional Item 1: Steckbrief callout wrapping & spurious in-diagram '#' headings stripped
+    bio_prose = (
+        "Der im schottischen Edinburgh geborene Physiker James Clerk Maxwell formulierte im Jahr 1864 "
+        "erstmals die Grundgleichungen der Elektrodynamik und sagte elektromagnetische Wellen voraus."
+    )
+    layout_callout_and_fig = {
+        "heading_blocks": [
+            {"text": "Elektromagnetische Wellen", "page_idx": 0, "bbox_1000": [80, 90, 500, 125]},
+        ],
+        "figure_texts_by_page": {
+            0: ["Dipolantenne", "Magnetfeldlinie", "elektrisches-", "Wirbelfeld", "A", "B"],
+        },
+        "text_blocks_by_page": {
+            0: [
+                {"type": "section_header", "text": "Elektromagnetische Wellen", "page_idx": 0, "bbox_1000": [80, 90, 500, 125]},
+                {"type": "text", "text": "Wechselnde Felder breiten sich mit Lichtgeschwindigkeit im Raum aus.", "page_idx": 0, "bbox_1000": [80, 140, 480, 260]},
+                {"type": "text", "text": "STECKBRIEF", "page_idx": 0, "bbox_1000": [520, 140, 680, 165], "is_callout_box": True},
+                {"type": "text", "text": "James Clerk Maxwell (1831–1879)", "page_idx": 0, "bbox_1000": [520, 175, 860, 200], "is_callout_box": True},
+                {"type": "text", "text": bio_prose, "page_idx": 0, "bbox_1000": [520, 210, 920, 420], "is_callout_box": True},
+            ]
+        },
+    }
+    vlm_in = (
+        "## Elektromagnetische Wellen\n\n"
+        "### A\n\n"
+        "![](images/antenna.png)\n\n"
+        "### Dipolantenne\n\n"
+        "### elektrisches Wirbelfeld\n\n"
+        "#### B\n\n"
+        "Wechselnde Felder breiten sich mit Lichtgeschwindigkeit im Raum aus.\n\n"
+        "---\n\n"
+        f"{bio_prose}\n\n"
+        "---"
+    )
+    fused_p = fuse_vlm_page_with_docling(
+        vlm_in,
+        page_images=["antenna.png"],
+        phys_num=42,
+        docling_layout=layout_callout_and_fig,
+        page_idx=0,
+    )
+    assert "## Elektromagnetische Wellen" in fused_p
+    assert "### A" not in fused_p
+    assert "#### B" not in fused_p
+    assert "### Dipolantenne" not in fused_p
+    assert "### elektrisches Wirbelfeld" not in fused_p
+    assert "#### Steckbrief" in fused_p
+    assert "<Rahmen>\n_James Clerk Maxwell (1831–1879)_" in fused_p
+
+
+
 
 
 

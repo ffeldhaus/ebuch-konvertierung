@@ -4,13 +4,35 @@ from __future__ import annotations
 
 import re
 
-from backend.services.fibs_constants import CAPTION_BLOCK_RE
-from backend.services.fibs_formatting import convert_unicode_scripts, normalize_bild_tags
+from backend.services.fibs_constants import CAPTION_BLOCK_RE, UNIT_PERCENT_PROTECTED_RE
+from backend.services.fibs_formatting import (
+    convert_unicode_scripts,
+    normalize_bild_tags,
+    normalize_fibs_units_and_percent,
+)
 from backend.services.fibs_postprocess import (
     deduplicate_page_numbers,
     restore_false_positive_trailing_asterisks,
 )
 from backend.services.models import LintIssue, LintReport
+
+_SEMANTIC_HEADING_RE = re.compile(
+    r"^(?:Abbildung(?:en)?|Abb|Bild(?:er)?|Grafik(?:en)?|Figure[ns]?|Fig|Aufgaben?|Übung(?:en)?|"
+    r"Beispiele?|Tabellen?|Tab|Infobox(?:en)?|Merksatz|Merksätze|Definition(?:en)?|"
+    r"[MBQ]\s*\d+[a-z]?|[MBQ]\s+(?:Steckbriefe?|Tabellen?|Material(?:ien)?)|"
+    r"Material(?:ien)?|Quellen?|Steckbriefe?|Exkurse?|Zusammenfassung(?:en)?|"
+    r"Worterklärungen?|Worterklaerungen?|Randspalten?)\b\.?",
+    re.IGNORECASE,
+)
+_UNANNOUNCED_PCT_EMPH_RE = re.compile(
+    r"(?<![0-9\\])(?<!\d )%([A-Za-zÄÖÜäöüß][^%\t\n]{0,80}?[A-Za-zÄÖÜäöüß.')])%(?![A-Za-zÄÖÜäöüß])"
+)
+_EMPHASIS_LEGEND_ANM_RE = re.compile(
+    r"<Anmerkung\b[^>]*>(?:(?!</Anmerkung>)[\s\S])*?"
+    r"(?:kursiv|\*[^\n<]*fett|#[^\n<]*unterstrichen|Hervorhebung\w*[^\n<]*(?:%|\*|#)|%[^\n<]*(?:kursiv|Hervorhebung))"
+    r"(?:(?!</Anmerkung>)[\s\S])*?</Anmerkung>",
+    re.IGNORECASE,
+)
 
 
 def lint_markdown(
@@ -19,6 +41,7 @@ def lint_markdown(
     raw_markdown: str | None = None,
     expected_pages: int | None = None,
     table_max_cells: int | None = None,
+    custom_rules: str | None = None,
 ) -> LintReport:
     """Validate Markdown content against the E-Buch 2025 accessibility standard (FIBS 09/2025).
 
@@ -30,6 +53,8 @@ def lint_markdown(
         raw_markdown: Optional Stage-1 OCR Markdown for source-aware image and page count checks.
         expected_pages: Optional expected number of physical book pages.
         table_max_cells: Optional cell threshold below which tables should be linearly resolved.
+        custom_rules: Optional Buchkonferenz / document-specific ruleset text defining explicit
+            heading levels (e.g. ``Überschrift 5: Aufgaben``, ``Aufgaben in Ü5``, ``Material Ü3``).
 
     Returns:
         A ``LintReport`` Pydantic model containing ``score``, ``passed``,
@@ -49,6 +74,56 @@ def lint_markdown(
             )
         )
 
+    # Parse explicit Buchkonferenz heading level assignments (1..6) from custom_rules
+    custom_level_patterns: dict[int, list[re.Pattern[str]]] = {}
+    if custom_rules and custom_rules.strip():
+        level_chunks: list[tuple[int, str]] = []
+        for m_sec in re.finditer(
+            r"(?:^|\n)[ \t#*\-]*(?:Überschrift|Ebene)\s*([1-6])\s*:[ \t]*([\s\S]*?)"
+            r"(?=\n[ \t#*\-]*(?:Überschrift|Ebene)\s*[1-6]\s*:|\n[ \t*]*Sonstiges|\n[ \t*]*Anmerkungen|\n<Anmerkung|\Z)",
+            custom_rules,
+            re.IGNORECASE,
+        ):
+            level_chunks.append((int(m_sec.group(1)), m_sec.group(2)))
+
+        for m_inl in re.finditer(
+            r"\b([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß\- ]{1,35}?)\s+(?:(?:in|als|=|:)\s*)?(?:Überschrift\s*|Ü|H)([1-6])\b",
+            custom_rules,
+            re.IGNORECASE,
+        ):
+            term_inl = m_inl.group(1).strip(" -–—:;,()\"'„“")
+            if term_inl and not re.search(r"\b(?:bis|und|oder|von|zu)\b$", term_inl, re.IGNORECASE):
+                level_chunks.append((int(m_inl.group(2)), term_inl))
+
+        for lvl_num, chunk_txt in level_chunks:
+            pats = custom_level_patterns.setdefault(lvl_num, [])
+            if re.search(r"\b(?:Aufgaben?|Übungen?|Aufgabennummern?)\b", chunk_txt, re.IGNORECASE):
+                pats.append(re.compile(r"^(?:Aufgaben?|Übungen?|[A-LN-Z]?\d+[a-z]?)\b:?\s*$", re.IGNORECASE))
+            if re.search(r"\b(?:Abbildungsunterschrift|Bildunterschrift)\w*", chunk_txt, re.IGNORECASE):
+                pats.append(
+                    re.compile(
+                        r"^(?:[MBQ]\s*\d+[a-z]?|[MBQ]\s+Steckbriefe?|Abb(?:ildung)?\.?\s*\d+|Bild\s*\d+|Grafik\s*\d+|Figures?\s*\d+)\b",
+                        re.IGNORECASE,
+                    )
+                )
+            if re.search(r"\bMaterial\s+[A-Z]\b", chunk_txt):
+                pats.append(re.compile(r"^Material\s+[A-Z]\b", re.IGNORECASE))
+            if re.search(r"\bMaterial(?:ien)?\b(?!\s+[A-Z]\b)", chunk_txt, re.IGNORECASE):
+                pats.append(re.compile(r"^Material(?:ien)?\b", re.IGNORECASE))
+            for kw_m in re.finditer(
+                r"(?:['\"„“]([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß0-9 \-]{1,35}?):?['\"“”]"
+                r"|\b(Randspalten?|Annotation(?:en)?|Steckbriefe?|Exkurse?|Merksatz|Merksätze|"
+                r"Definition(?:en)?|Zusammenfassung(?:en)?|Quellen?|Tabellen?|Beispiele?|Infobox(?:en)?|"
+                r"ÜBERBLICK|IM\s+BLICKPUNKT)\b)",
+                chunk_txt,
+                re.IGNORECASE,
+            ):
+                kw_tok = (kw_m.group(1) or kw_m.group(2) or "").strip()
+                if kw_tok:
+                    pats.append(re.compile(rf"^{re.escape(kw_tok)}\b", re.IGNORECASE))
+            if len(chunk_txt.split()) <= 4 and re.fullmatch(r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß0-9 \-]{1,35}", chunk_txt.strip()):
+                pats.append(re.compile(rf"^{re.escape(chunk_txt.strip())}\b", re.IGNORECASE))
+
     # 1. Heading Hierarchy Check
     current_level = 0
     for idx, line in enumerate(lines):
@@ -56,14 +131,16 @@ def lint_markdown(
         if m:
             level = len(m.group(1))
             title = m.group(2).strip()
-            is_semantic_element_heading = bool(
-                re.match(
-                    r"^(?:Abbildung|Abb|Bild|Grafik|Figure|Fig|Aufgabe|Übung|Beispiel|Tabelle|Tab|Infobox|Merksatz|Definition)\b\.?",
-                    title,
-                    re.IGNORECASE,
-                )
+            is_semantic_element_heading = bool(_SEMANTIC_HEADING_RE.match(title))
+            is_custom_level_heading = any(
+                p.search(title) for p in custom_level_patterns.get(level, ())
             )
-            if current_level > 0 and level > current_level + 1 and not is_semantic_element_heading:
+            if (
+                current_level > 0
+                and level > current_level + 1
+                and not is_semantic_element_heading
+                and not is_custom_level_heading
+            ):
                 _add_issue(
                     "heading_hierarchy",
                     "warning",
@@ -173,11 +250,16 @@ def lint_markdown(
             "<Anmerkung> ... </Anmerkung>",
         )
 
-    # Exclude math tags, LaTeX formulas, and sub-/superscript braces (_{n}, ^{n}) from footnote search
+    # Exclude math tags, multi-argument LaTeX commands (\frac{1}{2}, \xra{...}), and _{n}/^{n} from footnote search
     content_without_math = re.sub(r"<L\b[^>]*>.*?</L>", "", content, flags=re.DOTALL | re.IGNORECASE)
     content_without_math = re.sub(r"\$\$.*?\$\$", "", content_without_math, flags=re.DOTALL)
     content_without_math = re.sub(r"\$.*?\$", "", content_without_math, flags=re.DOTALL)
-    content_without_math = re.sub(r"\\[a-zA-Z]+\{[^}]*\}", "", content_without_math)
+    for _ in range(3):
+        content_without_math = re.sub(
+            r"\\[a-zA-Z]+(?:\[[^\]]*\])*(?:\{[^{}]*\})+",
+            "",
+            content_without_math,
+        )
     inline_refs = set(re.findall(r"(?<![_\^])\{(\d+)\}", content_without_math))
     note_defs = set()
     for m in re.finditer(r"<Anmerkung\b[^>]*>\s*(\d+)\s+(.*?)</Anmerkung>", content, re.DOTALL | re.IGNORECASE):
@@ -227,6 +309,14 @@ def lint_markdown(
             "error",
             1,
             f"Unausgeglichene Formel-Tags <L> und </L> ({open_math} geöffnet, {close_math} geschlossen).",
+            "<L> ... </L>",
+        )
+    elif open_math > 0:
+        _add_issue(
+            "math_legacy_l_tag",
+            "info",
+            1,
+            "Veraltete Formel-Tags <L>...</L> gefunden (im FIBS-Standard 09/2025 ohne Begrenzungs-Tags übertragen).",
             "<L> ... </L>",
         )
 
@@ -380,7 +470,14 @@ def lint_markdown(
             "<Lückentext> ... </Lückentext>",
         )
 
-    # 8. FIBS Typography & Emphasis Rules (Section 7.3, 8.1, 10)
+    # 8. FIBS Typography, Degree & Emphasis Rules (Section 7.3, 8.1, 10)
+    has_emphasis_legend = bool(
+        _EMPHASIS_LEGEND_ANM_RE.search(content)
+        or (
+            re.search(r"\bfett", content, re.IGNORECASE)
+            and re.search(r"\bkursiv", content, re.IGNORECASE)
+        )
+    )
     in_bild_block = False
     for idx, line in enumerate(lines):
         stripped = line.strip()
@@ -400,7 +497,24 @@ def lint_markdown(
             )
         if re.search(r"</Bild>", stripped, re.IGNORECASE):
             in_bild_block = False
-        line_no_math = re.sub(r"\$[^\$\n]+\$", "", stripped)
+        line_no_code = UNIT_PERCENT_PROTECTED_RE.sub("", stripped)
+        if re.search(r"\^\s*\{?\\circ\}?", line_no_code):
+            _add_issue(
+                "fibs_degree_latex",
+                "info",
+                idx + 1,
+                "LaTeX-Grad-Notation ('^\\circ') gefunden. Gemäß FIBS Abschn. 8.1 direkt als '°' übertragen (z. B. '80 °C', '90°').",
+                stripped[:120],
+            )
+        if not has_emphasis_legend and _UNANNOUNCED_PCT_EMPH_RE.search(line_no_code):
+            _add_issue(
+                "fibs_unannounced_percent_emphasis",
+                "info",
+                idx + 1,
+                "Unangekündigte %-Hervorhebung gefunden. Gemäß FIBS Abschn. 10 standardmäßig _Wort_ verwenden (oder per <Anmerkung> erläutern).",
+                stripped[:120],
+            )
+        line_no_math = re.sub(r"\$[^\$\n]+\$", "", line_no_code)
         if re.search(r"_{4,}", line_no_math):
             _add_issue(
                 "fibs_raw_fill_in_blanks",
@@ -430,7 +544,10 @@ def lint_markdown(
         "images": not any("image" in i.rule for i in issues),
         "footnotes": not any("footnote" in i.rule or "anmerkung" in i.rule for i in issues),
         "lists": not any(i.rule == "list_delimiter" for i in issues),
-        "math": not any(i.rule == "math_unbalanced" for i in issues),
+        "math": not any(
+            i.rule in ("math_unbalanced", "math_legacy_l_tag", "fibs_degree_latex")
+            for i in issues
+        ),
         "pages": not any("page_number" in i.rule for i in issues),
         "boxes": not any("rahmen" in i.rule or "lueckentext" in i.rule for i in issues),
         "tables": not any("tabelle" in i.rule or "table" in i.rule for i in issues),
@@ -454,8 +571,9 @@ def autofix_markdown(content: str) -> tuple[str, list[str]]:
       1. Replaces spaces after list bullets/numbers with required tabulators (``\\t``).
       2. Adjusts skipped heading hierarchy levels to be sequential (e.g., H1 -> H3 to H1 -> H2).
       3. Normalizes non-standard page numbers (e.g., ``Seite 45`` -> ``((45))``).
-      4. Converts legacy ``<L>`` math tags to standard LaTeX (``$...$``).
-      5. Strips copyright symbols outside ``<Bild>`` blocks and converts ``____`` to ``_..._``.
+      4. Strips legacy ``<L>`` math tags into bare FIBS LaTeX and normalizes ``°`` / ``%`` spacing.
+      5. Strips copyright symbols outside ``<Bild>`` blocks, converts ``____`` to ``_..._``,
+         and normalizes ``**bold**`` or unannounced ``%italic%`` to ``_..._``.
 
     Args:
         content: Markdown content to repair.
@@ -466,6 +584,13 @@ def autofix_markdown(content: str) -> tuple[str, list[str]]:
     applied_fixes: list[str] = []
     lines = content.splitlines()
     fixed_lines: list[str] = []
+    has_emphasis_legend = bool(
+        _EMPHASIS_LEGEND_ANM_RE.search(content)
+        or (
+            re.search(r"\bfett", content, re.IGNORECASE)
+            and re.search(r"\bkursiv", content, re.IGNORECASE)
+        )
+    )
 
     current_heading_level = 0
     in_bild_autofix = False
@@ -507,13 +632,7 @@ def autofix_markdown(content: str) -> tuple[str, list[str]]:
         if heading_match:
             hashes, title = heading_match.groups()
             level = len(hashes)
-            is_semantic_element_heading = bool(
-                re.match(
-                    r"^(?:Abbildung|Abb|Bild|Grafik|Figure|Fig|Aufgabe|Übung|Beispiel|Tabelle|Tab|Infobox|Merksatz|Definition)\b\.?",
-                    title.strip(),
-                    re.IGNORECASE,
-                )
-            )
+            is_semantic_element_heading = bool(_SEMANTIC_HEADING_RE.match(title.strip()))
             if (
                 current_heading_level > 0
                 and level > current_heading_level + 1
@@ -528,13 +647,13 @@ def autofix_markdown(content: str) -> tuple[str, list[str]]:
             else:
                 current_heading_level = level
 
-        if "<L>" in modified_line or "</L>" in modified_line:
+        if "<L>" in modified_line or "</L>" in modified_line or re.search(r"</?L\b", modified_line, re.IGNORECASE):
             modified_line = re.sub(
-                r"<L\b[^>]*>(.*?)</L>", r"$\1$", modified_line, flags=re.IGNORECASE
+                r"<L\b[^>]*>\s*(.*?)\s*</L>", r"\1", modified_line, flags=re.IGNORECASE
             )
             modified_line = re.sub(r"<\/?L\b[^>]*>", "", modified_line, flags=re.IGNORECASE)
             applied_fixes.append(
-                f"Zeile {idx + 1}: Veraltete <L> Formel-Tags zu LaTeX ($...$) standardisiert."
+                f"Zeile {idx + 1}: Veraltete <L> Formel-Tags in direktes FIBS-LaTeX umgewandelt."
             )
 
         if not in_bild_autofix and ("©" in modified_line or "®" in modified_line):
@@ -555,6 +674,12 @@ def autofix_markdown(content: str) -> tuple[str, list[str]]:
                 f"Zeile {idx + 1}: Markdown-Fettdruck (**...**) zu FIBS-Hervorhebung (_..._) umgewandelt."
             )
 
+        if not has_emphasis_legend and _UNANNOUNCED_PCT_EMPH_RE.search(modified_line):
+            modified_line = _UNANNOUNCED_PCT_EMPH_RE.sub(r"_\1_", modified_line)
+            applied_fixes.append(
+                f"Zeile {idx + 1}: Unangekündigte %-Hervorhebung zu _..._ standardisiert."
+            )
+
         fixed_lines.append(modified_line)
 
     result_text = "\n".join(fixed_lines)
@@ -568,6 +693,12 @@ def autofix_markdown(content: str) -> tuple[str, list[str]]:
     if converted != result_text:
         applied_fixes.append("Unicode-Hoch-/Tiefstellungen in _/^-Schreibweise umgewandelt.")
         result_text = converted
+
+    normalized_units = normalize_fibs_units_and_percent(result_text)
+    if normalized_units != result_text:
+        applied_fixes.append("Grad- (° / °C) und Prozentangaben (%) gemäß FIBS Abschn. 8.1 standardisiert.")
+        result_text = normalized_units
+
     normalized = normalize_bild_tags(result_text)
     if normalized != result_text:
         applied_fixes.append(

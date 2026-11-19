@@ -357,18 +357,107 @@ def convert_unicode_scripts(text: str) -> str:
     return fc.SUP_RE.sub(sup, text)
 
 
-def normalize_versalien(markdown: str) -> str:
-    """Converts ALL-CAPS emphasis words (Versalien) to normal case with ``_Wort_`` emphasis.
+def _has_person_name_prefix(line_prefix: str) -> bool:
+    """Checks whether ``line_prefix`` ends with a given name, initial, or person title.
 
-    To protect genuine acronyms and abbreviations (e.g. ``UNESCO``, ``DNA``), an
-    all-caps run is only converted when every constituent word also appears in
-    normal mixed-case spelling elsewhere in the same document.
+    Args:
+        line_prefix: Text preceding an ALL-CAPS candidate on the current line.
+
+    Returns:
+        True if ``line_prefix`` indicates a person-name surname context.
+    """
+    cleaned = line_prefix.rstrip("_")
+    pm = fc.PERSON_PREFIX_RE.search(cleaned)
+    if not pm:
+        return False
+    word = pm.group(1)
+    if not word:
+        return True  # Initial (e.g. 'G. ') or academic title (e.g. 'Dr. ', 'Prof. ')
+    low = word.lower()
+    if low in fc.PERSON_ROLE_PREFIXES:
+        return True
+    if low in fc.NON_NAME_CAPITALIZED_WORDS:
+        return False
+    if low.endswith((
+        "ung", "heit", "keit", "schaft", "tum", "nis", "ment", "tion", "tät",
+        "system", "verfahren", "protokoll", "standard", "format", "modell",
+        "begriff", "wort", "stoff", "enzym", "molekül", "gesetz", "prinzip",
+    )):
+        return False
+    return True
+
+
+def _is_convertible_versalien_part(
+    part: str,
+    *,
+    has_name_prefix: bool,
+    in_multiword_run: bool,
+    followed_by_compound_hyphen: bool,
+) -> bool:
+    """Determines whether an ALL-CAPS sub-token without document evidence is a real word/name.
+
+    Args:
+        part: Uppercase alphabetic token without hyphens.
+        has_name_prefix: Whether the run is preceded by a person given name, initial, or title.
+        in_multiword_run: Whether the token belongs to a multi-word ALL-CAPS phrase.
+        followed_by_compound_hyphen: Whether the run is followed by ``-<Word>`` (acronym compound).
+
+    Returns:
+        True if ``part`` should be recased to mixed-case instead of kept as an acronym.
+    """
+    u = part.upper()
+    if u in fc.PROTECTED_ACRONYMS or u in fc.VALID_CHEMICAL_ELEMENTS:
+        return False
+    if fc.ROMAN_NUMERAL_RE.fullmatch(u):
+        return False
+    if in_multiword_run and u.lower() in fc.VERSALIEN_CONNECTORS:
+        return True
+    if followed_by_compound_hyphen and not has_name_prefix:
+        return False
+    if re.search(r"(.)\1\1", u):
+        return False
+
+    vowels = sum(1 for ch in u if ch in "AEIOUÄÖÜY")
+    if has_name_prefix and len(u) >= 4:
+        if vowels < 1 or vowels / len(u) > 0.75:
+            return False
+        # Reject pure consonant-cluster endings typical of 4-letter initialisms (e.g. 'OFDM', 'VLIW')
+        if len(u) == 4 and (
+            not any(ch in "AEIOUÄÖÜY" for ch in u[1:])
+            or re.match(r"^[BCDFGHJKLMNPQRSTVWXZ]{3}", u)
+        ):
+            return False
+        return True
+
+    if len(u) < 5:
+        return False
+    vowel_groups = re.findall(r"[AEIOUÄÖÜY]+", u)
+    if len(vowel_groups) < 2:
+        return False
+    if any(len(vg) >= 3 and vg not in ("EAU", "IEU") for vg in vowel_groups):
+        return False
+    eff_u = u.replace("SCH", "S").replace("CH", "C").replace("CK", "K")
+    if re.search(r"[BCDFGHJKLMNPQRSTVWXZ]{4,}", eff_u):
+        return False
+    v_ratio = vowels / len(u)
+    return 0.25 <= v_ratio <= 0.65
+
+
+def normalize_versalien(markdown: str) -> str:
+    """Converts ALL-CAPS / small-caps emphasis words and person names to ``_Wort_`` emphasis.
+
+    Protects genuine acronyms and technical abbreviations (e.g. ``UNESCO``, ``DNA``, ``ATP``,
+    ``IUPAC``), chemical elements, and Roman numerals while converting both words attested in
+    mixed-case elsewhere in ``markdown`` and pronounceable ALL-CAPS person surnames or
+    multi-syllable emphasis words (e.g. ``Charles BEST`` -> ``Charles _Best_``,
+    ``Christoph KOLUMBUS`` -> ``Christoph _Kolumbus_``, ``ACHTUNG`` -> ``_Achtung_``).
+    Inside ``#`` headings, Versalien are recased without ``_..._`` markers.
 
     Args:
         markdown: Input Markdown string.
 
     Returns:
-        Markdown string with Versalien normalized to ``_Wort_`` (or normal case in headings).
+        Markdown string with Versalien normalized to ``_Wort_`` (or plain mixed-case in headings).
     """
     if not markdown or not fc.FOUR_CAPS_RE.search(markdown):
         return markdown
@@ -378,27 +467,80 @@ def normalize_versalien(markdown: str) -> str:
         if not w.isupper() and len(w) >= 2:
             forms.setdefault(w.lower(), Counter())[w] += 1
     known = {k: c.most_common(1)[0][0] for k, c in forms.items()}
-    protected: list[tuple[int, int]] = [
-        m.span() for m in fc.PROTECTED_ALL_CAPS_RE.finditer(markdown)
-    ]
+    hard_protected: list[tuple[int, int]] = []
+    bild_spans: list[tuple[int, int]] = []
+    for m_prot in fc.PROTECTED_ALL_CAPS_RE.finditer(markdown):
+        if m_prot.group(0).startswith("<Bild>"):
+            bild_spans.append(m_prot.span())
+        else:
+            hard_protected.append(m_prot.span())
 
-    def is_protected(a: int, b: int) -> bool:
-        return any(ps < b and a < pe for ps, pe in protected)
+    def is_hard_protected(a: int, b: int) -> bool:
+        return any(ps < b and a < pe for ps, pe in hard_protected)
+
+    def is_in_bild(a: int, b: int) -> bool:
+        return any(ps < b and a < pe for ps, pe in bild_spans)
 
     out: list[str] = []
     last = 0
     for m in fc.CAPS_RUN_RE.finditer(markdown):
-        if is_protected(m.start(), m.end()):
+        if is_hard_protected(m.start(), m.end()):
             continue
-        run = m.group(2)
+        in_bild_block = is_in_bild(m.start(), m.end())
+        lead_u, run, trail_u = m.group(1), m.group(2), m.group(3)
         words = run.split()
         parts = [p for w in words for p in w.split("-")]
-        if not any(len(p) >= 4 for p in parts) or not all(p.lower() in known for p in parts):
+        if not any(len(p) >= 4 for p in parts):
+            continue
+        if any(
+            p.upper() in fc.PROTECTED_ACRONYMS or fc.ROMAN_NUMERAL_RE.fullmatch(p)
+            for p in parts
+        ):
             continue
 
-        recased = " ".join("-".join(known[p.lower()] for p in w.split("-")) for w in words)
         line_start = markdown.rfind("\n", 0, m.start()) + 1
         line_prefix = markdown[line_start : m.start()]
+        has_name_prefix = _has_person_name_prefix(line_prefix)
+        if in_bild_block and not has_name_prefix:
+            continue
+        after_run = markdown[m.end() :]
+        followed_by_hyphen = bool(re.match(r"^-[A-Za-zÄÖÜäöüß]", after_run))
+        in_multi = len(words) > 1
+
+        all_known = all(p.lower() in known for p in parts)
+        if not all_known:
+            if not all(
+                (p.lower() in known)
+                or _is_convertible_versalien_part(
+                    p,
+                    has_name_prefix=has_name_prefix and idx_w == 0,
+                    in_multiword_run=in_multi,
+                    followed_by_compound_hyphen=followed_by_hyphen,
+                )
+                for idx_w, w in enumerate(words)
+                for p in w.split("-")
+            ):
+                continue
+
+        def _recase_part(part_tok: str, is_first_in_run: bool) -> str:
+            low = part_tok.lower()
+            if low in known:
+                return known[low]
+            if in_multi and not is_first_in_run and low in fc.VERSALIEN_CONNECTORS:
+                return low
+            return part_tok[0].upper() + part_tok[1:].lower()
+
+        recased_words: list[str] = []
+        for idx_w, w in enumerate(words):
+            sub_parts = w.split("-")
+            recased_words.append(
+                "-".join(
+                    _recase_part(sp, idx_w == 0 and idx_sp == 0)
+                    for idx_sp, sp in enumerate(sub_parts)
+                )
+            )
+        recased = " ".join(recased_words)
+
         is_heading = bool(fc.HEADING_LINE_RE.match(markdown[line_start:]))
         if (
             is_heading
@@ -407,12 +549,114 @@ def normalize_versalien(markdown: str) -> str:
         ):
             recased = recased[0].upper() + recased[1:]
 
-        replacement = recased if is_heading else f"_{recased}_"
+        if bool(lead_u) != bool(trail_u):
+            # Inside an outer _..._ emphasis span on one boundary: preserve outer underscore
+            replacement = f"{lead_u}{recased}{trail_u}"
+        elif is_heading:
+            replacement = recased
+        else:
+            replacement = f"_{recased}_"
+
         out.append(markdown[last : m.start()])
         out.append(replacement)
         last = m.end()
     out.append(markdown[last:])
     return "".join(out)
+
+
+def normalize_fibs_units_and_percent(text: str) -> str:
+    r"""Normalizes FIBS 09/2025 temperatures, angles, and percentages outside code and URLs.
+
+    Applies FIBS Section 8.1 rules deterministically:
+      - Unwraps standalone ``$80\,^\circ\text{C}$``, ``$90^\circ$``, and ``$50\,\%$`` spans.
+      - Replaces ``<num>^\circ\text{C}`` -> ``<num> °C`` and ``<num>^\circ`` -> ``<num>°``.
+      - Formats temperatures with one space before ``°C`` / ``°F`` (``33°C`` -> ``33 °C``).
+      - Formats angles and degree coordinates without a space before ``°`` (``45 °`` -> ``45°``).
+      - Formats percentages with one space before ``%`` (``50%`` -> ``50 %``), preserving
+        hyphenated and suffixed forms (``5%-Klausel``, ``100%ig``).
+
+    Args:
+        text: Input Markdown text.
+
+    Returns:
+        Text with normalized degree and percent spacing.
+    """
+    if not text:
+        return text
+
+    protected_spans: list[str] = []
+
+    def _mask(m: re.Match[str]) -> str:
+        protected_spans.append(m.group(0))
+        return f"__FIBS_PROT_{len(protected_spans) - 1}__"
+
+    work = fc.UNIT_PERCENT_PROTECTED_RE.sub(_mask, text)
+
+    # 1. Unwrap standalone $...$ temperatures and angles (e.g. '$80\,^\circ\text{C}$', '$90^\circ$')
+    def _unwrap_dollar_deg(m: re.Match[str]) -> str:
+        num = m.group(1).replace("{,}", ",").replace("−", "-")
+        cf = m.group(2) or m.group(3)
+        return f"{num} °{cf}" if cf else f"{num}°"
+
+    work = re.sub(
+        r"\$\s*([-+−]?\d+(?:(?:\{,\}|[.,])\d+)?)\s*(?:\\,|\s)*(?:°|\^\s*\{?\\circ\}?)\s*"
+        r"(?:\\(?:text|mathrm)\s*\{\s*([CF])\s*\}|([CF]))?\s*\$",
+        _unwrap_dollar_deg,
+        work,
+    )
+
+    # 2. Unwrap standalone $...$ percentages (e.g. '$50\,\%$', '$5\%$-Klausel', '$100\%$ig')
+    def _unwrap_dollar_pct(m: re.Match[str]) -> str:
+        num = m.group(1).replace("{,}", ",").replace("−", "-")
+        tail = work[m.end() :]
+        if tail.startswith("-") or re.match(r"^ig", tail):
+            return f"{num}%"
+        return f"{num} %"
+
+    work = re.sub(
+        r"\$\s*([-+−]?\d+(?:(?:\{,\}|[.,])\d+)?)\s*(?:\\,|\s)*\\?%\s*\$",
+        _unwrap_dollar_pct,
+        work,
+    )
+
+    # 3. Convert numeric ^\circ inside compound formulas (e.g. '\xrightarrow{450\,^\circ\text{C}}', '\alpha < 10^\circ')
+    work = re.sub(
+        r"([-+−]?\d+(?:(?:\{,\}|[.,])\d+)?)\s*(?:\\,|\s)*\^\s*\{?\\circ\}?\s*"
+        r"(?:\\(?:text|mathrm)\s*\{\s*([CF])\s*\}|([CF])\b)",
+        lambda m: f"{m.group(1).replace('{,}', ',')} °{m.group(2) or m.group(3)}",
+        work,
+    )
+    work = re.sub(
+        r"(\d+(?:(?:\{,\}|[.,])\d+)?)\s*(?:\\,|\s)*\^\s*\{?\\circ\}?"
+        r"(?!\s*(?:\\(?:text|mathrm)\s*\{\s*[CF]\s*\}|[CF]\b))",
+        lambda m: f"{m.group(1).replace('{,}', ',')}°",
+        work,
+    )
+
+    # 4. Plain temperature spacing: '<num> °C' / '<num> °F' (1 space after number, none before C/F)
+    work = re.sub(
+        r"([-+]?\d+(?:[.,]\d+)?)[ \t]*°[ \t]*([CF])\b",
+        r"\1 °\2",
+        work,
+    )
+
+    # 5. Plain angle / coordinate degree spacing: '<num>°' (no space between number and °)
+    work = re.sub(
+        r"(\d+(?:[.,]\d+)?)[ \t]+°(?![ \t]*[CF]\b)",
+        r"\1°",
+        work,
+    )
+
+    # 6. Plain percentage spacing: '<num> %' except before '-' or 'ig...' (and skip '\%' inside $...$)
+    work = re.sub(
+        r"(\d)[ \t]*(?<!\\)%(?!-|ig)",
+        r"\1 %",
+        work,
+    )
+
+    for idx, val in enumerate(protected_spans):
+        work = work.replace(f"__FIBS_PROT_{idx}__", val)
+    return work
 
 
 def clean_repl_value(value: Any) -> str:

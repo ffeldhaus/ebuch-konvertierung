@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""
-Benchmark Run Analysis & Diagnostics Tool for E-Buch Standard Converter.
+"""Benchmark Run Analysis & Diagnostics Tool for E-Buch Standard Converter.
 Loads a benchmark run record (JSON) and outputs detailed category diagnostics,
 weakness analysis, and comparative diffs against golden ground truth references.
 """
 
+import argparse
+import glob
+import json
 import os
 import sys
-import json
-import glob
-import argparse
-from typing import Dict, Any, List
+from typing import Any
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNS_DIR = os.path.join(PROJECT_ROOT, "benchmarks", "runs")
@@ -39,7 +38,7 @@ def format_score(score: float, threshold_good: float = 80.0, threshold_warn: flo
         return f"\033[91m{score:5.1f}%\033[0m"
 
 
-def analyze_run(run_data: Dict[str, Any], show_details: bool = False, target_engine: str = None) -> None:
+def analyze_run(run_data: dict[str, Any], show_details: bool = False, target_engine: str = None) -> None:
     """Prints comprehensive benchmark run diagnostics to stdout."""
     run_id = run_data.get("run_id", "Unknown")
     timestamp = run_data.get("timestamp", "Unknown")
@@ -165,6 +164,7 @@ def analyze_run(run_data: Dict[str, Any], show_details: bool = False, target_eng
 
 
 def main():
+    """Parses CLI options and prints a summary of the selected benchmark run."""
     parser = argparse.ArgumentParser(description="Analyze and diagnose benchmark runs.")
     parser.add_argument("--run-file", type=str, help="Path to specific run JSON file. Defaults to latest in benchmarks/runs/.")
     parser.add_argument("--run-id", type=str, help="Specific run ID (e.g. 20260819_152103).")
@@ -197,7 +197,7 @@ def main():
         print(f"Error: Run file {run_file} not found.", file=sys.stderr)
         sys.exit(1)
 
-    with open(run_file, "r", encoding="utf-8") as f:
+    with open(run_file, encoding="utf-8") as f:
         run_data = json.load(f)
 
     analyze_run(run_data, show_details=args.details, target_engine=args.engine)

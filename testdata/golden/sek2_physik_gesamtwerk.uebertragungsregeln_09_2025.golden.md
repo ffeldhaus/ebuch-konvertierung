@@ -4,7 +4,7 @@
 
 ## Konzeption und Aufbau des Lehrwerks für die Qualifikationsphase
 
-Dieses zweisemestrige Lehrund Arbeitsbuch begleitet Schülerinnen und Schüler durch die zentralen Themenfelder der klassischen und modernen Physik in der gymnasialen Oberstufe. Der erste Hauptteil widmet sich der Kinematik, den Newtonschen Bewegungsgesetzen, den Erhaltungssätzen für mechanische Energie und linearen Impuls sowie der Kreisbewegung im homogenen und radialsymmetrischen Gravitationsfeld.
+Dieses zweisemestrige Lehr- und Arbeitsbuch begleitet Schülerinnen und Schüler durch die zentralen Themenfelder der klassischen und modernen Physik in der gymnasialen Oberstufe. Der erste Hauptteil widmet sich der Kinematik, den Newtonschen Bewegungsgesetzen, den Erhaltungssätzen für mechanische Energie und linearen Impuls sowie der Kreisbewegung im homogenen und radialsymmetrischen Gravitationsfeld.
 
 Der zweite Hauptteil führt systematisch in die statistische Deutung der Temperatur, die Zustandsgleichung idealer Gase, den ersten und zweiten Hauptsatz der Wärmelehre, kalorimetrische Präzisionsmessungen sowie technische Kreisprozesse und den Begriff der Entropie ein. Alle vorangestellten Verzeichnisse auf den römisch paginierten Vorsatzseiten I bis V verweisen unmittelbar auf die arabischen Buchseiten 1 bis 15 der beiden Fachkapitel.
 
@@ -24,7 +24,7 @@ _Impressum und Lizenzhinweis (Open Educational Resources CC0 1.0)_
 
 ## Didaktische Leitlinien und Kompetenzbereiche im Physikunterricht
 
-Physikalische Erkenntnis entsteht im Wechselspiel zwischen präziser Naturbeobachtung, quantitativer Messung im Schüleroder Demonstrationsexperiment und mathematischer Modellbildung. Zu Beginn jedes Abschnitts stellt eine leitende Fragestellung den Bezug zu Alltagsphänomenen, historischen Schlüsselversuchen oder technischen Anwendungen her. Darauf aufbauend werden Messreihen in übersichtlichen Datentabellen dokumentiert und mithilfe von Ursprungsgeraden, Parabeln oder Exponentialkurven grafisch ausgewertet.
+Physikalische Erkenntnis entsteht im Wechselspiel zwischen präziser Naturbeobachtung, quantitativer Messung im Schüler- oder Demonstrationsexperiment und mathematischer Modellbildung. Zu Beginn jedes Abschnitts stellt eine leitende Fragestellung den Bezug zu Alltagsphänomenen, historischen Schlüsselversuchen oder technischen Anwendungen her. Darauf aufbauend werden Messreihen in übersichtlichen Datentabellen dokumentiert und mithilfe von Ursprungsgeraden, Parabeln oder Exponentialkurven grafisch ausgewertet.
 
 Besonderes Gewicht liegt auf dem sicheren Umgang mit Größen, Messunsicherheiten und Kontrollrechnungen. Wenn im Unterricht einzelne Kapitel oder Seitenbereiche separat bearbeitet oder barrierefrei übertragen werden, ermöglichen das Inhaltsverzeichnis, das Abbildungsverzeichnis, das Bildverzeichnis und das Tabellenverzeichnis auf den Seiten III bis V jederzeit eine eindeutige Zuordnung aller Überschriften und Buchseiten.
 
@@ -69,18 +69,18 @@ _Lernwegweiser durch die Kurshalbjahre Mechanik und Thermodynamik_
 ## Abbildungsverzeichnis
 
 -	Abb. 1.1: Weg-Zeit- und Geschwindigkeits-Zeit-Diagramm der gleichmäßig beschleunigten Bewegung 1
--	Abb. 1.2: Kräfteparallelogramm und Dehnungskennlinie einer Schraubenfeder . 4
+-	Abb. 1.2: Kräfteparallelogramm und Dehnungskennlinie einer Schraubenfeder 4
 -	Abb. 1.3: Radialkraft und Bahngeschwindigkeit bei der gleichförmigen Kreisbewegung 8
 -	Abb. 2.1: Maxwell-Boltzmann-Geschwindigkeitsverteilung idealer Gasmoleküle 10
--	Abb. 2.2: Druck-Volumen-Diagramm des Carnot-Kreisprozesses mit Isothermen und Adiabaten . 15
+-	Abb. 2.2: Druck-Volumen-Diagramm des Carnot-Kreisprozesses mit Isothermen und Adiabaten 15
 
 ## Bildverzeichnis
 
--	Bild 1.1: Luftkissenfahrbahn mit Lichtschranken zur reibungsfreien Kinematikmessung . 2
+-	Bild 1.1: Luftkissenfahrbahn mit Lichtschranken zur reibungsfreien Kinematikmessung 2
 -	Bild 1.2: Elastischer Zentralstoß zweier Stahlkugeln auf der Horizontalschiene 6
--	Bild 2.1: Aufbau eines elektrischen Schülerkalorimeters mit Rührer und Temperaturfühler . 13
+-	Bild 2.1: Aufbau eines elektrischen Schülerkalorimeters mit Rührer und Temperaturfühler 13
 
-Alle im Abbildungsund Bildverzeichnis aufgeführten Grafiken, Funktionsdiagramme und Versuchsaufbauten sind kapitelweise nummeriert. Die vor dem Punkt stehende Ziffer bezeichnet das jeweilige Hauptkapitel (1 für Mechanik, 2 für Thermodynamik), während die laufende Nummer hinter dem Punkt die Reihenfolge innerhalb des Kapitels angibt.
+Alle im Abbildungs- und Bildverzeichnis aufgeführten Grafiken, Funktionsdiagramme und Versuchsaufbauten sind kapitelweise nummeriert. Die vor dem Punkt stehende Ziffer bezeichnet das jeweilige Hauptkapitel (1 für Mechanik, 2 für Thermodynamik), während die laufende Nummer hinter dem Punkt die Reihenfolge innerhalb des Kapitels angibt.
 
 <Rahmen>
 _Methodenhinweis: Diagramme und Realexperimente systematisch auswerten_
@@ -97,19 +97,19 @@ _Methodenhinweis: Diagramme und Realexperimente systematisch auswerten_
 
 -	Tab. 1.1: Messreihe zur gleichmäßig beschleunigten Bewegung auf der Luftkissenfahrbahn 2
 -	Tab. 1.2: Federkonstanten und Auslenkungswerte im Hooke’schen Proportionalitätsbereich 5
--	Tab. 1.3: Bahnradien und Umlaufzeiten ausgewählter Planeten im Sonnensystem . 9
+-	Tab. 1.3: Bahnradien und Umlaufzeiten ausgewählter Planeten im Sonnensystem 9
 -	Tab. 2.1: Zustandsgrößen und Freiheitsgrade ein- und mehratomiger idealer Gase 11
 -	Tab. 2.2: Spezifische Wärmekapazitäten ausgewählter Festkörper und Flüssigkeiten 14
 
-Die in den fünf Referenztabellen zusammengestellten Messreihen und Stoffwerte dienen als Grundlage für die Übungsaufgaben in Kapitel 1 und Kapitel 2. Bei allen experimentellen Datensätzen wurden systematische Reibungsund Wärmeverluste durch geeignete Versuchsführung minimiert; verbleibende zufällige Messabweichungen werden durch Mittelwertbildung und Ausgleichsgeraden ausgeglichen.
+Die in den fünf Referenztabellen zusammengestellten Messreihen und Stoffwerte dienen als Grundlage für die Übungsaufgaben in Kapitel 1 und Kapitel 2. Bei allen experimentellen Datensätzen wurden systematische Reibungs- und Wärmeverluste durch geeignete Versuchsführung minimiert; verbleibende zufällige Messabweichungen werden durch Mittelwertbildung und Ausgleichsgeraden ausgeglichen.
 
 <Rahmen>
 _Fundamentale Naturkonstanten und Basiseinheiten im SI-System_
 -	Mittlere Fallbeschleunigung auf der Erdoberfläche: g = 9,81 m/s^2 (ortsabhängig zwischen 9,78 und 9,83 m/s^2).
--	Universelle Gravitationskonstante: G = 6,674 * 10^{-11} N * m^2 / kg^2.
--	Boltzmann-Konstante: k_B = 1,381 * 10^{-23} J / K.
--	Avogadro-Konstante: N_A = 6,022 * 10^{23} 1 / mol.
--	Universelle Gaskonstante: R = N_A * k_B = 8,314 J / (mol * K).
+-	Universelle Gravitationskonstante: G = 6,674 \cdot 10^{-11} N \cdot m^2 / kg^2.
+-	Boltzmann-Konstante: k_B = 1,381 \cdot 10^{-23} J / K.
+-	Avogadro-Konstante: N_A = 6,022 \cdot 10^{23} 1 / mol.
+-	Universelle Gaskonstante: R = N_A \cdot k_B = 8,314 J / (mol \cdot K).
 -	Nullpunkt der absoluten Kelvin-Temperaturskala: T_0 = 0 K entspricht exakt -273,15 Grad Celsius.
 </Rahmen>
 
@@ -124,7 +124,7 @@ Die Kinematik beschreibt die Bewegung von Körpern rein geometrisch mithilfe der
 #### Abb. 1.1: Weg-Zeit- und Geschwindigkeits-Zeit-Diagramm der gleichmäßig beschleunigten Bewegung
 
 <Bild> Diagramm:
-Beschreibung mit Bildtext: Zweigeteiltes Koordinatensystem zur gleichmäßig beschleunigten Bewegung mit a = 0,80 m/s^2: Links zeigt das Weg-Zeit-Diagramm s(t) eine nach oben geöffnete Parabel, rechts zeigt das Geschwindigkeits-Zeit-Diagramm v(t) eine rot eingezeichnete Ursprungsgerade mit schraffierter Dreiecksfläche als zurückgelegtem Weg Delta s.
+Beschreibung mit Bildtext: Zweigeteiltes Koordinatensystem zur gleichmäßig beschleunigten Bewegung mit a = 0,80 m/s^2: Links zeigt das Weg-Zeit-Diagramm s(t) eine nach oben geöffnete Parabel, rechts zeigt das Geschwindigkeits-Zeit-Diagramm v(t) eine rot eingezeichnete Ursprungsgerade mit schraffierter Dreiecksfläche als zurückgelegtem Weg ~D s.
 </Bild>
 
 Im Geschwindigkeits-Zeit-Diagramm repräsentiert die konstante Steigung der Geraden genau die Beschleunigung des Körpers. Zugleich stimmt der Flächeninhalt des rechtwinkligen Dreiecks unterhalb der Geschwindigkeitsgeraden im Zeitintervall von null bis t exakt mit dem zurückgelegten Gesamtweg überein.
@@ -132,9 +132,9 @@ Im Geschwindigkeits-Zeit-Diagramm repräsentiert die konstante Steigung der Gera
 <Rahmen>
 _Merksatz: Bewegungsgesetze der gleichmäßig beschleunigten Bewegung_
 -	Definition der Momentanbeschleunigung: a = dv / dt = konstant (für gleichmäßige Beschleunigung).
--	Geschwindigkeits-Zeit-Gesetz (mit Anfangsgeschwindigkeit v_0): v(t) = a * t + v_0.
--	Weg-Zeit-Gesetz (mit Anfangsweg s_0 und Anfangsgeschwindigkeit v_0): s(t) = 0,5 * a * t^2 + v_0 * t + s_0.
--	Zeitfreie Beziehung (Elimination der Zeit t): v^2 - v_0^2 = 2 * a * Delta s.
+-	Geschwindigkeits-Zeit-Gesetz (mit Anfangsgeschwindigkeit v_0): v(t) = a \cdot t + v_0.
+-	Weg-Zeit-Gesetz (mit Anfangsweg s_0 und Anfangsgeschwindigkeit v_0): s(t) = 0,5 \cdot a \cdot t^2 + v_0 \cdot t + s_0.
+-	Zeitfreie Beziehung (Elimination der Zeit t): v^2 - v_0^2 = 2 \cdot a \cdot ~D s.
 -	Spezialfall freier Fall im Vakuum (ohne Luftwiderstand): a = g = 9,81 m/s^2 vertikal nach unten.
 </Rahmen>
 
@@ -162,10 +162,10 @@ Berechnen Sie aus den Messwerten in Tab. 1.1 für jeden der vier Messpunkte den 
 
 <Rahmen>
 _Methoden-Kasten: Bestimmung der Momentangeschwindigkeit mit Dunkelblenden_
--	Prinzip der Dunkelzeitmessung: Eine Blende der Länge Delta x unterbricht den Lichtstrahl für die Zeitspanne Delta t.
--	Näherungswert der Momentangeschwindigkeit: v = Delta x / Delta t (je schmaler die Blende, desto genauer der Wert).
+-	Prinzip der Dunkelzeitmessung: Eine Blende der Länge ~D x unterbricht den Lichtstrahl für die Zeitspanne ~D t.
+-	Näherungswert der Momentangeschwindigkeit: v = ~D x / ~D t (je schmaler die Blende, desto genauer der Wert).
 -	Prüfung auf konstante Beschleunigung: Im s-t^2-Diagramm liegen alle Messpunkte auf einer Ursprungsgeraden.
--	Steigung im s-t^2-Diagramm: Der Proportionalitätsfaktor k = s / t^2 entspricht exakt dem halben Beschleunigungswert 0,5 * a.
+-	Steigung im s-t^2-Diagramm: Der Proportionalitätsfaktor k = s / t^2 entspricht exakt dem halben Beschleunigungswert 0,5 \cdot a.
 -	Luftkissendruck konstant halten, damit der Gleiter an keiner Stelle die Metallschiene berührt.
 </Rahmen>
 
@@ -175,7 +175,7 @@ _Methoden-Kasten: Bestimmung der Momentangeschwindigkeit mit Dunkelblenden_
 
 Im Jahr 1687 formulierte Isaac Newton in seinen Philosophiae Naturalis Principia Mathematica die drei Grundgesetze der klassischen Dynamik. Das erste Axiom (Trägheitsprinzip) besagt, dass jeder Körper im Zustand der Ruhe oder der gleichförmig geradlinigen Bewegung verharrt, solange die Vektorsumme aller auf ihn einwirkenden äußeren Kräfte gleich null ist.
 
-Das zweite Axiom (Aktionsprinzip) verknüpft die resultierende Gesamtkraft F mit der zeitlichen Änderung des Impulses beziehungsweise bei konstanter träger Masse m unmittelbar mit der Beschleunigung a über die Grundgleichung F = m * a. Das dritte Axiom (Wechselwirkungsprinzip, Actio gleich Reactio) stellt fest, dass Kräfte zwischen zwei Körpern A und B stets paarweise, gleichzeitig, gleich groß und entgegengesetzt gerichtet auftreten.
+Das zweite Axiom (Aktionsprinzip) verknüpft die resultierende Gesamtkraft F mit der zeitlichen Änderung des Impulses beziehungsweise bei konstanter träger Masse m unmittelbar mit der Beschleunigung a über die Grundgleichung F = m \cdot a. Das dritte Axiom (Wechselwirkungsprinzip, Actio gleich Reactio) stellt fest, dass Kräfte zwischen zwei Körpern A und B stets paarweise, gleichzeitig, gleich groß und entgegengesetzt gerichtet auftreten.
 
 ### Aufgabe 2: Beschleunigung und Bremsweg eines Schienenfahrzeugs
 
@@ -184,7 +184,7 @@ Eine Regionalbahn der Gesamtmasse m = 120 t wird aus dem Stand durch eine konsta
 <Rahmen>
 _Merksatz: Die drei Newtonschen Axiome der Mechanik im Überblick_
 -	Erstes Axiom (Trägheitsgesetz): Aus Summe F_i = 0 folgt v = konstant (Inertialsysteme als Bezugssysteme).
--	Zweites Axiom (Grundgleichung der Mechanik): F_res = dp / dt = m * a (mit 1 Newton = 1 kg * m / s^2).
+-	Zweites Axiom (Grundgleichung der Mechanik): F_res = dp / dt = m \cdot a (mit 1 Newton = 1 kg \cdot m / s^2).
 -	Drittes Axiom (Wechselwirkungsgesetz): F_{A auf B} = -F_{B auf A} (Angriffspunkte liegen an verschiedenen Körpern).
 -	Unterschied zwischen Kräftegleichgewicht und Wechselwirkungskräften: Gleichgewichtskräfte wirken am selben Körper.
 -	Superpositionsprinzip der Kräfte: Mehrere Einzelkräfte addieren sich vektoriell zur resultierenden Gesamtkraft.
@@ -198,7 +198,7 @@ Wird eine zylindrische Schraubenfeder aus Federstahl am oberen Ende fest eingesp
 
 #### Abb. 1.2: Kräfteparallelogramm und Dehnungskennlinie einer Schraubenfeder
 
-Links die vektorielle Zerlegung einer Gewichtskraft an der geneigten Ebene in Hangabtriebskraft und Normalkraft, rechts die lineare Hooke’sche Kennlinie F(s) = D * s mit markierter Elastizitätsgrenze.
+Links die vektorielle Zerlegung einer Gewichtskraft an der geneigten Ebene in Hangabtriebskraft und Normalkraft, rechts die lineare Hooke’sche Kennlinie F(s) = D \cdot s mit markierter Elastizitätsgrenze.
 
 Überschreitet die angehängte Zugkraft hingegen die materialspezifische Elastizitätsgrenze, so weicht die Kennlinie vom linearen Verlauf ab und die Schraubenfeder behält nach dem Entlasten eine dauerhafte plastische Längenänderung zurück.
 
@@ -208,7 +208,7 @@ _Versuchsprotokoll: Aufnahme einer Hooke’schen Federkennlinie_
 -	Nullpunktkontrolle: Unbelastete Position des unteren Federzeigers an der vertikalen Millimeterskala exakt ablesen.
 -	Messdurchführung: Masse schrittweise um je 50 g erhöhen und jeweils die Ruhelage nach vollständigem Ausschwingen notieren.
 -	Kontrollmessung beim Entlasten: Prüfen, ob der Zeiger ohne Hysterese wieder exakt zum ursprünglichen Nullpunkt zurückkehrt.
--	Auswertung: Gewichtskraft F_G = m * g über der Auslenkung s auftragen und die Steigung D der Ausgleichsgeraden ermitteln.
+-	Auswertung: Gewichtskraft F_G = m \cdot g über der Auslenkung s auftragen und die Steigung D der Ausgleichsgeraden ermitteln.
 </Rahmen>
 
 ((5))
@@ -229,13 +229,13 @@ Angehängte Masse m	Zugkraft F_G (N)	Auslenkung Feder A	Auslenkung Feder B
 
 ### Aufgabe 3: Lineare Regression der Federkennlinie
 
-Bestimmen Sie mithilfe von Tab. 1.2 die Federkonstanten D_A und D_B beider Schraubenfedern in der Einheit N/m und berechnen Sie die gespeicherte Spannenergie E_spann = 0,5 * D * s^2 für eine Auslenkung von s = 8,0 cm.
+Bestimmen Sie mithilfe von Tab. 1.2 die Federkonstanten D_A und D_B beider Schraubenfedern in der Einheit N/m und berechnen Sie die gespeicherte Spannenergie E_spann = 0,5 \cdot D \cdot s^2 für eine Auslenkung von s = 8,0 cm.
 
 <Rahmen>
 _Methoden-Kasten: Systematische und zufällige Messabweichungen_
 -	Systematische Abweichungen: Entstehen durch falsch kalibrierte Skalen oder Eigengewicht der unbelasteten Federwindungen.
 -	Zufällige Abweichungen: Streuen beidseitig um den wahren Wert (z. B. durch leichte Pendelschwingungen beim Ablesen).
--	Größtfehlerabschätzung bei Quotienten D = F / s: Die relativen Unsicherheiten Delta F / F und Delta s / s addieren sich.
+-	Größtfehlerabschätzung bei Quotienten D = F / s: Die relativen Unsicherheiten ~D F / F und ~D s / s addieren sich.
 -	Vorteil eines Spiegelmaßstabs: Verhindert Parallaxenfehler, sobald Zeiger und Spiegelbild exakt zur Deckung kommen.
 -	Parallelschaltung zweier Federn: Die Ersatzfederkonstante beträgt D_ges = D_A + D_B.
 </Rahmen>
@@ -254,18 +254,18 @@ Noch allgemeiner als der mechanische Energieerhaltungssatz gilt der Impulserhalt
 
 <Rahmen>
 _Merksatz: Mechanische Energieformen und Erhaltungssätze_
--	Kinetische Energie eines Körpers der Masse m: E_kin = 0,5 * m * v^2 = p^2 / (2 * m).
--	Potenzielle Energie im homogenen Schwerefeld: E_pot = m * g * h (bezogen auf ein frei wählbares Nullniveau).
--	Elastische Spannenergie einer Hooke’schen Feder: E_spann = 0,5 * D * s^2.
+-	Kinetische Energie eines Körpers der Masse m: E_kin = 0,5 \cdot m \cdot v^2 = p^2 / (2 \cdot m).
+-	Potenzielle Energie im homogenen Schwerefeld: E_pot = m \cdot g \cdot h (bezogen auf ein frei wählbares Nullniveau).
+-	Elastische Spannenergie einer Hooke’schen Feder: E_spann = 0,5 \cdot D \cdot s^2.
 -	Mechanischer Energieerhaltungssatz (ohne Reibung): E_ges = E_kin + E_pot + E_spann = konstant.
--	Impulserhaltungssatz im abgeschlossenen System: p_ges = m_1 * v_1 + m_2 * v_2 = konstant.
+-	Impulserhaltungssatz im abgeschlossenen System: p_ges = m_1 \cdot v_1 + m_2 \cdot v_2 = konstant.
 </Rahmen>
 
 ((7))
 
 Beim zentralen elastischen Stoß zweier Körper gelten Impulserhaltung und kinetische Energieerhaltung gleichzeitig. Trifft eine bewegte Stahlkugel der Masse m_1 zentral auf eine ruhende zweite Stahlkugel gleicher Masse m_2 = m_1, so tauscht die stoßende Kugel ihren gesamten Impuls und ihre gesamte Bewegungsenergie vollständig mit der zuvor ruhenden Kugel aus: Kugel 1 kommt augenblicklich zum Stillstand, während Kugel 2 mit der ursprünglichen Geschwindigkeit v_1 weiterrollt.
 
-Beim vollkommen unelastischen Stoß hingegen verformen sich beide Stoßpartner bleibend und bewegen sich nach dem Zusammenstoß mit einer gemeinsamen Endgeschwindigkeit u weiter. Dabei bleibt zwar der Gesamtimpuls streng erhalten, ein Teil der mechanischen Bewegungsenergie wird jedoch in innere Verformungsund Wärmeenergie umgewandelt.
+Beim vollkommen unelastischen Stoß hingegen verformen sich beide Stoßpartner bleibend und bewegen sich nach dem Zusammenstoß mit einer gemeinsamen Endgeschwindigkeit u weiter. Dabei bleibt zwar der Gesamtimpuls streng erhalten, ein Teil der mechanischen Bewegungsenergie wird jedoch in innere Verformungs- und Wärmeenergie umgewandelt.
 
 ### Aufgabe 4: Elastischer und unelastischer Stoß auf der Schiene
 
@@ -277,10 +277,10 @@ Eine Pendelkugel wird um die Höhe h = 20 cm über ihre tiefste Bahnlage ausgele
 
 <Rahmen>
 _Beispielrechnung: Geschwindigkeitsformeln beim zentralen Stoß_
--	Gemeinsame Endgeschwindigkeit beim unelastischen Stoß: u = (m_1 * v_1 + m_2 * v_2) / (m_1 + m_2).
--	Umgewandelte Verformungsenergie beim unelastischen Stoß: Delta E = 0,5 * (m_1 * m_2) / (m_1 + m_2) * (v_1 - v_2)^2.
--	Endgeschwindigkeit v_1' beim elastischen Stoß (für v_2 = 0): v_1' = ((m_1 - m_2) / (m_1 + m_2)) * v_1.
--	Endgeschwindigkeit v_2' beim elastischen Stoß (für v_2 = 0): v_2' = ((2 * m_1) / (m_1 + m_2)) * v_1.
+-	Gemeinsame Endgeschwindigkeit beim unelastischen Stoß: u = (m_1 \cdot v_1 + m_2 \cdot v_2) / (m_1 + m_2).
+-	Umgewandelte Verformungsenergie beim unelastischen Stoß: ~D E = 0,5 \cdot (m_1 \cdot m_2) / (m_1 + m_2) \cdot (v_1 - v_2)^2.
+-	Endgeschwindigkeit v_1' beim elastischen Stoß (für v_2 = 0): v_1' = ((m_1 - m_2) / (m_1 + m_2)) \cdot v_1.
+-	Endgeschwindigkeit v_2' beim elastischen Stoß (für v_2 = 0): v_2' = ((2 \cdot m_1) / (m_1 + m_2)) \cdot v_1.
 -	Sonderfall gleicher Massen m_1 = m_2 beim elastischen Stoß: v_1' = 0 und v_2' = v_1 (vollständiger Impulstausch).
 </Rahmen>
 
@@ -288,21 +288,21 @@ _Beispielrechnung: Geschwindigkeitsformeln beim zentralen Stoß_
 
 ## 1.4 Kreisbewegung und Gravitationsfeld
 
-Bewegt sich ein Körper mit konstantem Geschwindigkeitsbetrag v auf einer Kreisbahn vom Radius r, so ändert sich in jedem Augenblick die Richtung seines Geschwindigkeitsvektors. Diese stetige Richtungsänderung erfordert eine permanent zum Kreismittelpunkt gerichtete Zentripetalbeschleunigung a_Z = v^2 / r = omega^2 * r sowie eine entsprechende Zentripetalkraft F_Z = m * v^2 / r, die stets senkrecht auf der Bahngeschwindigkeit steht.
+Bewegt sich ein Körper mit konstantem Geschwindigkeitsbetrag v auf einer Kreisbahn vom Radius r, so ändert sich in jedem Augenblick die Richtung seines Geschwindigkeitsvektors. Diese stetige Richtungsänderung erfordert eine permanent zum Kreismittelpunkt gerichtete Zentripetalbeschleunigung a_Z = v^2 / r = ~w^2 \cdot r sowie eine entsprechende Zentripetalkraft F_Z = m \cdot v^2 / r, die stets senkrecht auf der Bahngeschwindigkeit steht.
 
 #### Abb. 1.3: Radialkraft und Bahngeschwindigkeit bei der gleichförmigen Kreisbewegung
 
-Kreisbahn mit Radius r, tangential gerichtetem Geschwindigkeitsvektor v, zum Zentrum M zeigender Zentripetalkraft F_Z und überstrichenem Mittelpunktswinkel Delta phi = omega * Delta t.
+Kreisbahn mit Radius r, tangential gerichtetem Geschwindigkeitsvektor v, zum Zentrum M zeigender Zentripetalkraft F_Z und überstrichenem Mittelpunktswinkel ~D ~f = ~w \cdot ~D t.
 
-Bei der Bewegung von Planeten um die Sonne oder von Satelliten um die Erde wird die erforderliche Zentripetalkraft ausschließlich durch die Newtonsche Gravitationskraft F_G = G * (M * m) / r^2 aufgebracht. Durch Gleichsetzen von Gravitationskraft und Zentripetalkraft folgen unmittelbar die erste kosmische Kreisbahngeschwindigkeit sowie das dritte Keplersche Gesetz der Planetenbewegung.
+Bei der Bewegung von Planeten um die Sonne oder von Satelliten um die Erde wird die erforderliche Zentripetalkraft ausschließlich durch die Newtonsche Gravitationskraft F_G = G \cdot (M \cdot m) / r^2 aufgebracht. Durch Gleichsetzen von Gravitationskraft und Zentripetalkraft folgen unmittelbar die erste kosmische Kreisbahngeschwindigkeit sowie das dritte Keplersche Gesetz der Planetenbewegung.
 
 <Rahmen>
 _Merksatz: Kenngrößen der Kreisbewegung und Gravitationsgesetz_
--	Umlaufzeit T und Drehfrequenz f: Es gilt f = 1 / T und die Winkelgeschwindigkeit omega = 2 * pi / T = 2 * pi * f.
--	Bahngeschwindigkeit und Zentripetalkraft: v = omega * r = (2 * pi * r) / T sowie F_Z = m * v^2 / r = m * omega^2 * r.
--	Newtonsches Gravitationsgesetz: F_G = G * (m_1 * m_2) / r^2 (wirkt längs der Verbindungslinie der Schwerpunkte).
--	Erste kosmische Geschwindigkeit für eine kreisförmige Umlaufbahn: v_K = sqrt(G * M / r).
--	Drittes Keplersches Gesetz: T^2 / r^3 = (4 * pi^2) / (G * M) = konstant für alle Trabanten desselben Zentralkörpers.
+-	Umlaufzeit T und Drehfrequenz f: Es gilt f = 1 / T und die Winkelgeschwindigkeit ~w = 2 \cdot ~p / T = 2 \cdot ~p \cdot f.
+-	Bahngeschwindigkeit und Zentripetalkraft: v = ~w \cdot r = (2 \cdot ~p \cdot r) / T sowie F_Z = m \cdot v^2 / r = m \cdot ~w^2 \cdot r.
+-	Newtonsches Gravitationsgesetz: F_G = G \cdot (m_1 \cdot m_2) / r^2 (wirkt längs der Verbindungslinie der Schwerpunkte).
+-	Erste kosmische Geschwindigkeit für eine kreisförmige Umlaufbahn: v_K = \sqrt{G \cdot M / r}.
+-	Drittes Keplersches Gesetz: T^2 / r^3 = (4 \cdot ~p^2) / (G \cdot M) = konstant für alle Trabanten desselben Zentralkörpers.
 </Rahmen>
 
 ((9))
@@ -313,10 +313,10 @@ Johannes Kepler entdeckte 1619 anhand der präzisen Himmelsbeobachtungen von Tyc
 
 <Tabelle>
 Planet	Mittlerer Bahnradius r (10^6 km)	Umlaufzeit T (Erdjahre)	Bahngeschwindigkeit v (km/s)
-Merkur	57,9 * 10^6 km	0,241 a	47,9 km/s
-Venus	108,2 * 10^6 km	0,615 a	35,0 km/s
-Erde	149,6 * 10^6 km	1,000 a	29,8 km/s
-Mars	227,9 * 10^6 km	1,881 a	24,1 km/s
+Merkur	57,9 \cdot 10^6 km	0,241 a	47,9 km/s
+Venus	108,2 \cdot 10^6 km	0,615 a	35,0 km/s
+Erde	149,6 \cdot 10^6 km	1,000 a	29,8 km/s
+Mars	227,9 \cdot 10^6 km	1,881 a	24,1 km/s
 </Tabelle>
 
 ### Aufgabe 6: Überprüfung des dritten Kepler’schen Gesetzes
@@ -326,7 +326,7 @@ Prüfen Sie anhand der Werte in Tab. 1.3 für Merkur, Venus, Erde und Mars die K
 <Rahmen>
 _Zusammenfassung Kapitel 1: Kernkompetenzen Mechanik und Gravitation_
 -	Kinematik: Unterscheidung zwischen gleichförmiger Bewegung (v = konstant) und gleichmäßig beschleunigter Bewegung (a = konstant).
--	Dynamik: Kräfte als Ursache von Geschwindigkeitsänderungen und Verformungen gemäß F = m * a und F = D * s.
+-	Dynamik: Kräfte als Ursache von Geschwindigkeitsänderungen und Verformungen gemäß F = m \cdot a und F = D \cdot s.
 -	Erhaltungssätze: Sichere Anwendung von Energie- und Impulserhaltung auf Stöße, Pendel und Feder-Masse-Systeme.
 -	Kreisbewegung: Berechnung von Winkelgeschwindigkeit, Zentripetalbeschleunigung und Radialkraft in Kurven.
 -	Gravitation: Herleitung von Satellitenbahnen, geostationärem Orbit und Keplerschen Gesetzen aus dem Gravitationsgesetz.
@@ -350,25 +350,25 @@ Je höher die absolute Temperatur T auf der Kelvin-Skala steigt, desto größer 
 
 <Rahmen>
 _Merksatz: Allgemeine Zustandsgleichung und kinetische Gastheorie_
--	Thermische Zustandsgleichung idealer Gase: p * V = n * R * T = N * k_B * T.
--	Gesetz von Boyle-Mariotte (isotherme Zustandsänderung, T = konstant): p * V = konstant.
+-	Thermische Zustandsgleichung idealer Gase: p \cdot V = n \cdot R \cdot T = N \cdot k_B \cdot T.
+-	Gesetz von Boyle-Mariotte (isotherme Zustandsänderung, T = konstant): p \cdot V = konstant.
 -	Gesetz von Gay-Lussac (isobare Zustandsänderung, p = konstant): V / T = konstant.
 -	Gesetz von Amontons (isochore Zustandsänderung, V = konstant): p / T = konstant.
--	Mittlere kinetische Translationsenergie eines Gasteilchens: E_trans = 1,5 * k_B * T.
+-	Mittlere kinetische Translationsenergie eines Gasteilchens: E_trans = 1,5 \cdot k_B \cdot T.
 </Rahmen>
 
 ((11))
 
-Nach dem statistischen Gleichverteilungssatz (Äquipartitionstheorem) entfällt im thermischen Gleichgewicht auf jeden unabhängigen quadratischen Freiheitsgrad f eines Gasmoleküls im Mittel die Energie 0,5 * k_B * T. Einatomige Edelgase wie Helium oder Argon besitzen lediglich drei Translationsfreiheitsgrade im Raum, während zweiatomige Gasmoleküle wie Stickstoff und Sauerstoff bei Raumtemperatur zusätzlich um zwei senkrecht zur Kernverbindungslinie orientierte Achsen rotieren können.
+Nach dem statistischen Gleichverteilungssatz (Äquipartitionstheorem) entfällt im thermischen Gleichgewicht auf jeden unabhängigen quadratischen Freiheitsgrad f eines Gasmoleküls im Mittel die Energie 0,5 \cdot k_B \cdot T. Einatomige Edelgase wie Helium oder Argon besitzen lediglich drei Translationsfreiheitsgrade im Raum, während zweiatomige Gasmoleküle wie Stickstoff und Sauerstoff bei Raumtemperatur zusätzlich um zwei senkrecht zur Kernverbindungslinie orientierte Achsen rotieren können.
 
 ### Tab. 2.1: Zustandsgrößen und Freiheitsgrade ein- und mehratomiger idealer Gase
 
 <Tabelle>
 Gasart / Molekülbau	Freiheitsgrade f	Innere Energie U (mol)	Molare Wärmekapazität C_V
-Helium (He, einatomig)	f = 3 (Translation)	U = 1,5 * n * R * T	12,5 J / (mol * K)
-Argon (Ar, einatomig)	f = 3 (Translation)	U = 1,5 * n * R * T	12,5 J / (mol * K)
-Stickstoff (N_2, zweiatomig)	f = 5 (3 Trans. + 2 Rot.)	U = 2,5 * n * R * T	20,8 J / (mol * K)
-Kohlendioxid (CO_2, mehratomig)	f = 6 (mit Schwingung)	U = 3,0 * n * R * T	28,5 J / (mol * K)
+Helium (He, einatomig)	f = 3 (Translation)	U = 1,5 \cdot n \cdot R \cdot T	12,5 J / (mol \cdot K)
+Argon (Ar, einatomig)	f = 3 (Translation)	U = 1,5 \cdot n \cdot R \cdot T	12,5 J / (mol \cdot K)
+Stickstoff (N_2, zweiatomig)	f = 5 (3 Trans. + 2 Rot.)	U = 2,5 \cdot n \cdot R \cdot T	20,8 J / (mol \cdot K)
+Kohlendioxid (CO_2, mehratomig)	f = 6 (mit Schwingung)	U = 3,0 \cdot n \cdot R \cdot T	28,5 J / (mol \cdot K)
 </Tabelle>
 
 ### Aufgabe 1: Zustandsänderungen im Kolbenzylinder
@@ -377,11 +377,11 @@ In einem beweglichen Kolbenzylinder befinden sich n = 2,0 mol Stickstoffgas bei 
 
 <Rahmen>
 _Methoden-Kasten: Umrechnung thermodynamischer Zustandsgrößen_
--	Umrechnung zwischen Celsius- und Kelvin-Skala: T (in K) = theta (in Grad Celsius) + 273,15.
+-	Umrechnung zwischen Celsius- und Kelvin-Skala: T (in K) = ~q (in Grad Celsius) + 273,15.
 -	Druckeinheiten im Vergleich: 1 bar = 10^5 Pa = 100 kPa = 10^5 N / m^2.
 -	Volumeneinheiten im Vergleich: 1 m^3 = 1000 Liter (L) = 10^6 cm^3.
 -	Normbedingungen (STP): p_0 = 1013,25 hPa und T_0 = 273,15 K (molares Normvolumen V_m = 22,41 L/mol).
--	Zusammenhang der molaren Wärmekapazitäten: C_p - C_V = R sowie Adiabatenexponent kappa = C_p / C_V = (f + 2) / f.
+-	Zusammenhang der molaren Wärmekapazitäten: C_p - C_V = R sowie Adiabatenexponent ~k = C_p / C_V = (f + 2) / f.
 </Rahmen>
 
 ((12))
@@ -394,22 +394,22 @@ Nach der in der Physik heute verbindlichen Vorzeichenkonvention der IUPAC zähle
 
 ### Aufgabe 2: Energiebilanz bei Kompression eines Gases
 
-Einem abgeschlossenen Gasvolumen wird während einer Kompression die mechanische Arbeit W = +450 J zugeführt, während gleichzeitig die Wärmemenge Q = -180 J an das Kühlwasser abfließt. Bestimmen Sie die Änderung Delta U der inneren Energie des Gases.
+Einem abgeschlossenen Gasvolumen wird während einer Kompression die mechanische Arbeit W = +450 J zugeführt, während gleichzeitig die Wärmemenge Q = -180 J an das Kühlwasser abfließt. Bestimmen Sie die Änderung ~D U der inneren Energie des Gases.
 
 <Rahmen>
 _Merksatz: Der Erste Hauptsatz und spezielle Zustandsänderungen_
--	Bilanzgleichung des ersten Hauptsatzes: Delta U = Q + W (Energie kann weder aus dem Nichts entstehen noch verloren gehen).
--	Volumenarbeit bei konstantem Außendruck p: W = -p * Delta V = -p * (V_2 - V_1).
--	Isochore Zustandsänderung (V = konstant): W = 0, daher gilt Delta U = Q_V = n * C_V * Delta T.
--	Isotherme Zustandsänderung idealer Gase (T = konstant): Delta U = 0, daher gilt Q = -W = n * R * T * ln(V_2 / V_1).
--	Adiabatische Zustandsänderung (wärmeisoliert, Q = 0): Delta U = W (mit Poisson-Gleichung p * V^kappa = konstant).
+-	Bilanzgleichung des ersten Hauptsatzes: ~D U = Q + W (Energie kann weder aus dem Nichts entstehen noch verloren gehen).
+-	Volumenarbeit bei konstantem Außendruck p: W = -p \cdot ~D V = -p \cdot (V_2 - V_1).
+-	Isochore Zustandsänderung (V = konstant): W = 0, daher gilt ~D U = Q_V = n \cdot C_V \cdot ~D T.
+-	Isotherme Zustandsänderung idealer Gase (T = konstant): ~D U = 0, daher gilt Q = -W = n \cdot R \cdot T \cdot ln(V_2 / V_1).
+-	Adiabatische Zustandsänderung (wärmeisoliert, Q = 0): ~D U = W (mit Poisson-Gleichung p \cdot V^~k = konstant).
 </Rahmen>
 
 ((13))
 
 ### Kalorimetrische Messung der spezifischen Wärmekapazität
 
-Führt man einem festen oder flüssigen Körper der Masse m ohne Phasenübergang die Wärmemenge Q zu, so steigt seine Temperatur um die Differenz Delta T = T_2 T_1 an. Der stoffspezifische Proportionalitätsfaktor c in der Grundgleichung der Wärmelehre Q = c * m * Delta T heißt spezifische Wärmekapazität. Er gibt an, welche Wärmemenge erforderlich ist, um ein Kilogramm des jeweiligen Stoffes um ein Kelvin zu erwärmen.
+Führt man einem festen oder flüssigen Körper der Masse m ohne Phasenübergang die Wärmemenge Q zu, so steigt seine Temperatur um die Differenz ~D T = T_2 - T_1 an. Der stoffspezifische Proportionalitätsfaktor c in der Grundgleichung der Wärmelehre Q = c \cdot m \cdot ~D T heißt spezifische Wärmekapazität. Er gibt an, welche Wärmemenge erforderlich ist, um ein Kilogramm des jeweiligen Stoffes um ein Kelvin zu erwärmen.
 
 #### Bild 2.1: Aufbau eines elektrischen Schülerkalorimeters mit Rührer und Temperaturfühler
 
@@ -419,10 +419,10 @@ Zur experimentellen Bestimmung der spezifischen Wärmekapazität eines Metalls w
 
 <Rahmen>
 _Versuchsaufbau: Bestimmung von Wärmekapazitäten nach der Mischungsmethode_
--	Grundgleichung der Kalorimetrie: Q = c * m * Delta T (Einheit von c ist J / (kg * K) bzw. kJ / (kg * K)).
--	Elektrische Kalorimetrie: Zugeführte elektrische Heizenergie E_el = U * I * t wird mit c_W * m_W * Delta T gleichgesetzt.
+-	Grundgleichung der Kalorimetrie: Q = c \cdot m \cdot ~D T (Einheit von c ist J / (kg \cdot K) bzw. kJ / (kg \cdot K)).
+-	Elektrische Kalorimetrie: Zugeführte elektrische Heizenergie E_el = U \cdot I \cdot t wird mit c_W \cdot m_W \cdot ~D T gleichgesetzt.
 -	Mischungskalorimetrie (ohne Verluste): Abgegebene Wärme des heißen Körpers ist gleich aufgenommener Wärme des Wassers.
--	Richmann’sche Mischungsformel: c_K * m_K * (T_K - T_M) = c_W * m_W * (T_M - T_W).
+-	Richmann’sche Mischungsformel: c_K \cdot m_K \cdot (T_K - T_M) = c_W \cdot m_W \cdot (T_M - T_W).
 -	Wichtig bei der Durchführung: Metallkörper zügig übertragen und Kalorimeterwasser kontinuierlich rühren.
 </Rahmen>
 
@@ -430,16 +430,16 @@ _Versuchsaufbau: Bestimmung von Wärmekapazitäten nach der Mischungsmethode_
 
 #### Wärmeaustausch mit dem Kalorimetergefäß
 
-Bei präzisen kalorimetrischen Messungen darf nicht vernachlässigt werden, dass auch die Innenwand des Kalorimeterbechers, der Rührer und der Temperaturfühler gemeinsam mit der Wasserfüllung von der Anfangstemperatur T_W auf die Mischungstemperatur T_M erwärmt werden. Man fasst diese Bauteile durch ihre Wärmekapazität C_Kal = c_W * m_E beziehungsweise ihren sogenannten Wasserwert m_E rechnerisch zusammen.
+Bei präzisen kalorimetrischen Messungen darf nicht vernachlässigt werden, dass auch die Innenwand des Kalorimeterbechers, der Rührer und der Temperaturfühler gemeinsam mit der Wasserfüllung von der Anfangstemperatur T_W auf die Mischungstemperatur T_M erwärmt werden. Man fasst diese Bauteile durch ihre Wärmekapazität C_Kal = c_W \cdot m_E beziehungsweise ihren sogenannten Wasserwert m_E rechnerisch zusammen.
 
 ### Tab. 2.2: Spezifische Wärmekapazitäten ausgewählter Festkörper und Flüssigkeiten
 
 <Tabelle>
-Stoff / Material	Aggregatzustand (20 °C)	Spezifische Wärmekapazität c	Dichte rho (g/cm^3)
-Wasser (flüssig)	Flüssigkeit	4,18 kJ / (kg * K)	1,00 g/cm^3
-Aluminium (Al)	Festkörper (Metall)	0,896 kJ / (kg * K)	2,70 g/cm^3
-Eisen / Stahl (Fe)	Festkörper (Metall)	0,452 kJ / (kg * K)	7,87 g/cm^3
-Kupfer (Cu)	Festkörper (Metall)	0,385 kJ / (kg * K)	8,96 g/cm^3
+Stoff / Material	Aggregatzustand (20 °C)	Spezifische Wärmekapazität c	Dichte ~r (g/cm^3)
+Wasser (flüssig)	Flüssigkeit	4,18 kJ / (kg \cdot K)	1,00 g/cm^3
+Aluminium (Al)	Festkörper (Metall)	0,896 kJ / (kg \cdot K)	2,70 g/cm^3
+Eisen / Stahl (Fe)	Festkörper (Metall)	0,452 kJ / (kg \cdot K)	7,87 g/cm^3
+Kupfer (Cu)	Festkörper (Metall)	0,385 kJ / (kg \cdot K)	8,96 g/cm^3
 </Tabelle>
 
 ### Aufgabe 3: Bestimmung der Mischungstemperatur im Kalorimeter
@@ -448,11 +448,11 @@ Ein Kupferblock der Masse m_Cu = 300 g und der Temperatur T_Cu = 95,0 Grad Celsi
 
 <Rahmen>
 _Fehleranalyse in der Kalorimetrie: Berücksichtigung des Wasserwerts_
--	Erweiterte Bilanzgleichung mit Kalorimetergefäß: c_K * m_K * (T_K - T_M) = (c_W * m_W + C_Kal) * (T_M - T_W).
+-	Erweiterte Bilanzgleichung mit Kalorimetergefäß: c_K \cdot m_K \cdot (T_K - T_M) = (c_W \cdot m_W + C_Kal) \cdot (T_M - T_W).
 -	Bestimmung von C_Kal durch Vorversuch: Mischen zweier bekannter Wassermengen unterschiedlicher Temperatur.
 -	Vermeidung von Verdampfungsverlusten: Kalorimeterdeckel während des gesamten Temperaturausgleichs geschlossen halten.
--	Besonderheit des Wassers: Die extrem hohe spezifische Wärmekapazität c_W = 4,18 kJ / (kg * K) stabilisiert das Erdklima.
--	Dulong-Petit-Regel für feste Metalle: Die molare Wärmekapazität beträgt bei Raumtemperatur näherungsweise 3 * R = 25 J / (mol * K).
+-	Besonderheit des Wassers: Die extrem hohe spezifische Wärmekapazität c_W = 4,18 kJ / (kg \cdot K) stabilisiert das Erdklima.
+-	Dulong-Petit-Regel für feste Metalle: Die molare Wärmekapazität beträgt bei Raumtemperatur näherungsweise 3 \cdot R = 25 J / (mol \cdot K).
 </Rahmen>
 
 ((15))
@@ -467,13 +467,13 @@ Geschlossener rechtsläufiger Kreisprozess im p-V-Diagramm aus vier Zustandsänd
 
 ### Aufgabe 4: Wirkungsgrad einer Wärmekraftmaschine
 
-Ein Dampfkraftwerk arbeitet zwischen der Kesseltemperatur T_W = 800 K und der Kühlwassertemperatur T_K = 300 K. Berechnen Sie den maximal möglichen thermischen Carnot-Wirkungsgrad eta_Carnot sowie die bei Q_zu = 1,20 GJ theoretisch gewinnbare Nutzarbeit.
+Ein Dampfkraftwerk arbeitet zwischen der Kesseltemperatur T_W = 800 K und der Kühlwassertemperatur T_K = 300 K. Berechnen Sie den maximal möglichen thermischen Carnot-Wirkungsgrad ~h_Carnot sowie die bei Q_zu = 1,20 GJ theoretisch gewinnbare Nutzarbeit.
 
 <Rahmen>
 _Merksatz: Zweiter Hauptsatz, Entropie und Carnot-Wirkungsgrad_
 -	Clausius’sche Formulierung des zweiten Hauptsatzes: Es gibt keine periodisch arbeitende Maschine, die Wärme zu 100 % in Arbeit umwandelt.
 -	Thermodynamische Definition der Entropieänderung bei reversibler Wärmezufuhr: dS = dQ_rev / T (Einheit: J / K).
--	Statistische Boltzmann-Formel der Entropie: S = k_B * ln(Omega) (im abgeschlossenen System gilt stets Delta S >= 0).
--	Allgemeiner Wirkungsgrad einer Wärmekraftmaschine: eta = |W_Nutz| / Q_zu = (Q_zu - |Q_ab|) / Q_zu.
--	Maximaler Carnot-Wirkungsgrad: eta_Carnot = 1 - (T_K / T_W) (nur abhängig von den absoluten Temperaturen T_W und T_K).
+-	Statistische Boltzmann-Formel der Entropie: S = k_B \cdot ln(~W) (im abgeschlossenen System gilt stets ~D S \ge 0).
+-	Allgemeiner Wirkungsgrad einer Wärmekraftmaschine: ~h = |W_Nutz| / Q_zu = (Q_zu - |Q_ab|) / Q_zu.
+-	Maximaler Carnot-Wirkungsgrad: ~h_Carnot = 1 - (T_K / T_W) (nur abhängig von den absoluten Temperaturen T_W und T_K).
 </Rahmen>

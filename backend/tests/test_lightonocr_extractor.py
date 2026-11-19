@@ -1,7 +1,9 @@
+"""Unit tests for LightOnOCR-3 prompt construction, grounding blocks, and layout fusion."""
+
 import os
 import tempfile
+
 from PIL import Image
-import pytest
 
 from backend.services.lightonocr_extractor import (
     build_lightonocr_messages,
@@ -12,6 +14,7 @@ from backend.services.lightonocr_extractor import (
 
 
 def test_build_lightonocr_messages_plain_and_grounding():
+    """Verifies LightOnOCR-3 plain and grounding chat prompt structures."""
     # Plain mode MUST NOT include any custom text instruction (out-of-distribution per LightOnOCR-3 spec)
     msgs_plain = build_lightonocr_messages(mode="plain")
     assert len(msgs_plain) == 1
@@ -28,6 +31,7 @@ def test_build_lightonocr_messages_plain_and_grounding():
 
 
 def test_parse_grounding_blocks_filters_headers_preserves_footnotes_and_merges_text_plus():
+    """Verifies grounding block parsing filters headers, preserves footnotes, and merges text+."""
     raw_grounding = (
         "![header](89,15,834,33) 502 KAPITEL 11. OPTIK\n\n"
         "![title](91,60,400,85) ### 11.6.3 Brechungsindex\n\n"
@@ -62,6 +66,7 @@ def test_parse_grounding_blocks_filters_headers_preserves_footnotes_and_merges_t
 
 
 def test_post_process_lightonocr_page_converts_html_tables_and_matches_images():
+    """Verifies HTML table conversion, dollar unescaping, and image placeholder matching."""
     raw_page = (
         "502\n\n"
         "KAPITEL II. OPTIK\n\n"
@@ -96,6 +101,7 @@ def test_post_process_lightonocr_page_converts_html_tables_and_matches_images():
 
 
 def test_ensure_lightonocr_cache_enabled(tmp_path):
+    """Verifies use_cache=True is patched into LightOnOCR-3 config files."""
     cfg_file = tmp_path / "config.json"
     gen_file = tmp_path / "generation_config.json"
     cfg_file.write_text('{"use_cache": false, "text_config": {"use_cache": false}}', encoding="utf-8")
@@ -112,6 +118,7 @@ def test_ensure_lightonocr_cache_enabled(tmp_path):
 
 
 def test_post_process_lightonocr_page_strips_two_line_all_caps_running_header():
+    """Verifies stripping of multi-line all-caps running top headers."""
     raw_page = (
         "FAUST I - TEXTANALYSE\n\n"
         "DEUTSCHUNTERRICHT\n\n"
@@ -127,7 +134,9 @@ def test_post_process_lightonocr_page_strips_two_line_all_caps_running_header():
 
 
 def test_lightonocr_benchmark_and_service_registration(tmp_path):
+    """Verifies LightOnOCR-3 benchmark registration and subprocess streaming filter."""
     from unittest.mock import MagicMock, patch
+
     from backend.services.custom_benchmark_service import run_single_engine_extraction
     from scripts.run_benchmark import BENCHMARK_LICENSE_TAGS, run_lightonocr_extraction
 
@@ -204,6 +213,7 @@ def test_shared_fuse_vlm_page_with_docling_recovers_flattened_table():
 def test_render_pdf_page_for_vlm_snaps_to_32px_grid():
     """Tests that render_pdf_page_for_vlm snaps dimensions to exact multiples of 32 (Qwen3-VL patch grid)."""
     from unittest.mock import MagicMock
+
     from backend.services.pdf_render_service import render_pdf_page_for_vlm
 
     fake_page = MagicMock()
@@ -219,4 +229,45 @@ def test_render_pdf_page_for_vlm_snaps_to_32px_grid():
     assert w % 32 == 0
     assert h % 32 == 0
     assert max(w, h) == 1536
+
+
+def test_post_process_lightonocr_page_forwards_docling_layout_and_recovers_missing_column():
+    """Verifies post_process_lightonocr_page passes docling_layout and page_idx for column recovery."""
+    docling_layout = {
+        "text_blocks_by_page": {
+            1: [
+                {
+                    "type": "section_header",
+                    "text": "Elektrische Feldstärke im Plattenkondensator",
+                    "page_idx": 1,
+                    "bbox_1000": [80, 90, 740, 130],
+                },
+                {
+                    "type": "text",
+                    "text": "Zwischen zwei parallelen Metallplatten entsteht ein homogenes elektrisches Feld.",
+                    "page_idx": 1,
+                    "bbox_1000": [80, 160, 470, 320],
+                },
+                {
+                    "type": "text",
+                    "text": "Die Feldstärke ist proportional zur angelegten elektrischen Spannung und umgekehrt proportional zum Plattenabstand.",
+                    "page_idx": 1,
+                    "bbox_1000": [510, 160, 900, 340],
+                },
+            ]
+        }
+    }
+    raw_vlm = "Zwischen zwei parallelen Metallplatten entsteht ein homogenes elektrisches Feld."
+    res = post_process_lightonocr_page(
+        raw_vlm,
+        page_images=[],
+        phys_num=24,
+        page_idx=1,
+        docling_layout=docling_layout,
+    )
+    assert "((24))" in res
+    assert "## Elektrische Feldstärke im Plattenkondensator" in res
+    assert "umgekehrt proportional zum Plattenabstand" in res
+    assert res.index("## Elektrische Feldstärke") < res.index("Zwischen zwei parallelen") < res.index("umgekehrt proportional")
+
 

@@ -6,18 +6,24 @@ def test_lint_perfect_ebuch():
 
 ((45))
 
-Das Licht breitet sich geradlinig aus. Hierzu ein Experiment:
+Das Licht breitet sich bei 20 °C zu 100 % geradlinig um 90° aus. Hierzu ein Experiment^1:
 
 -\\tErster Schritt: Aufbau
 -\\tZweiter Schritt: Messung
 
+#### M1 Strahlengang am Prisma
+
 <Bild> Zeichnung:
-Beschreibung: Ein Prisma bricht weiſses Licht in Spektralfarben.
+Beschreibung mit Bildtext: Lichtquelle \\xra{weißes Licht} Prisma \\to Spektrum (~l = 400 nm bis 780 nm).
 </Bild>
 
-Formel der Brechung: $n_1 \\cdot \\sin(\\alpha) = n_2 \\cdot \\sin(\\beta)$
+Formel der Brechung: n_1 \\cdot \\sin(~a) = n_2 \\cdot \\sin(~b) sowie \\frac{1}{2} m v^2.
 
 Hier ist ein wichtiger Begriff{1}.
+
+#### Worterklärungen
+
+^1: Optischer Versuch zur Dispersion.
 
 ((46))
 
@@ -268,4 +274,89 @@ Beschreibung mit Bildtext:
     fixed, _ = autofix_markdown(md)
     assert "1. Zustand: Feder entspannt." in fixed
     assert "1.\tZustand" not in fixed
+
+
+def test_lint_and_autofix_fibs_09_2025_notation_and_all_golden_files():
+    """Verifies FIBS 09/2025 degree/percent checks, M1/B1/Randspalte headings, and 100/100 on all 20 golden files."""
+    from pathlib import Path
+    from backend.services.a11y_linter import autofix_markdown
+
+    faulty = (
+        "# Kapitel 1\n\n"
+        "((10))\n\n"
+        "Wasser siedet bei $100\\,^\\circ\\text{C}$ (%engl. boiling point%) mit 50% Dampf.\n"
+    )
+    rep = lint_markdown(faulty)
+    rule_names = {i.rule for i in rep.issues}
+    assert "fibs_degree_latex" in rule_names
+    assert "fibs_unannounced_percent_emphasis" in rule_names
+
+    fixed, fixes = autofix_markdown(faulty)
+    assert len(fixes) >= 2
+    assert "100 °C" in fixed
+    assert "(_engl. boiling point_)" in fixed
+    assert "50 % Dampf" in fixed
+    assert lint_markdown(fixed).score == 100
+
+    # Announced %...% via <Anmerkung> must score 100/100
+    announced = (
+        "# Kapitel 1\n\n"
+        "((10))\n\n"
+        "<Anmerkung>\nIn diesem Text bedeutet %Wort% kursive Schrift.\n</Anmerkung>\n\n"
+        "Ein %kursiv% gesetztes Wort.\n"
+    )
+    assert lint_markdown(announced).score == 100
+
+    golden_dir = Path(__file__).resolve().parents[2] / "testdata" / "golden"
+    golden_files = sorted(golden_dir.glob("*.uebertragungsregeln_09_2025.golden.md"))
+    assert len(golden_files) >= 20
+    for gpath in golden_files:
+        txt = gpath.read_text(encoding="utf-8")
+        assert "$" not in txt, f"Unexpected $-delimiter in {gpath.name}"
+        g_rep = lint_markdown(txt)
+        assert g_rep.score == 100, f"Lint < 100 in {gpath.name}: {g_rep.issues}"
+
+
+def test_lint_plural_rubric_headings_and_buchkonferenz_custom_rules():
+    """Verifies 14a: plural FIBS rubric headings and explicit Buchkonferenz custom_rules levels."""
+    from backend.services.feedback_service import compare_lint_reports
+    from scripts.run_benchmark import evaluate_a11y
+
+    md_plural = (
+        "((1))\n\n"
+        "# Mechanik und Energie\n\n"
+        "## 1.1 Erhaltungssätze\n\n"
+        "### Impulserhaltung\n\n"
+        "Impuls bleibt im abgeschlossenen System erhalten.\n\n"
+        "##### Aufgaben\n\n"
+        "##### 1\n\n"
+        "Berechnen Sie den Gesamtimpuls nach dem Stoß.\n\n"
+        "#### M Steckbrief\n\n"
+        "<Rahmen>\n_Isaac Newton (1643-1727)_\nBegründer der klassischen Mechanik.\n</Rahmen>\n\n"
+        "##### Zusatztraining\n\n"
+        "Bestimmen Sie die Geschwindigkeit.\n"
+    )
+    # Without custom_rules, '##### Aufgaben' passes via plural _SEMANTIC_HEADING_RE,
+    # whereas custom '##### Zusatztraining' (jumping from H4/H3) would only pass when declared in custom_rules
+    rules = (
+        "##### Überschrift 5:\n"
+        "- das Wort 'Aufgaben:' und jeweils die Aufgabennummer als Ü.\n"
+        "Zusatztraining in Ü5\n"
+    )
+    rep_with_rules = lint_markdown(md_plural, custom_rules=rules)
+    assert rep_with_rules.score == 100
+    assert rep_with_rules.issues == []
+
+    a11y_dict = evaluate_a11y(md_plural, expected_pages=1, custom_rules=rules)
+    assert a11y_dict["score"] == 100
+
+    cmp = compare_lint_reports(md_plural, md_plural, custom_rules=rules)
+    assert cmp["score_original"] == 100
+    assert cmp["score_revised"] == 100
+
+    # Genuine accidental hierarchy jump (H1 -> H3 normal chapter heading) must still trigger warning!
+    bad_jump = "((1))\n\n# Kapitel 1\n\n### 1.1 Übersprungene Ebene\n"
+    rep_bad = lint_markdown(bad_jump, custom_rules=rules)
+    assert any(i.rule == "heading_hierarchy" for i in rep_bad.issues)
+
 

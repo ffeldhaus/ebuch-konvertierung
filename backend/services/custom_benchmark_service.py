@@ -42,6 +42,7 @@ def _score_candidate_against_ground_truth(
     engine: str = "",
     raw_markdown: str | None = None,
     expected_pages: int | None = None,
+    custom_rules: str | None = None,
 ) -> tuple[float, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Computes programmatic metrics, Gemma 4 LLM Judge score, and composite score for one engine output."""
     if task:
@@ -57,6 +58,7 @@ def _score_candidate_against_ground_truth(
         std_md,
         raw_markdown=raw_markdown,
         expected_pages=expected_pages or (gt_pages if gt_pages > 0 else None),
+        custom_rules=custom_rules,
     )
 
     if task:
@@ -167,14 +169,15 @@ def _generate_developer_feedback_report(
     from backend.services.prompts import build_analysis_prompt
 
     change_summary = fs.compute_change_summary(std_md, ground_truth_md)
-    lint_cmp = fs.compare_lint_reports(std_md, ground_truth_md)
+    transfer_custom_rules = str(existing_transfer.get("custom_rules") or "").strip() or None
+    lint_cmp = fs.compare_lint_reports(std_md, ground_truth_md, custom_rules=transfer_custom_rules)
     if task:
         task.add_log(
             f"{change_summary['hunk_count']} Änderungsblöcke erkannt "
             f"(Ähnlichkeit {change_summary['similarity']:.1%})."
         )
 
-    engine_name = str(existing_transfer.get("engine") or "infinity")
+    engine_name = str(existing_transfer.get("engine") or "lightonocr")
     task_meta = {
         "Quelldokument": existing_transfer.get("original_name") or "Unbekannt",
         "Engine": engine_name,
@@ -301,9 +304,9 @@ def evaluate_custom_submission(
         physical_start_page = 1
 
     if existing_transfer:
-        engines = [str(existing_transfer.get("engine") or (engines[0] if engines else "infinity")).strip().lower()]
+        engines = [str(existing_transfer.get("engine") or (engines[0] if engines else "lightonocr")).strip().lower()]
     elif not engines:
-        engines = ["docling", "infinity", "lightonocr"]
+        engines = ["lightonocr", "infinity", "docling"]
 
     import pypdfium2
     try:
@@ -315,6 +318,17 @@ def evaluate_custom_submission(
 
     temp_base = os.path.join(PROJECT_ROOT, "assets", "output", task_id or f"custom_bench_{int(time.time())}")
     os.makedirs(temp_base, exist_ok=True)
+    resolved_custom_rules: str | None = (
+        str(existing_transfer.get("custom_rules") or "").strip() if existing_transfer else ""
+    ) or None
+    if resolved_custom_rules is None:
+        cr_path = os.path.join(temp_base, "custom_ruleset.txt")
+        if os.path.isfile(cr_path):
+            try:
+                with open(cr_path, encoding="utf-8", errors="ignore") as crf:
+                    resolved_custom_rules = crf.read().strip() or None
+            except Exception:
+                pass
 
     # Persist ground truth markdown to task directory for re-evaluation
     try:
@@ -407,11 +421,24 @@ def evaluate_custom_submission(
             # 3. Gemma standardization if ruleset requested (with document-specific custom_ruleset.txt support)
             if ruleset_key != "raw" and raw_md and not raw_md.startswith("# Extraktionsfehler"):
                 if task:
-                    task.update_progress(f"Gemma 4 12B Standardisierung ({ruleset_key})...", idx, engine, 0.5)
+                    task.update_progress(f"Gemma 4 12B Standardisierung ({ruleset_key})...", idx, engine, 0.40)
                 logger.info(f"Applying Gemma standardization [{ruleset_key}] for {engine}...")
+
+                def _on_bench_std_progress(info: dict[str, Any]) -> None:
+                    if task and info.get("event") == "start":
+                        c_idx = max(1, int(info.get("index") or 1))
+                        c_tot = max(1, int(info.get("total") or 1))
+                        frac = 0.40 + 0.32 * ((c_idx - 1) / c_tot)
+                        msg = info.get("message") or f"Gemma 4 12B Standardisierung ({c_idx}/{c_tot})..."
+                        task.update_progress(msg, idx, engine, frac)
+
                 try:
                     std_md = standardise_markdown(
-                        raw_md, ruleset_key=ruleset_key, task_id=task_id, physical_start_page=physical_start_page
+                        raw_md,
+                        ruleset_key=ruleset_key,
+                        task_id=task_id,
+                        physical_start_page=physical_start_page,
+                        on_progress=_on_bench_std_progress,
                     )
                 except Exception as e:
                     logger.error(f"Standardization failed for {engine}: {e}")
@@ -452,6 +479,7 @@ def evaluate_custom_submission(
             engine=engine,
             raw_markdown=raw_md,
             expected_pages=page_count,
+            custom_rules=resolved_custom_rules,
         )
 
         # 5. Side-by-side diff against ground truth
@@ -634,6 +662,14 @@ def re_evaluate_submission(task_id: str) -> dict[str, Any]:
 
     updated_rankings = []
     ruleset_key = task_data.get("ruleset") or "uebertragungsregeln_09_2025"
+    reeval_custom_rules: str | None = None
+    reeval_rules_path = os.path.join(task_dir, "custom_ruleset.txt")
+    if os.path.isfile(reeval_rules_path):
+        try:
+            with open(reeval_rules_path, encoding="utf-8", errors="ignore") as crf:
+                reeval_custom_rules = crf.read().strip() or None
+        except Exception:
+            pass
     for item in old_rankings:
         engine = item.get("engine", "unknown")
         raw_md = item.get("raw_markdown", "")
@@ -668,6 +704,7 @@ def re_evaluate_submission(task_id: str) -> dict[str, Any]:
             image_dir=i_img_dir,
             raw_markdown=raw_md,
             expected_pages=old_eval.get("page_count") or None,
+            custom_rules=reeval_custom_rules,
         )
 
         diff_html = get_diff_highlighting(gt_md_clean, std_md)
