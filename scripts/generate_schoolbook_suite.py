@@ -5283,18 +5283,17 @@ def _fibs_gesamtwerk_text(txt: str) -> str:
     import re
 
     out = txt
-    out = re.sub(r"\bsqrt\(([^()\n]+)\)", r"\\sqrt{\1}", out)
+    out = re.sub(r"\bsqrt\(([^()\n]+)\)", r"\\s{\1}", out)
     out = re.sub(r"\bDelta\s+phi\b", "~D ~f", out)
     out = re.sub(r"\bDelta\s+([A-Za-z])\b", r"~D \1", out)
     out = re.sub(r"\bomega(?=[_\^]|\b)", "~w", out)
     out = re.sub(r"\bpi(?=[_\^]|\b)", "~p", out)
-    out = re.sub(r"\btheta\b", "~q", out)
+    out = re.sub(r"\btheta\b", "~h", out)
     out = re.sub(r"\bkappa(?=[_\^]|\b)", "~k", out)
     out = re.sub(r"\brho\b", "~r", out)
-    out = re.sub(r"\b(?:eta)(?=[_\^]|\b)", "~h", out)
+    out = re.sub(r"\b(?:eta)(?=[_\^]|\b)", "~j", out)
     out = re.sub(r"\bOmega\b", "~W", out)
-    out = out.replace(" >= ", r" \ge ")
-    out = out.replace(" * ", r" \cdot ")
+    out = re.sub(r"(?<!\\)\b(ln|lg|log)(?=\s*\()", r"\\\1", out)
     return out
 
 
@@ -6632,7 +6631,7 @@ _Versuchsprotokoll V4.1 – Gefahrstoffhinweise:_ [Gefahrstoffsymbol: Entzündba
 
 1.\tVeresterungsgleichgewicht (Katalyse durch Oxonium-Ionen H_3O^+):
 
-CH_3COOH + C_2H_5OH \\lra CH_3COOC_2H_5 + H_2O (~D H° \\approx -4 kJ/mol)
+CH_3COOH + C_2H_5OH \\lra CH_3COOC_2H_5 + H_2O (~D H° \\apx -4 kJ/mol)
 
 2.\tRedoxreaktion von Dichromat-Ionen mit Eisen(II)-Ionen in saurer Lösung:
 
@@ -6664,12 +6663,12 @@ _Sicherheit im Chemielabor: Umgang mit Mineralsäuren und Oxidationsmitteln_
 #### Abb. 4.1: Strukturformeln der säurekatalysierten Veresterung und der ~a-D-Glucopyranose
 
 <Bild> Strukturformel:
-Beschreibung mit Bildtext: Zweiteilige Darstellung organischer Strukturformeln. Teil A zeigt die säurekatalysierte Veresterung in Skelettformeln mit farbig hervorgehobenen funktionellen Gruppen: Ethansäure (CH_3COOH) + Ethanol (C_2H_5OH) \\lra Ethylethanoat (CH_3COOC_2H_5) + H_2O unter H^+-Katalyse (K_c \\approx 4,0). Teil B zeigt die Haworth-Ringformel der ~a-D-Glucopyranose mit sechsgliedrigem Pyranosering, Ringsauerstoffatom, axialer OH-Gruppe an C1 (~a-Stellung) und CH_2OH-Gruppe an C6.
+Beschreibung mit Bildtext: Zweiteilige Darstellung organischer Strukturformeln. Teil A zeigt die säurekatalysierte Veresterung in Skelettformeln mit farbig hervorgehobenen funktionellen Gruppen: Ethansäure (CH_3COOH) + Ethanol (C_2H_5OH) \\lra Ethylethanoat (CH_3COOC_2H_5) + H_2O unter H^+-Katalyse (K_c \\apx 4,0). Teil B zeigt die Haworth-Ringformel der ~a-D-Glucopyranose mit sechsgliedrigem Pyranosering, Ringsauerstoffatom, axialer OH-Gruppe an C1 (~a-Stellung) und CH_2OH-Gruppe an C6.
 </Bild>
 
-Im dynamischen Gleichgewicht ist der Quotient aus dem Produkt der Gleichgewichtskonzentrationen der Produkte und dem Produkt der Eduktkonzentrationen bei konstanter Temperatur unveränderlich. Diese quantitative Beziehung heißt Massenwirkungsgesetz (MWG): Für die Veresterung von Ethansäure mit Ethanol beträgt die Gleichgewichtskonstante bei Raumtemperatur K_c \\approx 4,0. Durch gezieltes Entfernen eines Reaktionsprodukts aus dem Gleichgewichtsgemisch lässt sich die Ausbeute an Ethylethanoat im Labor deutlich steigern.
+Im dynamischen Gleichgewicht ist der Quotient aus dem Produkt der Gleichgewichtskonzentrationen der Produkte und dem Produkt der Eduktkonzentrationen bei konstanter Temperatur unveränderlich. Diese quantitative Beziehung heißt Massenwirkungsgesetz (MWG): Für die Veresterung von Ethansäure mit Ethanol beträgt die Gleichgewichtskonstante bei Raumtemperatur K_c \\apx 4,0. Durch gezieltes Entfernen eines Reaktionsprodukts aus dem Gleichgewichtsgemisch lässt sich die Ausbeute an Ethylethanoat im Labor deutlich steigern.
 
-K_c = \\frac{c(CH_3COOC_2H_5) \\cdot c(H_2O)}{c(CH_3COOH) \\cdot c(C_2H_5OH)} \\approx 4,0
+K_c = \\f{c(CH_3COOC_2H_5) * c(H_2O)}{c(CH_3COOH) * c(C_2H_5OH)} \\apx 4,0
 
 ### Aufgaben zur Redoxchemie und zum chemischen Gleichgewicht
 
@@ -6678,12 +6677,12 @@ K_c = \\frac{c(CH_3COOC_2H_5) \\cdot c(H_2O)}{c(CH_3COOH) \\cdot c(C_2H_5OH)} \\
 -\t[schwer] Aufgabe 3: Berechnen Sie die Gleichgewichtskonzentration an Ethylethanoat bei einem Ausgangsansatz von jeweils 1,0 mol Ethansäure und 1,0 mol Ethanol (K_c = 4,0).
 
 <Rahmen>
-_Beispielrechnung: Gleichgewichtskonstante Kc und Gleichgewichtsausbeute_
+_Beispielrechnung: Gleichgewichtskonstante und Gleichgewichtsausbeute_
 -\tAnsatz im geschlossenen System: n_0(CH_3COOH) = 1,0 mol und n_0(C_2H_5OH) = 1,0 mol (Volumen V kürzt sich heraus).
 -\tIm Gleichgewicht seien x mol Ester und x mol Wasser entstanden; es verbleiben (1,0 - x) mol Säure und Alkohol.
--\tEinsetzen in das Massenwirkungsgesetz: K_c = \\frac{x^2}{(1,0 - x)^2} = 4,0.
--\tZiehen der Quadratwurzel auf beiden Seiten: \\frac{x}{1,0 - x} = 2,0 \\implies x = 2,0 - 2,0x \\implies 3,0x = 2,0.
--\tErgebnis: Im Gleichgewicht liegen n(Ester) = n(H_2O) = \\frac{2}{3} mol \\approx 0,67 mol (Ausbeute 66,7 %) sowie jeweils 0,33 mol unverbrauchte Ethansäure und Ethanol vor.
+-\tEinsetzen in das Massenwirkungsgesetz: K_c = \\f{x^2}{(1,0 - x)^2} = 4,0.
+-\tZiehen der Quadratwurzel auf beiden Seiten: \\f{x}{1,0 - x} = 2,0 \\Ra x = 2,0 - 2,0x \\Ra 3,0x = 2,0.
+-\tErgebnis: Im Gleichgewicht liegen n(Ester) = n(H_2O) = \\f{2}{3} mol \\apx 0,67 mol (Ausbeute 66,7 %) sowie jeweils 0,33 mol unverbrauchte Ethansäure und Ethanol vor.
 -\tAusbeutesteigerung im Labor: Durch kontinuierliches Abdestillieren des leichtflüchtigen Esters (Siedepunkt 77 °C).
 </Rahmen>
 
@@ -6763,16 +6762,16 @@ Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche 
 #### Abb. 6.1: Michaelis-Menten-Kinetik und Kompetitive Hemmung
 
 <Bild> Diagramm:
-Beschreibung mit Bildtext: Koordinatensystem mit der Substratkonzentration [S] in mmol/L auf der Rechtsachse und der Reaktionsgeschwindigkeit v auf der Hochachse sowie einem schematischen Schlüssel-Schloss-Modell der kompetitiven Hemmung rechts. Die grüne Sättigungskurve (ohne Hemmstoff) erreicht bei niedriger Substratkonzentration K_M die halbe Maximalgeschwindigkeit \\frac{1}{2} v_{\\max} und nähert sich asymptotisch v_{\\max} an; die orangefarbene Kurve (kompetitive Hemmung) erreicht \\frac{1}{2} v_{\\max} erst bei einer höheren Konzentration K_M', strebt bei hohem [S] aber derselben Maximalgeschwindigkeit v_{\\max} zu.
+Beschreibung mit Bildtext: Koordinatensystem mit der Substratkonzentration [S] in mmol/L auf der Rechtsachse und der Reaktionsgeschwindigkeit v auf der Hochachse sowie einem schematischen Schlüssel-Schloss-Modell der kompetitiven Hemmung rechts. Die grüne Sättigungskurve (ohne Hemmstoff) erreicht bei niedriger Substratkonzentration K_M die halbe Maximalgeschwindigkeit \\f{1}{2} v_{\\max} und nähert sich asymptotisch v_{\\max} an; die orangefarbene Kurve (kompetitive Hemmung) erreicht \\f{1}{2} v_{\\max} erst bei einer höheren Konzentration K_M', strebt bei hohem [S] aber derselben Maximalgeschwindigkeit v_{\\max} zu.
 </Bild>
 
 Enzyme wirken als hochspezifische Biokatalysatoren, indem sie das Substrat im aktiven Zentrum nach dem Induced-Fit-Modell binden und die Aktivierungsenergie E_A über einen Enzym-Substrat-Komplex [ES] herabsetzen. Die Abhängigkeit der Reaktionsgeschwindigkeit v von der Substratkonzentration [S] folgt der Michaelis-Menten-Gleichung. Bei niedrigen Konzentrationen steigt v nahezu linear an, während bei hohen Substratkonzentrationen alle aktiven Zentren der Enzymmoleküle gesättigt sind und v_{\\max} asymptotisch erreicht wird:
 
-v = \\frac{v_{\\max} \\cdot [S]}{K_M + [S]}
+v = \\f{v_{\\max} * [S]}{K_M + [S]}
 
 <Rahmen>
-_Bio-Kompakt: Bedeutung der Michaelis-Konstante K_M und Formen der Enzymhemmung_
--\t_Michaelis-Konstante K_M:_ Gibt genau diejenige Substratkonzentration [S] (in mmol/L) an, bei der die Hälfte der Maximalgeschwindigkeit (v = \\frac{1}{2} v_{\\max}) erreicht wird. Ein kleiner K_M-Wert bedeutet eine hohe Affinität (Bindungsstärke) des Enzyms zu seinem Substrat.
+_Bio-Kompakt: Bedeutung der Michaelis-Konstante und Formen der Enzymhemmung_
+-\t_Michaelis-Konstante_ K_M: Gibt genau diejenige Substratkonzentration [S] (in mmol/L) an, bei der die Hälfte der Maximalgeschwindigkeit (v = \\f{1}{2} v_{\\max}) erreicht wird. Ein kleiner K_M-Wert bedeutet eine hohe Affinität (Bindungsstärke) des Enzyms zu seinem Substrat.
 -\t_Kompetitive Hemmung (Verdrängungshemmung):_ Der Inhibitor ähnelt strukturell dem Substrat und konkurriert um das aktive Zentrum. Die scheinbare Michaelis-Konstante K_M' ist erhöht; durch hohe Substratkonzentrationen [S] lässt sich der Hemmstoff jedoch verdrängen (v_{\\max} bleibt gleich).
 -\t_Allosterische (nicht-kompetitive) Hemmung:_ Der Effektor bindet außerhalb des aktiven Zentrums an ein allosterisches Zentrum und verändert die räumliche Konformation des Enzyms. Dadurch sinkt die Maximalgeschwindigkeit v_{\\max}, während K_M unverändert bleibt.
 -\t_Irreversible Hemmung (Enzymgifte):_ Schwermetall-Ionen (z. B. Pb^{2+}, Hg^{2+}, Cu^{2+}) bilden kovalente Bindungen mit Schwefelgruppen (-SH) der Aminosäure Cystein und inaktivieren das Enzym dauerhaft.
@@ -6796,7 +6795,7 @@ Substrat [S] (mmol/L)\tv ohne Hemmstoff (~mmol/min)\tv mit Hemmstoff (~mmol/min)
 
 ## 6.2 Abhängigkeit der Enzymaktivität von Temperatur und pH-Wert
 
-Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche Tertiärstruktur von Enzymproteinen. Nach der RGT-Regel (Reaktionsgeschwindigkeit-Temperatur-Regel) erhöht eine Temperatursteigerung um 10 °C die Umsatzrate zunächst um das 2- bis 3-Fache (Q_{10} \\approx 2–3), da die kinetische Energie der Teilchen zunimmt. Oberhalb des Temperaturoptimums (beim Menschen ca. 37 °C bis 40 °C) zerstört die Wärmebewegung jedoch Wasserstoffbrücken und führt zur irreversiblen Denaturierung. Ebenso besitzt jedes Enzym ein spezifisches pH-Optimum (Pepsin im Magen pH \\approx 2,0; Speichel-Amylase pH \\approx 7,0; Trypsin im Dünndarm pH \\approx 8,5). Änderungen der Oxonium-Ionenkonzentration verändern die Ladung saurer (-COO^-) und basischer (-NH_3^+) Seitenketten, sodass Ionenbindungen im aktiven Zentrum gelöst werden und die Substratbindung drastisch abnimmt.
+Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche Tertiärstruktur von Enzymproteinen. Nach der RGT-Regel (Reaktionsgeschwindigkeit-Temperatur-Regel) erhöht eine Temperatursteigerung um 10 °C die Umsatzrate zunächst um das 2- bis 3-Fache (Q_{10} \\apx 2–3), da die kinetische Energie der Teilchen zunimmt. Oberhalb des Temperaturoptimums (beim Menschen ca. 37 °C bis 40 °C) zerstört die Wärmebewegung jedoch Wasserstoffbrücken und führt zur irreversiblen Denaturierung. Ebenso besitzt jedes Enzym ein spezifisches pH-Optimum (Pepsin im Magen pH \\apx 2,0; Speichel-Amylase pH \\apx 7,0; Trypsin im Dünndarm pH \\apx 8,5). Änderungen der Oxonium-Ionenkonzentration verändern die Ladung saurer (-COO^-) und basischer (-NH_3^+) Seitenketten, sodass Ionenbindungen im aktiven Zentrum gelöst werden und die Substratbindung drastisch abnimmt.
 
 ### Auswertungs- und Vertiefungsaufgaben zur Enzymkinetik
 
@@ -6809,7 +6808,7 @@ Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche 
 _Zusammenfassung Abiturwissen: Biokatalyse, Enzymkinetik und Stoffwechselregulation_
 -\t_Aktives Zentrum & Induced-Fit-Modell:_ Bei der Anlagerung des Substrats passt sich die Raumstruktur des aktiven Zentrums dynamisch an (Substrat- und Wirkungsspezifität).
 -\t_Energetische Wirkung:_ Enzyme senken ausschließlich die Aktivierungsenergie E_A über den Enzym-Substrat-Komplex [ES], verändern jedoch weder die Reaktionsenthalpie ~D H noch die Gleichgewichtslage einer reversiblen Stoffwechselreaktion.
--\t_Michaelis-Konstante K_M als Affinitätsmaß:_ Kleines K_M kennzeichnet hohe Substrataffinität; kompetitive Inhibitoren erhöhen scheinbar K_M' ohne v_{\\max} zu senken, während allosterische Hemmstoffe v_{\\max} herabsetzen.
+-\t_Michaelis-Konstante als Affinitätsmaß:_ Kleines K_M kennzeichnet hohe Substrataffinität; kompetitive Inhibitoren erhöhen scheinbar K_M' ohne v_{\\max} zu senken, während allosterische Hemmstoffe v_{\\max} herabsetzen.
 -\t_Negative Rückkopplung (Endprodukthemmung):_ In mehrschrittigen Stoffwechselketten wirkt das Endprodukt häufig als allosterischer Inhibitor des Schrittmacherenzyms und verhindert Überproduktion.
 -\t_Kofaktoren und Koenzyme:_ Viele Enzyme benötigen für ihre katalytische Aktivität zusätzliche Metall-Ionen (z. B. Mg^{2+}, Zn^{2+}, Fe^{2+}) oder organische Überträgermoleküle (NAD^+, FAD, ATP, Coenzym A).
 -\t_Kompartimentierung:_ Durch Reaktionsräume (Mitochondrien, Chloroplasten, Lysosomen) können unterschiedliche pH-Werte und Enzymgarnituren gleichzeitig in derselben Zelle arbeiten.
@@ -6969,7 +6968,7 @@ Vakuum-Photozelle mit bestrahlter Kalium-Kathode, Ringanode, einstellbarer Gegen
 _Lernwegweiser zu Kapitel 5: Vom Wellenmodell zum Quantenobjekt Photon_
 -\tIn Abschnitt 5.1 untersuchen Sie die Kohärenz und Interferenz von Licht am Doppelspalt und leiten die Bedingung für konstruktive und destruktive Interferenz geometrisch her.
 -\tIn Abschnitt 5.2 nutzen Sie optische Mehrfachspalt-Gitter zur präzisen Wellenlängenbestimmung atomarer Spektrallinien (Fraunhofer-Linien und Quecksilber-Dampflampe).
--\tAbschließend zeigt der äußere lichtelektrische Effekt (Hallwachs- und Photoeffekt), dass Energie im elektromagnetischen Strahlungsfeld nur in Lichtquanten E = h \\cdot f übertragen wird. Alle Abbildungen, Tabellen und Bilder sind oben mit Seitenzahl verzeichnet.
+-\tAbschließend zeigt der äußere lichtelektrische Effekt (Hallwachs- und Photoeffekt), dass Energie im elektromagnetischen Strahlungsfeld nur in Lichtquanten E = h * f übertragen wird. Alle Abbildungen, Tabellen und Bilder sind oben mit Seitenzahl verzeichnet.
 </Rahmen>
 
 ((45))
@@ -6985,17 +6984,17 @@ Im Jahr 1802 gelang dem englischen Naturforscher Thomas Young mit dem Doppelspal
 #### Abb. 5.1: Interferenzmuster und Intensitätsverteilung am Doppelspalt
 
 <Bild> Diagramm:
-Beschreibung mit Bildtext: Schematische Darstellung der Doppelspalt-Interferenz links mit einfallendem Laserstrahl (~l = 632,8 nm), Doppelspaltblende (S_1, S_2), halbkreisförmigen Huygens’schen Elementarwellen und den Interferenzmaxima k = -2, -1, 0, 1, 2 auf dem Beobachtungsschirm sowie dem zugehörigen Intensitätsverlauf I(y) rechts mit dem Hauptmaximum bei k = 0 und der Bedingung ~D s = k \\cdot ~l.
+Beschreibung mit Bildtext: Schematische Darstellung der Doppelspalt-Interferenz links mit einfallendem Laserstrahl (~l = 632,8 nm), Doppelspaltblende (S_1, S_2), halbkreisförmigen Huygens’schen Elementarwellen und den Interferenzmaxima k = -2, -1, 0, 1, 2 auf dem Beobachtungsschirm sowie dem zugehörigen Intensitätsverlauf I(y) rechts mit dem Hauptmaximum bei k = 0 und der Bedingung ~D s = k * ~l.
 </Bild>
 
-Auf dem Beobachtungsschirm im Abstand L \\gg d entsteht ein charakteristisches Streifenmuster aus abwechselnd hellen Interferenzmaxima und dunklen Interferenzminima. Ein helles Maximum k-ter Ordnung tritt immer dort auf, wo der Gangunterschied ~D s der beiden Teilwellen ein ganzzahliges Vielfaches der Wellenlänge ~l beträgt (~D s = k \\cdot ~l mit k = 0, 1, 2, \\dots). Beträgt der Gangunterschied hingegen ein ungeradzahliges Vielfaches einer halben Wellenlänge, löschen sich Wellenberg und Wellental durch destruktive Interferenz gegenseitig aus.
+Auf dem Beobachtungsschirm im Abstand L >> d entsteht ein charakteristisches Streifenmuster aus abwechselnd hellen Interferenzmaxima und dunklen Interferenzminima. Ein helles Maximum k-ter Ordnung tritt immer dort auf, wo der Gangunterschied ~D s der beiden Teilwellen ein ganzzahliges Vielfaches der Wellenlänge ~l beträgt (~D s = k * ~l mit k = 0, 1, 2, ...). Beträgt der Gangunterschied hingegen ein ungeradzahliges Vielfaches einer halben Wellenlänge, löschen sich Wellenberg und Wellental durch destruktive Interferenz gegenseitig aus.
 
 <Rahmen>
 _Bild 5.1: Historisches Doppelspalt-Interferenzmuster nach Thomas Young_
 -\t_Kohärenzbedingung:_ Zeitlich und räumlich konstante Phasenbeziehung zwischen beiden Elementarwellenzügen; im modernen Schulexperiment durch einen He-Ne-Laser (~l = 632,8 nm).
--\t_Konstruktive Interferenz (Verstärkung):_ ~D s = d \\cdot \\sin(~a_k) = k \\cdot ~l (für k = 0, 1, 2, \\dots).
--\t_Destruktive Interferenz (Auslöschung):_ ~D s = d \\cdot \\sin(~a_k) = (k + \\frac{1}{2}) \\cdot ~l.
--\t_Kleinwinkelnäherung (für kleine Winkel ~a < 10° gilt \\sin(~a) \\approx \\tan(~a) = \\frac{y_k}{L}):_ Der Streifenabstand benachbarter Maxima auf dem Schirm beträgt ~D y = \\frac{~l \\cdot L}{d}.
+-\t_Konstruktive Interferenz (Verstärkung):_ ~D s = d * sin(~a_k) = k * ~l (für k = 0, 1, 2, ...).
+-\t_Destruktive Interferenz (Auslöschung):_ ~D s = d * sin(~a_k) = (k + \\f{1}{2}) * ~l.
+-\t_Kleinwinkelnäherung_ (für kleine Winkel ~a < 10° gilt sin(~a) \\apx tan(~a) = \\f{y_k}{L}): Der Streifenabstand benachbarter Maxima auf dem Schirm beträgt ~D y = \\f{~l * L}{d}.
 -\tJe kleiner der Spaltabstand d gewählt wird, desto weiter rücken die Maxima auseinander.
 </Rahmen>
 
@@ -7003,11 +7002,11 @@ _Bild 5.1: Historisches Doppelspalt-Interferenzmuster nach Thomas Young_
 
 #### Herleitung der Gangunterschiedsformel
 
-Da der Schirmabstand L im Experiment sehr viel größer als der Spaltmittenabstand d ist (Fraunhofer-Näherung), verlaufen die beiden Strahlen von den Spalten S_1 und S_2 zu einem Schirmpunkt P nahezu parallel unter demselben Beugungswinkel ~a. Fällen wir vom oberen Spalt S_1 das Lot auf den unteren Strahl, entsteht ein rechtwinkliges Dreieck mit der Hypotenuse d und der Gegenkathete ~D s. Daraus folgt unmittelbar ~D s = d \\cdot \\sin(~a).
+Da der Schirmabstand L im Experiment sehr viel größer als der Spaltmittenabstand d ist (Fraunhofer-Näherung), verlaufen die beiden Strahlen von den Spalten S_1 und S_2 zu einem Schirmpunkt P nahezu parallel unter demselben Beugungswinkel ~a. Fällen wir vom oberen Spalt S_1 das Lot auf den unteren Strahl, entsteht ein rechtwinkliges Dreieck mit der Hypotenuse d und der Gegenkathete ~D s. Daraus folgt unmittelbar ~D s = d * sin(~a).
 
 ## 5.2 Optisches Gitter und hochauflösende Spektroskopie
 
-Ersetzt man den Doppelspalt durch ein optisches Transmissionsgitter mit N \\gg 100 äquidistanten Spalten (Gitterkonstante g = \\frac{1}{n}), so bleibt die Lage der Hauptmaxima bei g \\cdot \\sin(~a_k) = k \\cdot ~l erhalten. Durch die Vielstrahlinterferenz aller N Elementarwellen werden die Hauptmaxima jedoch extrem scharf und lichtstark, während zwischen zwei Hauptmaxima jeweils N - 1 Nebenminima nahezu vollständige Dunkelheit erzeugen.
+Ersetzt man den Doppelspalt durch ein optisches Transmissionsgitter mit N >> 100 äquidistanten Spalten (Gitterkonstante g = \\f{1}{n}), so bleibt die Lage der Hauptmaxima bei g * sin(~a_k) = k * ~l erhalten. Durch die Vielstrahlinterferenz aller N Elementarwellen werden die Hauptmaxima jedoch extrem scharf und lichtstark, während zwischen zwei Hauptmaxima jeweils N - 1 Nebenminima nahezu vollständige Dunkelheit erzeugen.
 
 #### Abb. 5.2: Beugung am optischen Gitter und Linienspektrum
 
@@ -7026,9 +7025,9 @@ Wasserstoff (H-alpha)\tTiefrot\t656,3 nm\t23,2°
 
 <Rahmen>
 _Methoden-Kasten: Gitter-Spektroskopie in Astrophysik und Labor_
--\t_Auflösungsvermögen eines Gitters:_ R = \\frac{~l}{~D~l} = k \\cdot N (wächst mit der beleuchteten Spaltzahl N).
--\t_Beispiel Natrium-D-Doppellinie (~l_1 = 589,0 nm und ~l_2 = 589,6 nm):_ Um beide Linien in der ersten Beugungsordnung (k = 1) getrennt aufzulösen, müssen mindestens N \\approx 983 Gitterfurchen kohärent ausgeleuchtet werden.
--\t_Maximal beobachtbare Beugungsordnung:_ Da \\sin(~a_k) \\le 1 gelten muss, folgt k_{\\max} = \\lfloor \\frac{g}{~l} \\rfloor.
+-\t_Auflösungsvermögen eines Gitters:_ R = \\f{~l}{~D~l} = k * N (wächst mit der beleuchteten Spaltzahl N).
+-\t_Beispiel Natrium-D-Doppellinie_ (~l_1 = 589,0 nm und ~l_2 = 589,6 nm): Um beide Linien in der ersten Beugungsordnung (k = 1) getrennt aufzulösen, müssen mindestens N \\apx 983 Gitterfurchen kohärent ausgeleuchtet werden.
+-\t_Maximal beobachtbare Beugungsordnung:_ Da sin(~a_k) <= 1 gelten muss, folgt k_{\\max} = \\lfloor \\f{g}{~l} \\rfloor.
 -\t_Chemische Spektralanalyse (Bunsen & Kirchhoff):_ Jedes chemische Element besitzt ein unverwechselbares Linienspektrum als optischen Fingerabdruck elektronischer Übergänge.
 -\tIn der Astrophysik ermöglicht die Verschiebung der Fraunhofer’schen Absorptionslinien (Doppler-Effekt) die exakte Bestimmung der Radialgeschwindigkeit ferner Galaxien.
 -\t_Unterschied zum Dispersionsprisma:_ Beim optischen Gitter wird langwelliges rotes Licht stärker abgelenkt als kurzwelliges blaues Licht (Normaldispersion beim Prisma ist umgekehrt).
@@ -7039,21 +7038,21 @@ _Methoden-Kasten: Gitter-Spektroskopie in Astrophysik und Labor_
 
 ### Photoelektrischer Effekt und Lichtquantenhypothese
 
-Bestrahlt man eine metallische Photokathode (z. B. Cäsium oder Kalium) mit kurzwelligem ultraviolettem oder blauem Licht, so werden augenblicklich Leitungselektronen aus der Metalloberfläche ausgelöst (äußerer lichtelektrischer Effekt). Nach der klassischen Wellentheorie müsste die maximale kinetische Energie E_{kin,max} der Photoelektronen von der Bestrahlungsstärke (Intensität) des Lichts abhängen. Das Experiment mit der Gegenspannungsmethode zeigt jedoch: E_{kin,max} hängt ausschließlich linear von der Lichtfrequenz f ab! Albert Einstein deutete diesen Befund 1905 mit seiner Lichtquantenhypothese: Elektromagnetische Strahlung der Frequenz f besteht aus einzelnen Energiequanten (Photonen) der Energie E_{Photon} = h \\cdot f mit dem Planck’schen Wirkungsquantum h = 6,626 \\cdot 10^{-34} J \\cdot s.
+Bestrahlt man eine metallische Photokathode (z. B. Cäsium oder Kalium) mit kurzwelligem ultraviolettem oder blauem Licht, so werden augenblicklich Leitungselektronen aus der Metalloberfläche ausgelöst (äußerer lichtelektrischer Effekt). Nach der klassischen Wellentheorie müsste die maximale kinetische Energie E_{kin,max} der Photoelektronen von der Bestrahlungsstärke (Intensität) des Lichts abhängen. Das Experiment mit der Gegenspannungsmethode zeigt jedoch: E_{kin,max} hängt ausschließlich linear von der Lichtfrequenz f ab! Albert Einstein deutete diesen Befund 1905 mit seiner Lichtquantenhypothese: Elektromagnetische Strahlung der Frequenz f besteht aus einzelnen Energiequanten (Photonen) der Energie E_{Photon} = h * f mit dem Planck’schen Wirkungsquantum h = 6,626 * 10^{-34} J * s.
 
 #### Bild 5.2: Schematische Darstellung einer Photozelle zur Gegenspannung
 
-Vakuum-Photozelle mit bestrahlter Kalium-Kathode, Ringanode, einstellbarer Gegenspannung U_G und Picoamperemeter: Bei e \\cdot U_G = E_{kin,max} = h \\cdot f - W_A sinkt der Photostrom exakt auf null.
+Vakuum-Photozelle mit bestrahlter Kalium-Kathode, Ringanode, einstellbarer Gegenspannung U_G und Picoamperemeter: Bei e * U_G = E_{kin,max} = h * f - W_A sinkt der Photostrom exakt auf null.
 
 ### Tab. 5.2: Austrittsarbeit ausgewählter Metalle beim Photoeffekt
 
 <Tabelle>
 Kathodenmetall\tAustrittsarbeit W_A (eV)\tGrenzfrequenz f_G (10^{14} Hz)\tGrenzwellenlänge ~l_G (nm)
-Cäsium (Cs)\t1,94 eV\t4,69 \\cdot 10^{14} Hz\t639 nm (Rot)
-Kalium (K)\t2,25 eV\t5,44 \\cdot 10^{14} Hz\t551 nm (Grün)
-Natrium (Na)\t2,28 eV\t5,51 \\cdot 10^{14} Hz\t544 nm (Grün)
-Zink (Zn)\t4,31 eV\t10,4 \\cdot 10^{14} Hz\t288 nm (UV)
-Platin (Pt)\t5,32 eV\t12,9 \\cdot 10^{14} Hz\t233 nm (UV)
+Cäsium (Cs)\t1,94 eV\t4,69 * 10^{14} Hz\t639 nm (Rot)
+Kalium (K)\t2,25 eV\t5,44 * 10^{14} Hz\t551 nm (Grün)
+Natrium (Na)\t2,28 eV\t5,51 * 10^{14} Hz\t544 nm (Grün)
+Zink (Zn)\t4,31 eV\t10,4 * 10^{14} Hz\t288 nm (UV)
+Platin (Pt)\t5,32 eV\t12,9 * 10^{14} Hz\t233 nm (UV)
 </Tabelle>
 
 ### Übungsaufgaben zu Wellenoptik und Quantenphysik
@@ -7064,12 +7063,12 @@ Platin (Pt)\t5,32 eV\t12,9 \\cdot 10^{14} Hz\t233 nm (UV)
 
 <Rahmen>
 _Merksatz: Einstein’sche Gleichung des Photoeffekts und Welle-Teilchen-Dualismus_
--\t_Energiebilanz beim Photoeffekt:_ E_{kin,max} = h \\cdot f - W_A = e \\cdot U_G.
--\t_Grenzfrequenz f_G = \\frac{W_A}{h}:_ Unterhalb von f_G werden selbst bei höchster Lichtintensität keine Elektronen ausgelöst; oberhalb von f_G setzt der Photostrom verzögerungsfrei ein.
--\t_Bedeutung der Lichtintensität:_ Eine höhere Bestrahlungsstärke bedeutet mehr Photonen pro Sekunde und erhöht die Stromstärke I_{Photo}, nicht jedoch die Einzelenergie h \\cdot f.
+-\t_Energiebilanz beim Photoeffekt:_ E_{kin,max} = h * f - W_A = e * U_G.
+-\t_Grenzfrequenz_ f_G = \\f{W_A}{h}: Unterhalb von f_G werden selbst bei höchster Lichtintensität keine Elektronen ausgelöst; oberhalb von f_G setzt der Photostrom verzögerungsfrei ein.
+-\t_Bedeutung der Lichtintensität:_ Eine höhere Bestrahlungsstärke bedeutet mehr Photonen pro Sekunde und erhöht die Stromstärke I_{Photo}, nicht jedoch die Einzelenergie h * f.
 -\t_Welle-Teilchen-Dualismus:_ Bei der Ausbreitung im Raum (Beugung am Doppelspalt und Gitter) zeigt Licht Welleneigenschaften; bei der Wechselwirkung mit Materie (Emission und Absorption) tritt sein Teilchencharakter in Form unteilbarer Lichtquanten (Photonen) hervor.
--\t_Umrechnung der Energieeinheit Elektronenvolt:_ 1 eV = 1,602 \\cdot 10^{-19} J.
--\t_Impuls eines Photons:_ p = \\frac{E}{c} = \\frac{h}{~l} (experimentell bestätigt durch den Compton-Effekt).
+-\t_Umrechnung der Energieeinheit Elektronenvolt:_ 1 eV = 1,602 * 10^{-19} J.
+-\t_Impuls eines Photons:_ p = \\f{E}{c} = \\f{h}{~l} (experimentell bestätigt durch den Compton-Effekt).
 </Rahmen>
 """
 
@@ -7270,23 +7269,23 @@ Hinweis zur Selbstkontrolle: Nutzen Sie für Teilaufgabe b) die Differenzfunktio
 
 ## 2.1 Charakteristische Punkte, Ableitungsfunktion und Integralfläche
 
-Eine ganzrationale Funktion n-ten Grades besitzt die allgemeine Funktionsgleichung f(x) = a_n \\cdot x^n + a_{n-1} \\cdot x^{n-1} + \\dots + a_1 \\cdot x + a_0 mit a_n \\neq 0. Ihr globales Verhalten für betragsgroße Werte von x wird ausschließlich vom Leitkoeffizienten a_n und dem höchsten Exponenten n bestimmt. Mithilfe der ersten und zweiten Ableitungsfunktion f'(x) und f''(x) lassen sich lokale Extrempunkte sowie Wendepunkte exakt berechnen.
+Eine ganzrationale Funktion n-ten Grades besitzt die allgemeine Funktionsgleichung f(x) = a_n * x^n + a_{n-1} * x^{n-1} + ... + a_1 * x + a_0 mit a_n \\neq 0. Ihr globales Verhalten für betragsgroße Werte von x wird ausschließlich vom Leitkoeffizienten a_n und dem höchsten Exponenten n bestimmt. Mithilfe der ersten und zweiten Ableitungsfunktion f'(x) und f''(x) lassen sich lokale Extrempunkte sowie Wendepunkte exakt berechnen.
 
 #### Abb. 2.1: Funktionsgraph von f(x) und Ableitungsgraph f'(x) mit Extrem-, Wende- und Integralbereich
 
 <Bild> Diagramm:
-Beschreibung mit Bildtext: Koordinatensystem mit dem blauen Funktionsgraphen f(x) = \\frac{1}{4}x^3 - 1,5x^2 + 2x + 1, dem roten Ableitungsgraphen f'(x) = 0,75x^2 - 3x + 2, den markierten Punkten Hochpunkt H(0,85 \\mid 1,77), Wendepunkt W(2 \\mid 1) und Tiefpunkt T(3,15 \\mid 0,23) sowie der hellblau schraffierten Integralfläche A = 4 FE zwischen Graph und x-Achse im Intervall [0; 4].
+Beschreibung mit Bildtext: Koordinatensystem mit dem blauen Funktionsgraphen f(x) = \\f{1}{4}x^3 - 1,5x^2 + 2x + 1, dem roten Ableitungsgraphen f'(x) = 0,75x^2 - 3x + 2, den markierten Punkten Hochpunkt H(0,85|1,77), Wendepunkt W(2|1) und Tiefpunkt T(3,15|0,23) sowie der hellblau schraffierten Integralfläche A = 4 FE zwischen Graph und x-Achse im Intervall [0; 4].
 </Bild>
 
 <Rahmen>
 _Merksatz: Notwendige und hinreichende Kriterien der Differential- und Integralrechnung_
--\t_Potenz- und Summenregel der Ableitung:_ Für f(x) = c \\cdot x^n gilt f'(x) = c \\cdot n \\cdot x^{n-1}.
+-\t_Potenz- und Summenregel der Ableitung:_ Für f(x) = c * x^n gilt f'(x) = c * n * x^{n-1}.
 -\t_Notwendige Bedingung für lokale Extremstellen:_ f'(x_E) = 0 (waagerechte Tangente).
 -\t_Hinreichende Bedingung für lokale Extremstellen:_ Gilt f'(x_E) = 0 und f''(x_E) < 0, so liegt bei x_E ein lokales Maximum (Hochpunkt H) vor. Gilt f'(x_E) = 0 und f''(x_E) > 0, so liegt bei x_E ein lokales Minimum (Tiefpunkt T) vor.
--\t_Notwendige und hinreichende Bedingung für Wendestellen (Krümmungswechsel):_ Gilt f''(x_W) = 0 und f'''(x_W) \\neq 0, so besitzt der Graph bei W(x_W \\mid f(x_W)) einen Wendepunkt.
+-\t_Notwendige und hinreichende Bedingung für Wendestellen (Krümmungswechsel):_ Gilt f''(x_W) = 0 und f'''(x_W) \\neq 0, so besitzt der Graph bei W(x_W|f(x_W)) einen Wendepunkt.
 -\t_Hauptsatz der Differential- und Integralrechnung (Bestimmtes Integral):_ Ist F(x) eine Stammfunktion von f(x) mit F'(x) = f(x), so gilt auf dem Intervall [a; b]: \\int_a^b f(x) dx = [F(x)]_a^b = F(b) - F(a).
--\t_Symmetrieverhalten ganzrationaler Funktionen:_ Nur gerade Exponenten (f(-x) = f(x)): Achsensymmetrie zur y-Achse. Nur ungerade Exponenten (f(-x) = -f(x)): Punktsymmetrie zum Koordinatenursprung O(0 \\mid 0).
--\t_Tangentensteigung m_t in einem Kurvenpunkt P(x_0 \\mid f(x_0)):_ t(x) = f'(x_0) \\cdot (x - x_0) + f(x_0).
+-\t_Symmetrieverhalten ganzrationaler Funktionen:_ Nur gerade Exponenten (f(-x) = f(x)): Achsensymmetrie zur y-Achse. Nur ungerade Exponenten (f(-x) = -f(x)): Punktsymmetrie zum Koordinatenursprung O(0|0).
+-\t_Tangentensteigung_ m_t in einem Kurvenpunkt P(x_0|f(x_0)): t(x) = f'(x_0) * (x - x_0) + f(x_0).
 </Rahmen>
 
 ((51))
@@ -7296,18 +7295,18 @@ _Merksatz: Notwendige und hinreichende Kriterien der Differential- und Integralr
 <Tabelle>
 Merkmal / Punkt\tx-Wert\tFunktionswert f(x)\tAbleitungswerte & Begründung
 y-Achsenabschnitt S_y\tx = 0\tf(0) = 1,00\tf'(0) = 2,00 (steigend)
-Hochpunkt H (Maximum)\tx_H \\approx 0,85\tf(x_H) \\approx 1,77\tf'(x_H) = 0 und f''(x_H) \\approx -1,73 < 0
+Hochpunkt H (Maximum)\tx_H \\apx 0,85\tf(x_H) \\apx 1,77\tf'(x_H) = 0 und f''(x_H) \\apx -1,73 < 0
 Wendepunkt W\tx_W = 2,00\tf(2) = 1,00\tf''(2) = 0 und f'''(2) = 1,50 \\neq 0
-Tiefpunkt T (Minimum)\tx_T \\approx 3,15\tf(x_T) \\approx 0,23\tf'(x_T) = 0 und f''(x_T) \\approx +1,73 > 0
+Tiefpunkt T (Minimum)\tx_T \\apx 3,15\tf(x_T) \\apx 0,23\tf'(x_T) = 0 und f''(x_T) \\apx +1,73 > 0
 Randpunkt im Intervall\tx = 4,00\tf(4) = 1,00\tf'(4) = 2,00 (punktsymmetrisch zu W)
 </Tabelle>
 
 <Rahmen>
 _Tipp: Musterlösung zur Berechnung des bestimmten Integrals auf [0; 4]_
 -\tGegeben ist f(x) = 0,25 x^3 - 1,5 x^2 + 2 x + 1 mit den Ableitungen f'(x) = 0,75 x^2 - 3 x + 2 und f''(x) = 1,5 x - 3. Da f(x) > 0 für alle x \\in [0; 4] gilt, liegt der Graph vollständig über der x-Achse.
--\t_Bildung einer Stammfunktion F(x):_ F(x) = \\frac{1}{16} x^4 - 0,5 x^3 + x^2 + x.
--\t_Einsetzen der Integrationsgrenzen a = 0 und b = 4 nach dem Hauptsatz:_ A = \\int_0^4 f(x) dx = F(4) - F(0) = (16 - 32 + 16 + 4) - 0 = 4 Flächeneinheiten (FE).
--\t_Kontrolle durch Punktsymmetrie zu W(2 \\mid 1):_ Das Rechteck der Breite 4 und Höhe 1 hat genau A = 4 FE.
+-\t_Bildung einer Stammfunktion_ F(x): F(x) = \\f{1}{16} x^4 - 0,5 x^3 + x^2 + x.
+-\t_Einsetzen der Integrationsgrenzen nach dem Hauptsatz_ (a = 0 und b = 4): A = \\int_0^4 f(x) dx = F(4) - F(0) = (16 - 32 + 16 + 4) - 0 = 4 Flächeneinheiten (FE).
+-\t_Kontrolle durch Punktsymmetrie zu_ W(2|1): Das Rechteck der Breite 4 und Höhe 1 hat genau A = 4 FE.
 </Rahmen>
 
 ### Aufgabe 1: Ableitungsfunktionen und Steigung bestimmen
@@ -7326,7 +7325,7 @@ Gegeben ist die Funktion f(x) = x^3 - 3 x^2 - 9 x + 11. Bestimmen Sie rechnerisc
 ### Aufgabe 3: Steckbriefaufgabe und Flächeninhalt zwischen zwei Graphen
 [schwer]
 
-Der Graph einer ganzrationalen Funktion 3. Grades verläuft durch den Ursprung O(0 \\mid 0), besitzt im Punkt W(2 \\mid 4) einen Wendepunkt und hat dort die Steigung m = -3.
+Der Graph einer ganzrationalen Funktion 3. Grades verläuft durch den Ursprung O(0|0), besitzt im Punkt W(2|4) einen Wendepunkt und hat dort die Steigung m = -3.
 a) Stellen Sie das lineare Gleichungssystem auf und weisen Sie nach, dass p(x) = 0,5 x^3 - 3 x^2 + 3 x + 0 bzw. mit angepasstem Koeffizienten die Bedingungen erfüllt.
 b) Ermitteln Sie das Flächenmaß des Gebiets, welches der Graph von f(x) aus Abb. 2.1 mit der Wendetangente und der y-Achse im ersten Quadranten einschließt.
 

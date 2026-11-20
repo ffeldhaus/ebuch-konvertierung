@@ -7,16 +7,16 @@
 #### Abb. 6.1: Michaelis-Menten-Kinetik und Kompetitive Hemmung
 
 <Bild> Diagramm:
-Beschreibung mit Bildtext: Koordinatensystem mit der Substratkonzentration [S] in mmol/L auf der Rechtsachse und der Reaktionsgeschwindigkeit v auf der Hochachse sowie einem schematischen Schlüssel-Schloss-Modell der kompetitiven Hemmung rechts. Die grüne Sättigungskurve (ohne Hemmstoff) erreicht bei niedriger Substratkonzentration K_M die halbe Maximalgeschwindigkeit \frac{1}{2} v_{\max} und nähert sich asymptotisch v_{\max} an; die orangefarbene Kurve (kompetitive Hemmung) erreicht \frac{1}{2} v_{\max} erst bei einer höheren Konzentration K_M', strebt bei hohem [S] aber derselben Maximalgeschwindigkeit v_{\max} zu.
+Beschreibung mit Bildtext: Koordinatensystem mit der Substratkonzentration [S] in mmol/L auf der Rechtsachse und der Reaktionsgeschwindigkeit v auf der Hochachse sowie einem schematischen Schlüssel-Schloss-Modell der kompetitiven Hemmung rechts. Die grüne Sättigungskurve (ohne Hemmstoff) erreicht bei niedriger Substratkonzentration K_M die halbe Maximalgeschwindigkeit \f{1}{2} v_{\max} und nähert sich asymptotisch v_{\max} an; die orangefarbene Kurve (kompetitive Hemmung) erreicht \f{1}{2} v_{\max} erst bei einer höheren Konzentration K_M', strebt bei hohem [S] aber derselben Maximalgeschwindigkeit v_{\max} zu.
 </Bild>
 
 Enzyme wirken als hochspezifische Biokatalysatoren, indem sie das Substrat im aktiven Zentrum nach dem Induced-Fit-Modell binden und die Aktivierungsenergie E_A über einen Enzym-Substrat-Komplex [ES] herabsetzen. Die Abhängigkeit der Reaktionsgeschwindigkeit v von der Substratkonzentration [S] folgt der Michaelis-Menten-Gleichung. Bei niedrigen Konzentrationen steigt v nahezu linear an, während bei hohen Substratkonzentrationen alle aktiven Zentren der Enzymmoleküle gesättigt sind und v_{\max} asymptotisch erreicht wird:
 
-v = \frac{v_{\max} \cdot [S]}{K_M + [S]}
+v = \f{v_{\max} * [S]}{K_M + [S]}
 
 <Rahmen>
-_Bio-Kompakt: Bedeutung der Michaelis-Konstante K_M und Formen der Enzymhemmung_
--	_Michaelis-Konstante K_M:_ Gibt genau diejenige Substratkonzentration [S] (in mmol/L) an, bei der die Hälfte der Maximalgeschwindigkeit (v = \frac{1}{2} v_{\max}) erreicht wird. Ein kleiner K_M-Wert bedeutet eine hohe Affinität (Bindungsstärke) des Enzyms zu seinem Substrat.
+_Bio-Kompakt: Bedeutung der Michaelis-Konstante und Formen der Enzymhemmung_
+-	_Michaelis-Konstante_ K_M: Gibt genau diejenige Substratkonzentration [S] (in mmol/L) an, bei der die Hälfte der Maximalgeschwindigkeit (v = \f{1}{2} v_{\max}) erreicht wird. Ein kleiner K_M-Wert bedeutet eine hohe Affinität (Bindungsstärke) des Enzyms zu seinem Substrat.
 -	_Kompetitive Hemmung (Verdrängungshemmung):_ Der Inhibitor ähnelt strukturell dem Substrat und konkurriert um das aktive Zentrum. Die scheinbare Michaelis-Konstante K_M' ist erhöht; durch hohe Substratkonzentrationen [S] lässt sich der Hemmstoff jedoch verdrängen (v_{\max} bleibt gleich).
 -	_Allosterische (nicht-kompetitive) Hemmung:_ Der Effektor bindet außerhalb des aktiven Zentrums an ein allosterisches Zentrum und verändert die räumliche Konformation des Enzyms. Dadurch sinkt die Maximalgeschwindigkeit v_{\max}, während K_M unverändert bleibt.
 -	_Irreversible Hemmung (Enzymgifte):_ Schwermetall-Ionen (z. B. Pb^{2+}, Hg^{2+}, Cu^{2+}) bilden kovalente Bindungen mit Schwefelgruppen (-SH) der Aminosäure Cystein und inaktivieren das Enzym dauerhaft.
@@ -40,7 +40,7 @@ Substrat [S] (mmol/L)	v ohne Hemmstoff (~mmol/min)	v mit Hemmstoff (~mmol/min)	S
 
 ## 6.2 Abhängigkeit der Enzymaktivität von Temperatur und pH-Wert
 
-Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche Tertiärstruktur von Enzymproteinen. Nach der RGT-Regel (Reaktionsgeschwindigkeit-Temperatur-Regel) erhöht eine Temperatursteigerung um 10 °C die Umsatzrate zunächst um das 2- bis 3-Fache (Q_{10} \approx 2–3), da die kinetische Energie der Teilchen zunimmt. Oberhalb des Temperaturoptimums (beim Menschen ca. 37 °C bis 40 °C) zerstört die Wärmebewegung jedoch Wasserstoffbrücken und führt zur irreversiblen Denaturierung. Ebenso besitzt jedes Enzym ein spezifisches pH-Optimum (Pepsin im Magen pH \approx 2,0; Speichel-Amylase pH \approx 7,0; Trypsin im Dünndarm pH \approx 8,5). Änderungen der Oxonium-Ionenkonzentration verändern die Ladung saurer (-COO^-) und basischer (-NH_3^+) Seitenketten, sodass Ionenbindungen im aktiven Zentrum gelöst werden und die Substratbindung drastisch abnimmt.
+Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche Tertiärstruktur von Enzymproteinen. Nach der RGT-Regel (Reaktionsgeschwindigkeit-Temperatur-Regel) erhöht eine Temperatursteigerung um 10 °C die Umsatzrate zunächst um das 2- bis 3-Fache (Q_{10} \apx 2–3), da die kinetische Energie der Teilchen zunimmt. Oberhalb des Temperaturoptimums (beim Menschen ca. 37 °C bis 40 °C) zerstört die Wärmebewegung jedoch Wasserstoffbrücken und führt zur irreversiblen Denaturierung. Ebenso besitzt jedes Enzym ein spezifisches pH-Optimum (Pepsin im Magen pH \apx 2,0; Speichel-Amylase pH \apx 7,0; Trypsin im Dünndarm pH \apx 8,5). Änderungen der Oxonium-Ionenkonzentration verändern die Ladung saurer (-COO^-) und basischer (-NH_3^+) Seitenketten, sodass Ionenbindungen im aktiven Zentrum gelöst werden und die Substratbindung drastisch abnimmt.
 
 ### Auswertungs- und Vertiefungsaufgaben zur Enzymkinetik
 
@@ -53,7 +53,7 @@ Neben der Substratkonzentration bestimmen Temperatur und pH-Wert die räumliche 
 _Zusammenfassung Abiturwissen: Biokatalyse, Enzymkinetik und Stoffwechselregulation_
 -	_Aktives Zentrum & Induced-Fit-Modell:_ Bei der Anlagerung des Substrats passt sich die Raumstruktur des aktiven Zentrums dynamisch an (Substrat- und Wirkungsspezifität).
 -	_Energetische Wirkung:_ Enzyme senken ausschließlich die Aktivierungsenergie E_A über den Enzym-Substrat-Komplex [ES], verändern jedoch weder die Reaktionsenthalpie ~D H noch die Gleichgewichtslage einer reversiblen Stoffwechselreaktion.
--	_Michaelis-Konstante K_M als Affinitätsmaß:_ Kleines K_M kennzeichnet hohe Substrataffinität; kompetitive Inhibitoren erhöhen scheinbar K_M' ohne v_{\max} zu senken, während allosterische Hemmstoffe v_{\max} herabsetzen.
+-	_Michaelis-Konstante als Affinitätsmaß:_ Kleines K_M kennzeichnet hohe Substrataffinität; kompetitive Inhibitoren erhöhen scheinbar K_M' ohne v_{\max} zu senken, während allosterische Hemmstoffe v_{\max} herabsetzen.
 -	_Negative Rückkopplung (Endprodukthemmung):_ In mehrschrittigen Stoffwechselketten wirkt das Endprodukt häufig als allosterischer Inhibitor des Schrittmacherenzyms und verhindert Überproduktion.
 -	_Kofaktoren und Koenzyme:_ Viele Enzyme benötigen für ihre katalytische Aktivität zusätzliche Metall-Ionen (z. B. Mg^{2+}, Zn^{2+}, Fe^{2+}) oder organische Überträgermoleküle (NAD^+, FAD, ATP, Coenzym A).
 -	_Kompartimentierung:_ Durch Reaktionsräume (Mitochondrien, Chloroplasten, Lysosomen) können unterschiedliche pH-Werte und Enzymgarnituren gleichzeitig in derselben Zelle arbeiten.

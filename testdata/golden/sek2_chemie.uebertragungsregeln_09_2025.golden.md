@@ -18,7 +18,7 @@ _Versuchsprotokoll V4.1 – Gefahrstoffhinweise:_ [Gefahrstoffsymbol: Entzündba
 
 1.	Veresterungsgleichgewicht (Katalyse durch Oxonium-Ionen H_3O^+):
 
-CH_3COOH + C_2H_5OH \lra CH_3COOC_2H_5 + H_2O (~D H° \approx -4 kJ/mol)
+CH_3COOH + C_2H_5OH \lra CH_3COOC_2H_5 + H_2O (~D H° \apx -4 kJ/mol)
 
 2.	Redoxreaktion von Dichromat-Ionen mit Eisen(II)-Ionen in saurer Lösung:
 
@@ -50,12 +50,12 @@ _Sicherheit im Chemielabor: Umgang mit Mineralsäuren und Oxidationsmitteln_
 #### Abb. 4.1: Strukturformeln der säurekatalysierten Veresterung und der ~a-D-Glucopyranose
 
 <Bild> Strukturformel:
-Beschreibung mit Bildtext: Zweiteilige Darstellung organischer Strukturformeln. Teil A zeigt die säurekatalysierte Veresterung in Skelettformeln mit farbig hervorgehobenen funktionellen Gruppen: Ethansäure (CH_3COOH) + Ethanol (C_2H_5OH) \lra Ethylethanoat (CH_3COOC_2H_5) + H_2O unter H^+-Katalyse (K_c \approx 4,0). Teil B zeigt die Haworth-Ringformel der ~a-D-Glucopyranose mit sechsgliedrigem Pyranosering, Ringsauerstoffatom, axialer OH-Gruppe an C1 (~a-Stellung) und CH_2OH-Gruppe an C6.
+Beschreibung mit Bildtext: Zweiteilige Darstellung organischer Strukturformeln. Teil A zeigt die säurekatalysierte Veresterung in Skelettformeln mit farbig hervorgehobenen funktionellen Gruppen: Ethansäure (CH_3COOH) + Ethanol (C_2H_5OH) \lra Ethylethanoat (CH_3COOC_2H_5) + H_2O unter H^+-Katalyse (K_c \apx 4,0). Teil B zeigt die Haworth-Ringformel der ~a-D-Glucopyranose mit sechsgliedrigem Pyranosering, Ringsauerstoffatom, axialer OH-Gruppe an C1 (~a-Stellung) und CH_2OH-Gruppe an C6.
 </Bild>
 
-Im dynamischen Gleichgewicht ist der Quotient aus dem Produkt der Gleichgewichtskonzentrationen der Produkte und dem Produkt der Eduktkonzentrationen bei konstanter Temperatur unveränderlich. Diese quantitative Beziehung heißt Massenwirkungsgesetz (MWG): Für die Veresterung von Ethansäure mit Ethanol beträgt die Gleichgewichtskonstante bei Raumtemperatur K_c \approx 4,0. Durch gezieltes Entfernen eines Reaktionsprodukts aus dem Gleichgewichtsgemisch lässt sich die Ausbeute an Ethylethanoat im Labor deutlich steigern.
+Im dynamischen Gleichgewicht ist der Quotient aus dem Produkt der Gleichgewichtskonzentrationen der Produkte und dem Produkt der Eduktkonzentrationen bei konstanter Temperatur unveränderlich. Diese quantitative Beziehung heißt Massenwirkungsgesetz (MWG): Für die Veresterung von Ethansäure mit Ethanol beträgt die Gleichgewichtskonstante bei Raumtemperatur K_c \apx 4,0. Durch gezieltes Entfernen eines Reaktionsprodukts aus dem Gleichgewichtsgemisch lässt sich die Ausbeute an Ethylethanoat im Labor deutlich steigern.
 
-K_c = \frac{c(CH_3COOC_2H_5) \cdot c(H_2O)}{c(CH_3COOH) \cdot c(C_2H_5OH)} \approx 4,0
+K_c = \f{c(CH_3COOC_2H_5) * c(H_2O)}{c(CH_3COOH) * c(C_2H_5OH)} \apx 4,0
 
 ### Aufgaben zur Redoxchemie und zum chemischen Gleichgewicht
 
@@ -64,12 +64,12 @@ K_c = \frac{c(CH_3COOC_2H_5) \cdot c(H_2O)}{c(CH_3COOH) \cdot c(C_2H_5OH)} \appr
 -	[schwer] Aufgabe 3: Berechnen Sie die Gleichgewichtskonzentration an Ethylethanoat bei einem Ausgangsansatz von jeweils 1,0 mol Ethansäure und 1,0 mol Ethanol (K_c = 4,0).
 
 <Rahmen>
-_Beispielrechnung: Gleichgewichtskonstante Kc und Gleichgewichtsausbeute_
+_Beispielrechnung: Gleichgewichtskonstante und Gleichgewichtsausbeute_
 -	Ansatz im geschlossenen System: n_0(CH_3COOH) = 1,0 mol und n_0(C_2H_5OH) = 1,0 mol (Volumen V kürzt sich heraus).
 -	Im Gleichgewicht seien x mol Ester und x mol Wasser entstanden; es verbleiben (1,0 - x) mol Säure und Alkohol.
--	Einsetzen in das Massenwirkungsgesetz: K_c = \frac{x^2}{(1,0 - x)^2} = 4,0.
--	Ziehen der Quadratwurzel auf beiden Seiten: \frac{x}{1,0 - x} = 2,0 \implies x = 2,0 - 2,0x \implies 3,0x = 2,0.
--	Ergebnis: Im Gleichgewicht liegen n(Ester) = n(H_2O) = \frac{2}{3} mol \approx 0,67 mol (Ausbeute 66,7 %) sowie jeweils 0,33 mol unverbrauchte Ethansäure und Ethanol vor.
+-	Einsetzen in das Massenwirkungsgesetz: K_c = \f{x^2}{(1,0 - x)^2} = 4,0.
+-	Ziehen der Quadratwurzel auf beiden Seiten: \f{x}{1,0 - x} = 2,0 \Ra x = 2,0 - 2,0x \Ra 3,0x = 2,0.
+-	Ergebnis: Im Gleichgewicht liegen n(Ester) = n(H_2O) = \f{2}{3} mol \apx 0,67 mol (Ausbeute 66,7 %) sowie jeweils 0,33 mol unverbrauchte Ethansäure und Ethanol vor.
 -	Ausbeutesteigerung im Labor: Durch kontinuierliches Abdestillieren des leichtflüchtigen Esters (Siedepunkt 77 °C).
 </Rahmen>
 

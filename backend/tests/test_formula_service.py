@@ -186,7 +186,7 @@ def test_fibs_mode_bare_latex_tilde_greek_micro_and_arrows():
     assert "\\," not in res
     assert "0,001 ~mg bzw. 0,001 ~mg" in res
     assert "2 ~mm bzw. 2 ~mm sowie 1,67 ~mm" in res
-    assert "~D s = d \\cdot \\sin(~a_1) = k \\cdot ~l" in res
+    assert "~D s = d * sin(~a_1) = k * ~l" in res
     assert "~g + ~b = ~d" in res
     assert "CH_3COOH + C_2H_5OH \\lra CH_3COOC_2H_5 + H_2O" in res
     assert "2 SO_2(g) + O_2(g) \\xra{Kat., 450 °C} 2 SO_3(g)" in res
@@ -194,9 +194,10 @@ def test_fibs_mode_bare_latex_tilde_greek_micro_and_arrows():
 
 
 def test_tilde_greek_spelled_out_words_normalized_to_fibs_single_letter():
-    """Verifies 14d: half-converted '~alpha', '~beta', '~Omega' tokens map to '~a', '~b', '~W'."""
+    """Verifies 14d: half-converted '~alpha', '~beta', '~Omega', '~eta', '~theta', '~Theta' map to official FIBS tokens."""
     sample = (
         "Messung an ~alpha-Strahlung, ~beta-Teilchen, ~gamma-Quanten, ~Delta-Werten, "
+        "~eta-Wirkungsgrad, ~theta-Winkel, ~vartheta-Skala, ~Theta-Tensor, ~varphi-Phase, ~varepsilon-Wert, "
         "~mu-Mesonen und ~Omega-Widerstand (nicht ~betrachten oder `~beta` oder https://example.org/~alpha/doc)."
     )
     out = standardize_formulas(sample, fibs_mode=True)
@@ -204,11 +205,84 @@ def test_tilde_greek_spelled_out_words_normalized_to_fibs_single_letter():
     assert "~b-Teilchen" in out
     assert "~g-Quanten" in out
     assert "~D-Werten" in out
+    assert "~j-Wirkungsgrad" in out
+    assert "~h-Winkel" in out
+    assert "~h-Skala" in out
+    assert "~H-Tensor" in out
+    assert "~f-Phase" in out
+    assert "~e-Wert" in out
     assert "~m-Mesonen" in out
     assert "~W-Widerstand" in out
     assert "~betrachten" in out
     assert "`~beta`" in out
     assert "https://example.org/~alpha/doc" in out
+
+
+def test_fibs_minimiertes_latex_commands_vectors_indices_and_bruchschreibweisen():
+    """Verifies official FIBS Handreichung minimized commands, Greek eta/theta, vectors, and fraction rules."""
+    sample = (
+        "Brüche & Wurzeln: $\\frac{\\frac{m_1}{m_2}}{1 + \\dfrac{a}{b}}$, $\\tfrac{3}{8}$, $\\sqrt{x}$, $\\sqrt[3]{27}$, $\\overline{AB}$, $2,3\\overline 4$.\n"
+        "Relationen: $x \\to \\infty$, $a \\approx b$, $p \\equiv q$, $p \\not\\equiv r$, $1\\,\\text{cm} \\hat{=} 5\\,\\text{km}$, "
+        "$x \\le y \\ge z$, $d \\ll L \\gg r$, $a != 0$, $x \\pm 2 \\mp 1$.\n"
+        "Klammern, Pfeile & Mengen: $\\langle u, v \\rangle$, $A \\Rightarrow B \\Leftrightarrow C \\Leftarrow D$, "
+        "$x \\mapsto x^2$, $A \\leftarrow B$, $4\\,\\text{NO} \\xrightarrow[320\\text{ bis }400^\\circ\\text{C}]{\\text{Katalysator}} 2\\,\\text{N}_2$, "
+        "$M = \\emptyset$, $x \\in \\mathbb{R}$, $n \\in \\mathds{N}$, $A \\subset B \\subseteq C \\supset D \\supseteq E$, $\\exists x$, $g \\parallel h$.\n"
+        "Punkte, Produkte & Funktionen: $1, 2, \\dots, n$, $a_1 + \\cdots + a_n$, $3 \\cdot 10^8$, C2·0,05, "
+        "$\\sin(\\theta) + \\cos(\\vartheta) + \\tan(\\eta) + \\cot(\\Theta) + \\arcsin(x)$, $\\ln(x) + \\lg(y) + \\log_2(z)$, "
+        "sum_{i=1}^n a^3_i und int_0^1 x dx.\n"
+        "Vektoren & Brüche: $\\vec a$, $\\vec \\omega$, $\\vec{p}_1$, $\\vec{F}_A$, (-1/2), y = -1/2, 1/-2, 1/2 - 1/4, 1/1.000.000, 1/2 x, "
+        "Verwendung von $-Zeichen in `=B2+$F$1` sowie =A2+$F$1."
+    )
+    out = standardize_formulas(sample, fibs_mode=True)
+    assert r"\f{\f{m_1}{m_2}}{1 + \f{a}{b}}" in out
+    assert r"\f{3}{8}" in out
+    assert r"\s{x}" in out
+    assert r"\s[3]{27}" in out
+    assert r"\ol{AB}" in out
+    assert r"2,3\ol{4}" in out
+    assert r"x \to \8" in out
+    assert r"a \apx b" in out
+    assert r"p \eqv q" in out
+    assert r"p \n \eqv r" in out
+    assert r"1 cm \^= 5 km" in out
+    assert "x <= y >= z" in out
+    assert "d << L >> r" in out
+    assert r"a \neq 0" in out
+    assert r"x \pm 2 \mp 1" in out
+    assert r"\l< u, v \r>" in out
+    assert r"A \Ra B \Lra C \La D" in out
+    assert r"x \mt x^2" in out
+    assert r"A \la B" in out
+    assert r"\xra[320 bis 400 °C]{Katalysator}" in out
+    assert r"M = \es" in out
+    assert r"x \in \R" in out
+    assert r"n \in \N" in out
+    assert r"A \sbs B \sbse C \sps D \spsq E" in out
+    assert r"\ex x" in out
+    assert r"g \| h" in out
+    assert "1, 2, ..., n" in out
+    assert r"a_1 + \cd + a_n" in out
+    assert "3 * 10^8" in out
+    assert "C2*0,05" in out
+    assert "sin(~h) + cos(~h) + tan(~j) + cot(~H) + arcsin(x)" in out
+    assert r"\ln(x) + \lg(y) + \log_2(z)" in out
+    assert r"\sum_{i=1}^n a_i^3" in out
+    assert r"\int_0^1 x dx" in out
+    assert r"\vec{a}" in out
+    assert r"\vec{~w}" in out
+    assert r"\vec{p_1}" in out
+    assert r"\vec{F_A}" in out
+    assert r"(-\f{1}{2})" in out
+    assert r"y = -\f{1}{2}" in out
+    assert r"\f{1}{-2}" in out
+    assert "1/2 - 1/4" in out
+    assert "1/1.000.000" in out
+    assert r"\f{1}{2}x" in out
+    assert "$-Zeichen" in out
+    assert "`=B2+$F$1`" in out
+    assert "=A2+$F$1" in out
+    assert "__FIBS_BARE_PROT_" not in out
+    assert "__STD_DOLLAR_PROT_" not in out
 
 
 

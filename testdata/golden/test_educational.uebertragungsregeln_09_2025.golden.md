@@ -43,18 +43,18 @@ Im optischen Dichte-Experiment{1} wurde nachgewiesen, dass Licht beim Übergang 
 
 #### Mathematische Formeln im Fließtext:
 
-Hier ist eine inline Formel: n_1 \cdot \sin(~a) = n_2 \cdot \sin(~b)
+Hier ist eine inline Formel: n_1 * sin(~a) = n_2 * sin(~b)
 
 Hier ist ein MathML-Render-Beispiel für dieselbe Formel:
 
-n_1 \cdot \sin(~a) = n_2 \cdot \sin(~b)
+n_1 * sin(~a) = n_2 * sin(~b)
 
 Hier ist eine komplexe Blockgleichung:
 
-\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{~p + x^2 - 1}
+\int_{-\8}^{\8} e^{-x^2} dx = \s{~p + x^2 - 1}
 
 <Anmerkung> 1 Optisches Dichte-Experiment: Erstmalig systematisch beschrieben von Willebrord Snellius im Jahr 1621. </Anmerkung>
-<Anmerkung> 2 Snelliussche Brechungsgesetz: n_1 \cdot \sin(~a) = n_2 \cdot \sin(~b). </Anmerkung>
+<Anmerkung> 2 Snelliussche Brechungsgesetz: n_1 * sin(~a) = n_2 * sin(~b). </Anmerkung>
 
 ((47))
 

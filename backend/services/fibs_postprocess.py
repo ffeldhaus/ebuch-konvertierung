@@ -1893,8 +1893,8 @@ def _promote_and_clean_bild_captions(
                 has_pre_cap = True
             else:
                 m_anm_pre = anm_cap_re.match(cand_pre)
-                if m_anm_pre and not re.search(
-                    rf"(?<![_^\\])\{{{m_anm_pre.group(2)}\}}", surrounding_body
+                if m_anm_pre and not _has_footnote_brace_ref(
+                    surrounding_body, m_anm_pre.group(2)
                 ):
                     formatted_cap, c_clean = _build_formatted_caption(
                         "",
@@ -2024,7 +2024,7 @@ def _promote_and_clean_bild_captions(
                 anm_body_str = m_anm_post.group(3).strip()
                 if bare_pre_info is not None and anm_num != bare_pre_info[1]:
                     continue
-                has_fn_ref = bool(re.search(rf"(?<![_^\\])\{{{anm_num}\}}", surrounding_body))
+                has_fn_ref = _has_footnote_brace_ref(surrounding_body, anm_num)
                 is_dup_of_pre = has_pre_cap and (
                     anm_num == cap_num_found or anm_body_str.lower() == cap_text_lower
                 )
@@ -2208,6 +2208,433 @@ def _promote_and_clean_bild_captions(
     return "".join(bild_segs)
 
 
+def _mask_latex_commands_for_footnotes(text: str) -> tuple[str, list[str]]:
+    r"""Masks LaTeX commands with brace arguments so ``{n}`` in ``\f{1}{3}`` is never a footnote.
+
+    Args:
+        text: Input Markdown string.
+
+    Returns:
+        Tuple of ``(masked_text, saved_command_spans)``.
+    """
+    saved: list[str] = []
+
+    def _save(m: re.Match[str]) -> str:
+        saved.append(m.group(0))
+        return f"__FN_CMD_PROT_{len(saved) - 1}__"
+
+    masked = text
+    for _ in range(4):
+        masked = re.sub(r"\\[a-zA-Z]+(?:\s*\[[^\]]*\])*(?:\s*\{[^{}]*\})+", _save, masked)
+    return masked, saved
+
+
+def _has_footnote_brace_ref(text: str, fn_num: str | int) -> bool:
+    r"""Checks whether ``text`` contains a genuine FIBS ``{n}`` footnote marker outside math commands.
+
+    Args:
+        text: Markdown text to inspect.
+        fn_num: Footnote integer or digit string.
+
+    Returns:
+        ``True`` if ``{fn_num}`` occurs outside LaTeX command arguments and sub/superscripts.
+    """
+    masked, _ = _mask_latex_commands_for_footnotes(text)
+    return bool(re.search(rf"(?<![_^\\}}\]])\{{{fn_num}\}}", masked))
+
+
+_SHORT_PROSE_WORDS: frozenset[str] = frozenset({
+    "ab", "am", "an", "auf", "aus", "bei", "bis", "da", "das", "dem", "den", "der", "des",
+    "die", "du", "eh", "ein", "er", "es", "für", "gar", "gut", "hat", "her", "hin", "ich",
+    "ihm", "ihn", "ihr", "im", "in", "ins", "ist", "ja", "je", "lat", "mal", "man", "mit",
+    "nah", "neu", "nie", "nur", "ob", "oft", "per", "pro", "rar", "roh", "rot", "sah", "sei",
+    "sie", "so", "tat", "ton", "tot", "tun", "um", "und", "uns", "vom", "von", "vor", "war",
+    "was", "weg", "wem", "wen", "wer", "wie", "wir", "wo", "zu", "zum", "zur", "all", "and",
+    "any", "are", "art", "ask", "bad", "big", "bit", "box", "boy", "bus", "but", "buy", "can",
+    "car", "cat", "cut", "day", "did", "dog", "dry", "eat", "end", "eye", "far", "few", "fit",
+    "fly", "for", "fun", "get", "god", "got", "guy", "had", "has", "hat", "her", "him", "his",
+    "hit", "hot", "how", "ice", "ill", "its", "job", "key", "kid", "law", "lay", "led", "leg",
+    "let", "lie", "lip", "lot", "low", "mad", "man", "map", "may", "men", "met", "mix", "mom",
+    "mum", "net", "new", "nor", "not", "now", "odd", "off", "oil", "old", "one", "our", "out",
+    "own", "pay", "pen", "pet", "pic", "pop", "put", "ran", "raw", "red", "rid", "row", "run",
+    "sad", "sat", "saw", "say", "sea", "see", "set", "she", "shy", "sir", "sit", "six", "sky",
+    "son", "sun", "tax", "tea", "ten", "the", "tie", "tip", "toe", "too", "top", "toy", "try",
+    "two", "use", "van", "via", "was", "way", "wet", "who", "why", "win", "won", "yes", "yet",
+    "you", "do", "go", "he", "hi", "if", "is", "it", "me", "my", "no", "of", "oh", "ok", "on",
+    "or", "to", "up", "us", "we",
+})
+
+_UNAMBIGUOUS_GREEK_NAMES = (
+    "varepsilon|vartheta|upsilon|Upsilon|epsilon|lambda|Lambda|varphi|varrho|varsigma|"
+    "alpha|beta|gamma|Gamma|delta|theta|Theta|kappa|sigma|Sigma|omega|Omega|zeta|eta|phi|Phi|chi|psi|Psi|tau"
+)
+
+_NON_MATH_SECTION_NOUNS: frozenset[str] = frozenset({
+    "abschnitt", "anhang", "aufgabe", "band", "beispiel", "bild", "fall", "figur",
+    "form", "gruppe", "kapitel", "klasse", "konjunktiv", "lektion", "material", "modell",
+    "modus", "phase", "position", "punkt", "quelle", "reihe", "schema", "seite", "spalte",
+    "station", "stufe", "tabelle", "teil", "typ", "übung", "variante", "versuch", "vitamin",
+    "case", "class", "figure", "grade", "group", "level", "part", "phase", "section",
+    "stage", "step", "table", "type", "unit",
+})
+
+_FIBS_EMPH_SPAN_RE = re.compile(
+    r"(?<![A-Za-z0-9_}'\\])_(?!\s)"
+    r"((?:[^_\n]|(?<=[A-Za-z0-9}'])_(?=[A-Za-z0-9{~\\]))+?)"
+    r"(?<!\s)_(?![A-Za-z0-9_{])"
+)
+
+
+def strip_math_and_variable_emphasis(text: str) -> str:
+    r"""Strips ``_..._`` emphasis from mathematical variables, symbols, and formulas.
+
+    Repairs split subscript/vector emphasis collisions (e.g. ``_E_kin_`` -> ``E_{kin}``,
+    ``\vec{F_}_`` -> ``\vec{F}``, ``\int_0^_m r_^2 dm_`` -> ``\int_0^m r^2 dm``), converts
+    spelled-out Greek in formulas (``_Delta m_i_`` -> ``~Dm_i``, ``omega^2`` -> ``~w^2``),
+    splits mixed ``_Fachbegriff ~a_`` -> ``_Fachbegriff_ ~a``, and cleans orphaned ``_``
+    on ``~`` tokens, vectors, fractions, and units while preserving prose ``_Wort_`` emphasis
+    and ``_..._`` fill-in-the-blank gap markers.
+
+    Args:
+        text: Input Markdown text.
+
+    Returns:
+        Markdown text with zero emphasis underscores around math variables or formulas.
+    """
+    if not text:
+        return text
+
+    protected_spans: list[str] = []
+
+    def _mask(m: re.Match[str]) -> str:
+        protected_spans.append(m.group(0))
+        return f"__MATH_EMPH_PROT_{len(protected_spans) - 1}__"
+
+    work = fc.UNIT_PERCENT_PROTECTED_RE.sub(_mask, text)
+    work = re.sub(r"_\.\.\._", _mask, work)
+
+    # 1. Repair fraction denominators previously corrupted by '{n}' -> '^n' footnote bug
+    work = re.sub(r"\\(?:f|d?frac|t?frac)\{([^{}]+)\}\^(\d+)", r"\\f{\1}{\2}", work)
+
+    # 2. Repair \simw -> ~w, \vec{F_}_ -> \vec{F}, ~m/s^2 -> m/s^2, and ~D _t_ -> ~Dt
+    work = re.sub(r"\\sim([abdfghjklmprstwDFGHLPW])(?![a-zA-Z])", r"~\1", work)
+    work = re.sub(r"(\d)[ \t]+~m/(s(?:\^2|²)?)\b", r"\1 m/\2", work)
+    # Only strip leading '_' on \vec{F_}_ when there is no preceding unmatched '_' on the product (e.g. '_m\vec{v_}_')
+    work = re.sub(r"(?<![A-Za-z0-9_\\])_\\vec\{\s*([^{}]+?)_\}_?", r"\\vec{\1}", work)
+    work = re.sub(r"\\vec\{\s*([^{}]+?)_\}_?", r"\\vec{\1}", work)
+    work = re.sub(
+        r"(?<![A-Za-z0-9_}'\\])_(\\vec\{[^{}]+\}(?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)_(?![A-Za-z0-9_])",
+        r"\1",
+        work,
+    )
+    work = re.sub(
+        r"~D[ \t]*_([A-Za-z])_(?:_?(\{[^{}]+\}|[A-Za-z0-9]+)_?)?",
+        lambda m: (
+            f"~D{m.group(1)}"
+            if not m.group(2)
+            else (
+                f"~D{m.group(1)}_{m.group(2)}"
+                if m.group(2).startswith("{") or len(m.group(2)) == 1
+                else f"~D{m.group(1)}_{{{m.group(2)}}}"
+            )
+        ),
+        work,
+    )
+
+    # 3. Repair integral/sum bound + integrand underscore splits ('\int_0^_m r_^2 dm_' -> '\int_0^m r^2 dm')
+    work = re.sub(
+        r"\^_([A-Za-z0-9]+)[ \t]+([A-Za-z])_(\^(?:\{[^{}]+\}|[A-Za-z0-9+-]+)[ \t]*d[A-Za-z])_",
+        r"^\1 \2\3",
+        work,
+    )
+    work = re.sub(
+        r"(\\(?:o?i{1,3}nt|sum|prod)_(?:\{[^{}]+\}|[A-Za-z0-9+-]+)\^)_([A-Za-z0-9]+)_(?![A-Za-z0-9_])",
+        r"\1\2",
+        work,
+    )
+    # '_m_r^2_' -> 'm r^2', while '_v_0^2_' -> 'v_0^2'
+    work = re.sub(
+        r"(?<![A-Za-z0-9_}'\\])_([a-z])_([a-z])\^(\{[^{}]+\}|[0-9A-Za-z+-]+)_(?![A-Za-z0-9_])",
+        r"\1 \2^\3",
+        work,
+    )
+    work = re.sub(
+        r"(?<![A-Za-z0-9_}'\\])_([A-Za-z])_([0-9])\^(\{[^{}]+\}|[0-9A-Za-z+-]+)_(?![A-Za-z0-9_])",
+        r"\1_\2^\3",
+        work,
+    )
+
+    # 4. Repair split subscript + emphasis collisions ('_E_kin_' -> 'E_{kin}', '_v'_1_' -> 'v'_1', '2_v_2' -> '2v_2')
+    def _format_sub_token(sub_raw: str) -> str:
+        if sub_raw.startswith("{") or len(sub_raw) == 1:
+            return f"_{sub_raw}"
+        return f"_{{{sub_raw}}}"
+
+    # Numeric coefficient glued to split subscripted variable ('2_v_2_' or '2_v_2' -> '2v_2')
+    work = re.sub(
+        r"(\d+)_(~[a-zA-Z]|[A-Za-z])('{0,3})_(\{[^{}]+\}|[A-Za-z0-9,+-]{1,10})_?(?![A-Za-z0-9_])",
+        lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}{_format_sub_token(m.group(4))}",
+        work,
+    )
+    work = re.sub(r"(\d+)_([A-Za-z])_(?![A-Za-z0-9_])", r"\1\2", work)
+
+    def _fix_split_sub(m: re.Match[str]) -> str:
+        base = m.group(1)
+        primes = m.group(2) or ""
+        sub_fmt = _format_sub_token(m.group(3))
+        sup_part = m.group(4) or ""
+        call_part = m.group(5) or ""
+        return f"{base}{primes}{sub_fmt}{sup_part}{call_part}"
+
+    work = re.sub(
+        r"(?<![A-Za-z0-9_}'\\])_(~[a-zA-Z]|[A-Za-z])('{0,3})_"
+        r"(\{[^{}]+\}|[A-Za-z0-9,+-]{1,10})"
+        r"(\^(?:\{[^{}]+\}|[A-Za-z0-9+-]+))?"
+        r"(\([A-Za-z0-9,;\s+\-*/~]+\))?"
+        r"_(?![A-Za-z0-9_])",
+        _fix_split_sub,
+        work,
+    )
+
+    # 5. Convert spelled-out Greek in mathematical contexts (inside or outside '_..._')
+    # Including camelCase factor + Delta ('rDelta omega' -> 'r~D~w', 'rDelta t' -> 'r~Dt')
+    work = re.sub(
+        rf"(?<![A-ZÄÖÜäöüß~\\])([0-9a-zA-Z}}\^]*)Delta[ \t]*({_UNAMBIGUOUS_GREEK_NAMES})(?![A-Za-zäöüÄÖÜß0-9])",
+        lambda m: f"{m.group(1)}~D{fc.TILDE_GREEK_WORD_TO_FIBS[m.group(2)]}",
+        work,
+    )
+    work = re.sub(
+        r"(?<![A-ZÄÖÜäöüß~\\])([0-9a-z}\^]+)?Delta[ \t]+((?:[B-Za-z]|A(?![ \t]+[a-z]{2,}))"
+        r"(?:_(?:\{[^{}]+\}|[A-Za-z0-9,+-]+))?(?:\^(?:\{[^{}]+\}|[A-Za-z0-9+-]+))?)"
+        r"(?![A-Za-zäöüÄÖÜß0-9])",
+        lambda m: f"{m.group(1) or ''}~D{m.group(2)}",
+        work,
+    )
+    all_greek_pat = "|".join(sorted(fc.TILDE_GREEK_WORD_TO_FIBS, key=len, reverse=True))
+    # Greek name immediately followed by subscript/superscript ('omega^2' -> '~w^2', 'alpha_1' -> '~a_1')
+    work = re.sub(
+        rf"(?<![~\\A-Za-zäöüÄÖÜß0-9])({all_greek_pat})(?=(?:_[A-Za-z0-9{{]|\^))",
+        lambda m: fc.TILDE_GREEK_WORD_TO_FIBS[m.group(1)],
+        work,
+    )
+    # Standalone emphasized Greek name ('_alpha_' -> '~a', '_omega_' -> '~w')
+    work = re.sub(
+        rf"(?<![A-Za-z0-9_}}'\\])_({_UNAMBIGUOUS_GREEK_NAMES}|mu|nu|pi|xi|rho|iota)_(?![A-Za-z0-9_])",
+        lambda m: fc.TILDE_GREEK_WORD_TO_FIBS[m.group(1)],
+        work,
+    )
+    # Quotient or proportional relation with Greek ('M/alpha' -> 'M/~a', 'alpha ~ M' -> '~a \sim M')
+    work = re.sub(
+        rf"([A-Za-z0-9_)}}\]])[ \t]*/[ \t]*({_UNAMBIGUOUS_GREEK_NAMES}|rho)(?![A-Za-zäöüÄÖÜß0-9])",
+        lambda m: f"{m.group(1)}/{fc.TILDE_GREEK_WORD_TO_FIBS[m.group(2)]}",
+        work,
+    )
+    work = re.sub(
+        rf"(?<![A-Za-zäöüÄÖÜß0-9~\\])({_UNAMBIGUOUS_GREEK_NAMES}|rho)[ \t]*~[ \t]*([A-Za-z](?:_(?:\{{[^{{}}]+\}}|[A-Za-z0-9]+))?)(?![A-Za-zäöüÄÖÜß0-9])",
+        lambda m: rf"{fc.TILDE_GREEK_WORD_TO_FIBS[m.group(1)]} \sim {m.group(2)}",
+        work,
+    )
+    # Subscripted variable + Greek ('r_i omega' / '_r_i omega_' -> 'r_i ~w')
+    work = re.sub(
+        rf"([A-Za-z]'*_(?:\{{[^{{}}]+\}}|[A-Za-z0-9]+))[ \t]+({_UNAMBIGUOUS_GREEK_NAMES}|rho)(?![A-Za-zäöüÄÖÜß0-9])",
+        lambda m: f"{m.group(1)} {fc.TILDE_GREEK_WORD_TO_FIBS[m.group(2)]}",
+        work,
+    )
+
+    # Monomial/variable/power + glued or spaced Greek ('Jalpha' -> 'J~a', 'mr alpha' -> 'mr~a', 'mr^2 alpha' -> 'mr^2~a')
+    def _monomial_greek_repl(m: re.Match[str]) -> str:
+        tok = m.group(1)
+        g_name = m.group(2)
+        if re.search(r"[äöüÄÖÜß]", tok):
+            return m.group(0)
+        has_power_or_digit = bool(re.search(r"[0-9\^]", tok))
+        is_short_math_var = (
+            1 <= len(tok) <= 3
+            and tok.isalpha()
+            and tok not in {"A", "I", "a"}
+            and tok.lower() not in _SHORT_PROSE_WORDS
+        )
+        if not (has_power_or_digit or is_short_math_var):
+            return m.group(0)
+        if g_name == "pi" and not has_power_or_digit:
+            return m.group(0)
+        fibs_g = fc.TILDE_GREEK_WORD_TO_FIBS[g_name]
+        return f"{tok}{fibs_g}"
+
+    work = re.sub(
+        rf"(?<![A-Za-zäöüÄÖÜß0-9\\~])([A-Za-z0-9\^]+)[ \t]*({_UNAMBIGUOUS_GREEK_NAMES}|Delta|pi)(?![A-Za-zäöüÄÖÜß0-9])",
+        _monomial_greek_repl,
+        work,
+    )
+    # Trig argument with spelled-out Greek ('sin(alpha)' -> 'sin(~a)')
+    work = re.sub(
+        rf"(?<![A-Za-zäöüÄÖÜß0-9])(arc(?:sin|cos|tan)|sin|cos|tan|cot)\(\s*({_UNAMBIGUOUS_GREEK_NAMES})\s*\)",
+        lambda m: f"{m.group(1)}({fc.TILDE_GREEK_WORD_TO_FIBS[m.group(2)]})",
+        work,
+    )
+
+    # 6. Evaluate balanced '_<inner>_' spans: unwrap variables/formulas, split '_Begriff ~a_' & '_Label formula:_'
+    math_trig_words = {"sin", "cos", "tan", "cot", "arcsin", "arccos", "arctan", "ln", "lg", "log", "lim", "max", "min", "const", "konst"}
+
+    def _eval_emph_span(m: re.Match[str]) -> str:
+        inner = m.group(1)
+        prefix_ctx = work[max(0, m.start() - 25) : m.start()]
+
+        # Single-letter variable '_m_', '_F_', '_v_' (preserve metalinguistic 'the letter _q_', 'Buchstabe _a_')
+        if len(inner) == 1 and inner.isalpha():
+            if re.search(r"\b(?:letter|letters|Buchstabe\w*|Laut\w*)\s+$", prefix_ctx, re.IGNORECASE):
+                return m.group(0)
+            return inner
+
+        # Short 2-3 letter math variable product ('_ma_', '_mg_', '_mgh_', '_rF_', '_vt_', '_at_')
+        if re.fullmatch(r"[a-z][A-Za-z]{1,2}", inner):
+            if inner == "at":
+                suffix_ctx = work[m.end() : m.end() + 25]
+                if re.search(r"[a-z]{2,}\s+$", prefix_ctx) and re.match(
+                    r"^\s+(?:the|a|an|my|his|her|our|this|that)\b", suffix_ctx, re.IGNORECASE
+                ):
+                    return m.group(0)
+                return inner
+            if inner.lower() not in _SHORT_PROSE_WORDS:
+                return inner
+            return m.group(0)
+
+        # Mixed prose term(s) (>=4 chars) + trailing math symbol ('_Winkelbeschleunigung ~a_' -> '_Winkelbeschleunigung_ ~a', '_Drehmoment M_' -> '_Drehmoment_ M')
+        m_term_sym = re.match(
+            r"^([A-ZÄÖÜa-zäöüß][A-Za-zäöüÄÖÜß\-]{3,}(?:[ \t]+[A-ZÄÖÜa-zäöüß][A-Za-zäöüÄÖÜß\-]{2,})*)"
+            r"[ \t]+(~[A-Za-z](?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?(?:\^(?:\{[^{}]+\}|[A-Za-z0-9+-]+))?"
+            r"|[A-Za-z]'*(?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?(?:\^(?:\{[^{}]+\}|[A-Za-z0-9+-]+))?)"
+            r"([:;.,]?)$",
+            inner,
+        )
+        if m_term_sym:
+            prose_head, sym_tok, trail_p = m_term_sym.group(1), m_term_sym.group(2), m_term_sym.group(3)
+            last_word = prose_head.rsplit(None, 1)[-1].lower().strip("-")
+            is_section_label = len(sym_tok) == 1 and sym_tok.isalpha() and last_word in _NON_MATH_SECTION_NOUNS
+            if not is_section_label:
+                return f"_{prose_head}_ {sym_tok}{trail_p}"
+
+        # Preserve explicit prose mapping arrows ('_Anzahl \to Preis_') without math symbols
+        if r"\to" in inner and not re.search(r"[=^_]|\\[fs]\b|~[a-zA-Z]|\d", inner):
+            return m.group(0)
+
+        has_math_marker = bool(
+            re.search(
+                r"[=^]|(?<=[A-Za-z0-9}'])_(?=[A-Za-z0-9{~\\])"
+                r"|\\(?:f|d?frac|t?frac|s|sqrt|vec|o?i{1,3}nt|sum|prod|lim|ol|pm|mp|neq|apx|eqv|8)\b"
+                r"|~[a-zA-Z](?!-[A-ZÄÖÜ][a-zäöüß]{2,})"
+                r"|\*|(?:<<|>>|<=|>=)"
+                r"|\b\d{1,3}/\d{1,3}\b(?![./]\d)"
+                r"|(?:~[a-zA-Z]|[A-Za-z0-9]+)/[ \t]*(?:~[a-zA-Z]|[A-Za-z0-9]+)"
+                r"|[A-Za-z]'*\([A-Za-z0-9,;\s+\-*/~|]+\)",
+                inner,
+            )
+        )
+        if not has_math_marker:
+            return m.group(0)
+
+        # Strip subscripts and LaTeX command names before checking for prose words
+        stripped_for_prose = re.sub(r"_(?:\{[^{}]+\}|[A-Za-z0-9,+-]+)", " ", inner)
+        stripped_for_prose = re.sub(r"\\[A-Za-z]+", " ", stripped_for_prose)
+        prose_words = [
+            w
+            for w in re.findall(r"[A-Za-zäöüÄÖÜß]{4,}", stripped_for_prose)
+            if w.lower() not in math_trig_words
+        ]
+        has_umlaut = bool(re.search(r"[äöüÄÖÜß]", stripped_for_prose))
+
+        if not prose_words and not has_umlaut:
+            return inner
+
+        # If span starts directly with a formula/equation (e.g. '_E_{ges} = E_{kin} = konstant_'), unwrap all
+        if re.match(r"^(?:~[a-zA-Z]|\\[a-zA-Z]+|[A-Za-z](?:[_^'(]|\s*[=<>+\-*/]))", inner) and "=" in inner:
+            return inner
+
+        # Colon-terminated prose label with trailing formula ('_Grenzfrequenz f_G = \f{W_A}{h}:_' -> '_Grenzfrequenz_ f_G = \f{W_A}{h}:')
+        if inner.endswith(":"):
+            m_lbl = re.match(
+                r"^([A-ZÄÖÜ][A-Za-zäöüÄÖÜß\-]+(?:\s+(?:der|des|die|das|den|dem|einer|eines|einem|von|für|beim|zur|zum|und|oder|[A-ZÄÖÜa-zäöüß\-]{4,}))*)"
+                r"\s+(.+):$",
+                inner,
+            )
+            if m_lbl and len(m_lbl.group(1).split()) <= 6:
+                lbl_part = m_lbl.group(1).strip()
+                math_tail = m_lbl.group(2).strip()
+                lbl_has_math = bool(re.search(r"[=^_\\]|~[a-zA-Z]", lbl_part))
+                if not lbl_has_math:
+                    return f"_{lbl_part}_ {math_tail}:"
+
+        return m.group(0)
+
+    work = _FIBS_EMPH_SPAN_RE.sub(_eval_emph_span, work)
+
+    # 7. Clean orphaned leading/trailing '_' on '~' tokens, \vec{...}, braces, units, ~D spaces, and headings
+    # Collapse '~D ~w' / '~D p' / '~D t' -> '~D~w' / '~Dp' / '~Dt'
+    work = re.sub(
+        r"~D[ \t]+(~[A-Za-z]|[A-Za-z](?![A-Za-zäöüÄÖÜß]))",
+        r"~D\1",
+        work,
+    )
+    # Strip orphaned '_' inside LaTeX command argument braces ('\f{_v^2}{r}' -> '\f{v^2}{r}', '\f{a}{b_}' -> '\f{a}{b}')
+    for _ in range(2):
+        work = re.sub(r"\{_([A-Za-z0-9~\\][^{}]*)\}", r"{\1}", work)
+        work = re.sub(r"\{([^{}]+?)_\}", r"{\1}", work)
+    # Strip orphaned leading '_' before '~x', 'm\vec{v}', or 'm~w^2'
+    work = re.sub(r"(?<![A-Za-z0-9}\\'])_(~[a-zA-Z])", r"\1", work)
+    work = re.sub(
+        r"(?<![A-Za-z0-9}\\'])_([A-Za-z]?(?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?\\vec\{)",
+        r"\1",
+        work,
+    )
+    work = re.sub(
+        r"(?<![A-Za-z0-9}\\'])_([A-Za-z](?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?~[a-zA-Z])",
+        r"\1",
+        work,
+    )
+    # Strip orphaned trailing '_' after '~x', '~Dx', '\vec{...}', exponents, or SI units ('9,81 m/s^2_')
+    work = re.sub(
+        r"(~[a-zA-Z](?:\^(?:\{[^{}]+\}|[A-Za-z0-9+-]+))?)_(?![A-Za-z0-9{~])",
+        r"\1",
+        work,
+    )
+    work = re.sub(
+        r"(~D[A-Za-z](?:\^(?:\{[^{}]+\}|[A-Za-z0-9+-]+))?)_(?![A-Za-z0-9{])",
+        r"\1",
+        work,
+    )
+    work = re.sub(
+        r"(\\vec\{[^{}]+\}(?:\^(?:\{[^{}]+\}|[A-Za-z0-9+-]+))?)_(?![A-Za-z0-9{])",
+        r"\1",
+        work,
+    )
+    work = re.sub(
+        r"((?:\^\d+|\^\{[^{}]+\}|\b(?:m|km|cm|mm)/s(?:\^2)?))_(?![A-Za-z0-9_{])",
+        r"\1",
+        work,
+    )
+    # Strip stray unclosed '_' before an equation 'X = ...' in headings (and lines with no closing emphasis '_')
+    out_lines: list[str] = []
+    for ln in work.splitlines():
+        if re.match(r"^[ \t]*#{1,6}\s+", ln):
+            ln = re.sub(
+                r"(?<![A-Za-z0-9_}'\\])_(?=(?:~[a-zA-Z]|[A-Za-z]'*(?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)\s*=)",
+                "",
+                ln,
+            )
+        elif "_" in ln and not _FIBS_EMPH_SPAN_RE.search(ln):
+            ln = re.sub(
+                r"(?<![A-Za-z0-9_}'\\])_(?=(?:~[a-zA-Z]|[A-Za-z]'*(?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)\s*=)",
+                "",
+                ln,
+            )
+        out_lines.append(ln)
+    work = "\n".join(out_lines)
+
+    for idx, val in reversed(list(enumerate(protected_spans))):
+        work = work.replace(f"__MATH_EMPH_PROT_{idx}__", val)
+    return work
+
+
 def _normalize_fibs_emphasis(text: str, custom_rules: str | None = None) -> str:
     """Normalizes ``**Wort**``, unannounced ``*Wort*``, and ``%Wort%`` to FIBS ``_Wort_``.
 
@@ -2237,7 +2664,31 @@ def _normalize_fibs_emphasis(text: str, custom_rules: str | None = None) -> str:
         return f"__EMPH_PROT_{len(protected_spans) - 1}__"
 
     masked = fc.UNIT_PERCENT_PROTECTED_RE.sub(_mask_span, text)
-    masked = re.sub(r"\$\$[\s\S]*?\$\$|\$[^\$\n]+\$", _mask_span, masked)
+    # Protect spreadsheet cell refs ($F$1) and opening prose '$-Zeichen' before masking bounded $...$ math
+    masked = re.sub(
+        r"\$[A-Z]{1,3}\$\d+|(?<![0-9A-Za-z°}\\%])\$-(?=[A-ZÄÖÜ][a-zäöüß]+)",
+        _mask_span,
+        masked,
+    )
+
+    def _mask_math_if_valid(m: re.Match[str]) -> str:
+        full = m.group(0)
+        if full.startswith("$$"):
+            return _mask_span(m)
+        inner = full[1:-1]
+        if len(inner) > 80 or re.search(
+            r"\b(?:sodass|wenn|weil|dass|Zeichen|Formel|Konstante|Verwendung)\b",
+            inner,
+            re.IGNORECASE,
+        ):
+            return full
+        return _mask_span(m)
+
+    masked = re.sub(
+        r"\$\$[\s\S]*?\$\$|(?<!\$)\$(?!\s)([^\$\n]+?)(?<!\s)\$(?!\$)",
+        _mask_math_if_valid,
+        masked,
+    )
 
     out_lines: list[str] = []
     for line in masked.splitlines():
@@ -2245,7 +2696,7 @@ def _normalize_fibs_emphasis(text: str, custom_rules: str | None = None) -> str:
             h_ln = re.sub(r"\*\*([^\*\n]+)\*\*", r"\1", line)
             if not has_emphasis_legend:
                 h_ln = re.sub(
-                    r"(?<![\w\*\\])\*(?![\*\s])([^\*\n]+?)(?<![\*\s])\*(?![\w\*])",
+                    r"(?<![\w\*\\)\]}])\*(?![\*\s(\[{])([^\*\n]+?)(?<![\*\s)\]}])\*(?![\w\*(\[{])",
                     r"\1",
                     h_ln,
                 )
@@ -2260,8 +2711,9 @@ def _normalize_fibs_emphasis(text: str, custom_rules: str | None = None) -> str:
 
         b_ln = re.sub(r"\*\*([^\*\n]+)\*\*", r"_\1_", line)
         if not has_emphasis_legend:
+            # Do not treat FIBS multiplication '*' surrounded by spaces, digits, or parens as emphasis
             b_ln = re.sub(
-                r"(?<![\w\*\\])\*(?![\*\s])([^\*\n]+?)(?<![\*\s])\*(?![\w\*])",
+                r"(?<![\w\*\\)\]}])\*(?![\*\s(\[{])([^\*\n]+?)(?<![\*\s)\]}])\*(?![\w\*(\[{])",
                 r"_\1_",
                 b_ln,
             )
@@ -2269,7 +2721,7 @@ def _normalize_fibs_emphasis(text: str, custom_rules: str | None = None) -> str:
         out_lines.append(b_ln)
 
     res = "\n".join(out_lines)
-    for idx, val in enumerate(protected_spans):
+    for idx, val in reversed(list(enumerate(protected_spans))):
         res = res.replace(f"__EMPH_PROT_{idx}__", val)
     return res
 
@@ -2449,7 +2901,7 @@ def _apply_linked_worterklaerungen_and_randspalten(
         def _collect_anm(m_a: re.Match[str]) -> str:
             num_i = int(m_a.group(1))
             body_a = m_a.group(2).strip()
-            if re.search(rf"(?<![_^\\])\{{{num_i}\}}", p_text):
+            if _has_footnote_brace_ref(p_text, num_i):
                 anm_defs[num_i] = body_a
                 used_nums.add(num_i)
                 return ""
@@ -2461,9 +2913,14 @@ def _apply_linked_worterklaerungen_and_randspalten(
             p_text,
             flags=re.IGNORECASE,
         )
-        for num_i in sorted(anm_defs):
-            p_text = re.sub(rf"(?<![_^\\])\{{{num_i}\}}", f"^{num_i}", p_text)
-            entries.append((num_i, anm_defs[num_i]))
+        if anm_defs:
+            p_masked, p_saved = _mask_latex_commands_for_footnotes(p_text)
+            for num_i in sorted(anm_defs):
+                p_masked = re.sub(rf"(?<![_^\\}}\]])\{{{num_i}\}}", f"^{num_i}", p_masked)
+                entries.append((num_i, anm_defs[num_i]))
+            for idx_s, val_s in reversed(list(enumerate(p_saved))):
+                p_masked = p_masked.replace(f"__FN_CMD_PROT_{idx_s}__", val_s)
+            p_text = p_masked
 
         # B. Detect marginal etymology / glossary lines outside protected blocks
         p_text = re.sub(r"\n+[ \t]*=[ \t]*", " = ", p_text)
@@ -4245,24 +4702,30 @@ def post_process_structure(
                 rf"\1{{{dig_ch}}}",
                 processed,
             )
-    for fn_num in set(re.findall(r"(?<![_^\\])\{(\d+)\}", processed)):
-        if not re.search(rf"<Anmerkung\b[^>]*>\s*{fn_num}\b", processed, flags=re.IGNORECASE):
-            processed = re.sub(
+    # Repair fraction denominators previously corrupted to '^n' before footnote processing
+    processed = re.sub(r"\\(?:f|d?frac|t?frac)\{([^{}]+)\}\^(\d+)", r"\\f{\1}{\2}", processed)
+    fn_masked, fn_saved = _mask_latex_commands_for_footnotes(processed)
+    for fn_num in set(re.findall(r"(?<![_^\\}\]])\{(\d+)\}", fn_masked)):
+        if not re.search(rf"<Anmerkung\b[^>]*>\s*{fn_num}\b", fn_masked, flags=re.IGNORECASE):
+            fn_masked = re.sub(
                 rf"(?m)^[ \t]*(?:\^?{fn_num}|\[{fn_num}\]|\{{{fn_num}\}})[ \t]+([A-ZÄÖÜ][^\n]+)$",
                 rf"<Anmerkung> {fn_num} \1 </Anmerkung>",
-                processed,
+                fn_masked,
             )
-        if not re.search(rf"<Anmerkung\b[^>]*>\s*{fn_num}\b", processed, flags=re.IGNORECASE):
-            processed = re.sub(
-                rf"(?<![_^\\])\{{{fn_num}\}}(?=[ \t.,;!?)]*(?:\n|$))",
+        if not re.search(rf"<Anmerkung\b[^>]*>\s*{fn_num}\b", fn_masked, flags=re.IGNORECASE):
+            fn_masked = re.sub(
+                rf"(?<![_^\\}}\]])\{{{fn_num}\}}(?=[ \t.,;!?)]*(?:\n|$))",
                 fn_num,
-                processed,
+                fn_masked,
             )
-            processed = re.sub(
-                rf"(?<![_^\\])\{{{fn_num}\}}",
+            fn_masked = re.sub(
+                rf"(?<![_^\\}}\]])\{{{fn_num}\}}",
                 f"^{fn_num}",
-                processed,
+                fn_masked,
             )
+    for idx_fn, val_fn in reversed(list(enumerate(fn_saved))):
+        fn_masked = fn_masked.replace(f"__FN_CMD_PROT_{idx_fn}__", val_fn)
+    processed = fn_masked
 
     processed = convert_unicode_scripts(processed)
 
@@ -4328,6 +4791,7 @@ def post_process_structure(
     )
 
     processed = re.sub(r"\*\*([^\*\n]+)\*\*", r"_\1_", processed)
+    processed = strip_math_and_variable_emphasis(processed)
     processed = _normalize_fibs_task_headings_and_boxes(processed, custom_rules=custom_rules)
 
     try:
@@ -4349,7 +4813,7 @@ def post_process_structure(
     )
 
     processed = re.sub(r"…", " ...", processed)
-    processed = re.sub(r"([a-zA-Z0-9äöüÄÖÜß_\*\%#])\.\.\.", r"\1 ...", processed)
+    processed = re.sub(r"([a-zA-Z0-9äöüÄÖÜß_\*\%#])\.\.\.(?!_)", r"\1 ...", processed)
     processed = processed.replace("((...))", "[...]")
     processed = re.sub(r"[©®]", "", processed)
     processed = re.sub(r"_{2,}", "_..._", processed)
@@ -4451,6 +4915,13 @@ def post_process_structure(
         processed = _recover_dropped_rahmen_blocks(processed, raw_markdown)
 
     processed = _normalize_fibs_emphasis(processed, custom_rules=custom_rules)
+    after_math_strip = strip_math_and_variable_emphasis(processed)
+    if after_math_strip != processed:
+        from backend.services.formula_service import _convert_to_fibs_bare_latex
+
+        processed = _convert_to_fibs_bare_latex(after_math_strip)
+    else:
+        processed = after_math_strip
     processed = normalize_fibs_units_and_percent(processed)
     processed = deduplicate_page_numbers(processed)
 

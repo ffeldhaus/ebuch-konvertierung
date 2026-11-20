@@ -14,6 +14,11 @@ import sys
 import urllib.error
 import urllib.request
 
+try:
+    from scripts.sync_rules_markdown import sync_rules_markdown
+except ModuleNotFoundError:
+    from sync_rules_markdown import sync_rules_markdown  # type: ignore[no-redef]
+
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 # Key Python dependencies to check
@@ -204,6 +209,10 @@ def main():
     args = parser.parse_args()
 
     print("🔍 [E-Buch Pre-Commit] Checking for newer dependencies and AI models...")
+
+    synced_rules = sync_rules_markdown()
+    if synced_rules:
+        print(f"📄 [E-Buch Pre-Commit] Auto-synchronized rules Markdown: {', '.join(synced_rules)}")
 
     if os.environ.get("ALLOW_OUTDATED") == "1":
         print("⚠️ ALLOW_OUTDATED=1 detected. Skipping blocking check.")

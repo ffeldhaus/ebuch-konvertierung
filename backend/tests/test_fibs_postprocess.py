@@ -715,6 +715,115 @@ def test_lift_trailing_task_difficulty_tags_and_strip_stray_prose_tags():
     assert "##### 2\n[schwierig]\n\nDiskutieren Sie mögliche Fehlerquellen der Messung." in out_bk
 
 
+def test_strip_math_and_variable_emphasis_footnote_brace_fix_and_excel_dollar_protection():
+    """Verifies zero-bold on variables/formulas, {n} footnote brace safety on \\f{1}{3}, and Excel $F$1 safety."""
+    from backend.services.fibs_postprocess import strip_math_and_variable_emphasis
+
+    # 1. Exact user-reported rotation/mechanics cases
+    assert post_process_structure("_E_kin_ = _1/2 J omega^2_.").strip() == "E_{kin} = 1/2J~w^2."
+    assert (
+        post_process_structure("Die Teilmassen _Delta m_i_ bestimmt man einzeln.").strip()
+        == "Die Teilmassen ~Dm_i bestimmt man einzeln."
+    )
+
+    # 2. Split subscripts, vectors, integrals, spelled-out Greek, single-letter & multi-token math vs. prose emphasis
+    complex_md = (
+        "((15))\n\n"
+        "Für _starre Körper_ gilt der _Drehimpulserhaltungssatz:_ Die _Wärmeenergie_ und der _Reaktionsweg_ "
+        "werden mit der _Methode der kleinen Schritte_ (lat. _iterare_) berechnet; Lücke: _..._.\n\n"
+        "Größen: _F_G_, _F_Z_, _F_R_, _E_R_, _E_s_, _s_0_, _v_0_, _v_i_, _r_i_, _m_1_, _v'_1_, _v'_{12}_, "
+        "_E_{kin}_, _E_{pot}_, _E_{kin}(t)_, _F_s(s)_, _v(t)_, _a(t)_, _s(t)_, _a_Z_, _m_r^2_, "
+        "\\int_0^_m r_^2 dm_.\n\n"
+        "Vektoren & Tilde: \\vec{F_}_, \\vec{p_}_, \\vec{v_}_, \\vec{a_}_, \\vec{r_}_, \\vec{F_A_}_, "
+        "\\vec{F_Z_}_, \\vec{\\simw_}_, ~w_, ~D _t_, ~D _E_.\n\n"
+        "Griechisch & Produkte: Delta m_1, Delta v, Delta t, Delta omega, _r_i omega_, _alpha_, "
+        "J alpha, r alpha, M/alpha, Jalpha, alpha ~ M, _m_, _F_, _v_, _r_, _s_, _t_, _J_, "
+        "_ma_, _mg_, _mgh_, _rF_, _vt_, _at_, _mr^2_, _r(ma)_, _1/2 mv^2_.\n\n"
+        "-\t_Grenzfrequenz f_G = \\frac{W_A}{h}:_ Unterhalb von f_G tritt kein Effekt auf.\n\n"
+        "Brüche & Fußnoten: \\frac{1}{3} + \\f{1}{10} sowie bereits beschädigt \\frac{1}^3 und \\f{5}^12.\n\n"
+        "Tabellenkalkulation: Verwendung von $-Zeichen, sodass die Formel `=B2+$F$1` bzw. =A2+$F$1 kopiert wird, "
+        "wenn die Konstante im Feld $F$1 steht.\n"
+    )
+    out = post_process_structure(complex_md)
+
+    # Genuine prose emphasis and gap markers stay intact
+    assert "_starre Körper_" in out
+    assert "_Drehimpulserhaltungssatz:_" in out
+    assert "_Wärmeenergie_" in out
+    assert "_Reaktionsweg_" in out
+    assert "_Methode der kleinen Schritte_" in out
+    assert "_iterare_" in out
+    assert "_..._" in out
+
+    # Split subscripts, functions, and integral bounds repaired without underscores around variables
+    for expected_tok in (
+        "F_G,", "F_Z,", "F_R,", "E_R,", "E_s,", "s_0,", "v_0,", "v_i,", "r_i,", "m_1,",
+        "v'_1,", "v'_{12},", "E_{kin},", "E_{pot},", "E_{kin}(t),", "F_s(s),",
+        "v(t),", "a(t),", "s(t),", "a_Z,", "m r^2,", r"\int_0^m r^2 dm.",
+    ):
+        assert expected_tok in out, f"Missing {expected_tok!r} in:\n{out}"
+
+    # Vectors & tilde tokens cleaned
+    for vec_tok in (
+        r"\vec{F},", r"\vec{p},", r"\vec{v},", r"\vec{a},", r"\vec{r},",
+        r"\vec{F_A},", r"\vec{F_Z},", r"\vec{~w},", "~w,", "~Dt,", "~DE.",
+    ):
+        assert vec_tok in out, f"Missing {vec_tok!r} in:\n{out}"
+
+    # Spelled-out Greek & unwrapped products
+    for prod_tok in (
+        "~Dm_1,", "~Dv,", "~Dt,", "~D~w,", "r_i ~w,", "~a,",
+        "J~a,", "r~a,", "M/~a,", r"~a \sim M,",
+        " m, F, v, r, s, t, J,", "ma, mg, mgh, rF, vt, at, mr^2, r(ma), 1/2mv^2.",
+    ):
+        assert prod_tok in out, f"Missing {prod_tok!r} in:\n{out}"
+
+    # Colon-terminated label splits trailing formula outside emphasis
+    assert r"-\t_Grenzfrequenz_ f_G = \f{W_A}{h}:" in out or "-\t_Grenzfrequenz_ f_G = \\f{W_A}{h}:" in out
+
+    # Fractions never corrupted into footnote superscripts ^3 / ^10, and corrupted \frac{1}^3 repaired
+    assert r"\f{1}{3} + \f{1}{10}" in out
+    assert r"beschädigt \f{1}{3} und \f{5}{12}." in out
+    assert "^3" not in out and "^10" not in out and "^12" not in out
+
+    # Excel $F$1 and prose $-Zeichen never leak __EMPH_PROT_ placeholders
+    assert "__EMPH_PROT_" not in out
+    assert "__MATH_EMPH_PROT_" not in out
+    assert "Verwendung von $-Zeichen" in out
+    assert "`=B2+$F$1`" in out
+    assert "=A2+$F$1" in out
+    assert "im Feld $F$1 steht." in out
+
+    # Metalinguistic 'the letter _q_' preserved
+    assert strip_math_and_variable_emphasis("the letter _q_ is followed by the letter _u_") == (
+        "the letter _q_ is followed by the letter _u_"
+    )
+
+    # 3. Regression checks for all 5 real-textbook edge cases
+    edge_md = (
+        "((16))\n\n"
+        "#### M2 Drehmoment M = rF oder _M = r_a F cos ~h\n\n"
+        "Die _Winkelbeschleunigung ~a_ und das _Drehmoment M_ hängen zusammen.\n\n"
+        "Werte: _~a, _~w, _~f, _~D ~w_, [_~a], ~D t_, \\f{~D p}{~D t_}, 9,81 m/s^2_, 9,81 ~m/s^2_, _m/s^2_.\n\n"
+        "Terme: _m\\vec{v}, _m\\vec{a}, _J\\vec{~w}, -_m~w^2, _m~w^2, \\vec{p_1}_, \\f{_v^2}{r}.\n\n"
+        "Stoß: _v'_1_ = _m_2_(2_v_2_ - _v_1_) + _v'_2_ sowie 2_v_2 - v_1.\n\n"
+        "Quotienten & Produkte: _F/a_, _rDelta omega/~Dt_, rDelta omega, mr alpha, mr^2 alpha.\n"
+    )
+    edge_out = post_process_structure(edge_md)
+
+    assert "#### M2 Drehmoment M = rF oder M = r_a F cos ~h" in edge_out
+    assert "Die _Winkelbeschleunigung_ ~a und das _Drehmoment_ M hängen zusammen." in edge_out
+    assert "Werte: ~a, ~w, ~f, ~D~w, [~a], ~Dt, \\f{~Dp}{~Dt}, 9,81 m/s^2, 9,81 m/s^2, m/s^2." in edge_out
+    assert (
+        "Terme: m\\vec{v}, m\\vec{a}, J\\vec{~w}, -m~w^2, m~w^2, \\vec{p_1}, \\f{v^2}{r}."
+        in edge_out
+    )
+    assert "Stoß: v'_1 = m_2(2v_2 - v_1) + v'_2 sowie 2v_2 - v_1." in edge_out
+    assert "Quotienten & Produkte: F/a, r~D~w/~Dt, r~D~w, mr~a, mr^2~a." in edge_out
+
+
+
+
 
 
 

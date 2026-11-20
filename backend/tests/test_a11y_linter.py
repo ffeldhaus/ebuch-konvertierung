@@ -17,7 +17,7 @@ Das Licht breitet sich bei 20 °C zu 100 % geradlinig um 90° aus. Hierzu ein Ex
 Beschreibung mit Bildtext: Lichtquelle \\xra{weißes Licht} Prisma \\to Spektrum (~l = 400 nm bis 780 nm).
 </Bild>
 
-Formel der Brechung: n_1 \\cdot \\sin(~a) = n_2 \\cdot \\sin(~b) sowie \\frac{1}{2} m v^2.
+Formel der Brechung: n_1 * sin(~a) = n_2 * sin(~b) sowie \\f{1}{2} m v^2.
 
 Hier ist ein wichtiger Begriff{1}.
 
@@ -442,6 +442,32 @@ def test_lint_u4_text_subheadings_and_double_page_photo_opener():
     )
     assert not any(i.rule == "page_number_missing" for i in rep_raw_match.issues)
     assert rep_raw_match.score == 100
+
+
+def test_lint_minimized_fibs_fractions_and_roots_never_trigger_footnote_warnings():
+    """Verifies that \\f{1}{3}, \\f{1}{10}, \\s{3}, and \\s[3]{27} never trigger footnote_missing_definition."""
+    md = (
+        "((10))\n\n"
+        "# 1 Bruchrechnung und Wurzeln\n\n"
+        "Es gilt \\f{1}{3} + \\f{1}{10} = \\f{13}{30}, geschachtelt \\f{\\f{1}{2}}{3} = \\f{1}{6} "
+        "sowie \\s{3}, \\s[3]{27} = 3 und 2,3\\ol{45}.\n"
+    )
+    rep = lint_markdown(md)
+    assert rep.issues == []
+    assert rep.score == 100
+
+
+def test_all_stage2_golden_files_score_100_in_lint_markdown():
+    """Verifies that every *.uebertragungsregeln_09_2025.golden.md in testdata/golden/ scores 100/100."""
+    from pathlib import Path
+
+    golden_dir = Path(__file__).resolve().parents[2] / "testdata" / "golden"
+    golden_files = sorted(golden_dir.glob("*.uebertragungsregeln_09_2025.golden.md"))
+    assert len(golden_files) >= 19
+    for g_path in golden_files:
+        rep = lint_markdown(g_path.read_text(encoding="utf-8"))
+        assert rep.score == 100, f"{g_path.name} scored {rep.score}: {rep.issues}"
+
 
 
 

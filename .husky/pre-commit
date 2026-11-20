@@ -2,7 +2,7 @@
 set -e
 
 echo "🔍 [1/6] Checking freshness of dependencies and local AI models..."
-.venv/bin/python scripts/check_dependencies_and_models.py
+.venv/bin/python -m scripts.check_dependencies_and_models
 
 echo "🐍 [2/6] Linting backend Python & Google Style Guide docstrings (Ruff)..."
 if command -v ruff >/dev/null 2>&1; then

@@ -25,7 +25,7 @@ Links:
 
 ### 11.6.2 Fermatsches Prinzip
 
-Welche Eigenschaft eines (lichtdurchlässigen) Materials bestimmt eigentlich, wie stark ein Lichtstrahl gebrochen wird? Der Grund ist, dass sich Licht in unterschiedlichen Materialien unterschiedlich schnell ausbreitet. Während die Geschwindigkeit von Licht an Luft fast der Vakuum-Lichtgeschwindigkeit von c_0 = 3 \cdot 10^8 m/s entspricht, ist sie in Wasser und Glas kleiner.
+Welche Eigenschaft eines (lichtdurchlässigen) Materials bestimmt eigentlich, wie stark ein Lichtstrahl gebrochen wird? Der Grund ist, dass sich Licht in unterschiedlichen Materialien unterschiedlich schnell ausbreitet. Während die Geschwindigkeit von Licht an Luft fast der Vakuum-Lichtgeschwindigkeit von c_0 = 3 * 10^8 m/s entspricht, ist sie in Wasser und Glas kleiner.
 
 <Bild> Zeichnung:
 Beschreibung mit Bildtext: Abbildung 11.51: Wie erreicht der Rettungsschwimmer den Ertrinkenden am schnellsten?
@@ -49,7 +49,7 @@ Beschreibung mit Bildtext: Abbildung 11.52: Laufzeit beim Rettungsschwimmer-Prob
 
 Wie schnell sich Licht in einem Medium ausbreitet, wird oft nicht als Geschwindigkeitswert angegeben. Wegen der großen Zahlen wird stattdessen das Verhältnis der Vakuum-Lichtgeschwindigkeit c_0 zur Ausbreitungsgeschwindigkeit c_M des Lichts im Medium (Material) angegeben:
 
-n = \frac{c_0}{c_M} (11.1)
+n = \f{c_0}{c_M} (11.1)
 
 Diese materialabhängige dimensionslose Größe (Zahl) n wird _Brechungsindex_ oder _Brechzahl_ (_engl. refractive index_) des jeweiligen Materials genannt. Hat ein Medium einen Brechungsindex von 2 ist die Lichtgeschwindigkeit gerade halb so groß wie in Vakuum. Zur Orientierung findest du in der Tabelle die Brechzahlen einiger optischer Medien:
 
@@ -79,11 +79,11 @@ Beschreibung mit Bildtext: Abbildung 11.53: Snelliussches Brechungsgesetz
 
 Es lautet:
 
-\frac{\sin(~a_1)}{\sin(~a_2)} = \frac{c_1}{c_2} = \frac{n_2}{n_1}
+\f{sin(~a_1)}{sin(~a_2)} = \f{c_1}{c_2} = \f{n_2}{n_1}
 
 Eine gleichwertige Form ist:
 
-n_1 \cdot \sin(~a_1) = n_2 \cdot \sin(~a_2) (11.2)
+n_1 * sin(~a_1) = n_2 * sin(~a_2) (11.2)
 
 In der Gleichung bedeuteten:
 -	~a_1, den Einfallswinkel im Medium 1

@@ -279,17 +279,17 @@ def lint_markdown(
             "<Anmerkung> ... </Anmerkung>",
         )
 
-    # Exclude math tags, multi-argument LaTeX commands (\frac{1}{2}, \xra{...}), and _{n}/^{n} from footnote search
+    # Exclude math tags, LaTeX commands (\f{1}{2}, \s{3}, \frac{1}{2}, \xra{...}), and _{n}/^{n}/}{n} from footnote search
     content_without_math = re.sub(r"<L\b[^>]*>.*?</L>", "", content, flags=re.DOTALL | re.IGNORECASE)
     content_without_math = re.sub(r"\$\$.*?\$\$", "", content_without_math, flags=re.DOTALL)
     content_without_math = re.sub(r"\$.*?\$", "", content_without_math, flags=re.DOTALL)
-    for _ in range(3):
+    for _ in range(4):
         content_without_math = re.sub(
-            r"\\[a-zA-Z]+(?:\[[^\]]*\])*(?:\{[^{}]*\})+",
+            r"\\[a-zA-Z]+(?:\s*\[[^\]]*\])*(?:\s*\{[^{}]*\})+",
             "",
             content_without_math,
         )
-    inline_refs = set(re.findall(r"(?<![_\^])\{(\d+)\}", content_without_math))
+    inline_refs = set(re.findall(r"(?<![_\^\\}\]])\{(\d+)\}", content_without_math))
     note_defs = set()
     for m in re.finditer(r"<Anmerkung\b[^>]*>\s*(\d+)\s+(.*?)</Anmerkung>", content, re.DOTALL | re.IGNORECASE):
         note_defs.add(m.group(1))

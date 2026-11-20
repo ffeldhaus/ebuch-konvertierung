@@ -63,6 +63,10 @@ logs/
 assets/models/*
 !assets/models/.gitkeep
 assets/rules/*.pdf
+assets/rules/*.docx
+assets/rules/*.md
+assets/rules/.rules_manifest.json
+!assets/rules/.gitkeep
 assets/video_capture/
 
 # Benchmarks Temporary Extraction Runs

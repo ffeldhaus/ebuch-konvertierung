@@ -878,17 +878,18 @@ def convert_unicode_math_to_latex(text: str) -> str:
 
 
 def _convert_to_fibs_bare_latex(text: str) -> str:
-    r"""Converts ``$...$`` / ``$$...$$`` LaTeX into bare FIBS 09/2025 / Augenbit notation.
+    r"""Converts ``$...$`` / ``$$...$$`` and full LaTeX into official FIBS minimiertes LaTeX.
 
-    Strips ``$`` and ``$$`` math delimiters, unwraps ``\text{...}``, ``{,}``, and ``\,``,
-    maps Greek letters and micro units to FIBS tilde notation (``~a``, ``~m``, ``~D``, ``~l``),
-    and normalizes arrows (``\xra{...}``, ``\to``, ``\lra``).
+    Strips ``$`` and ``$$`` math delimiters, minimizes commands per FIBS LaTeX-Handreichung
+    (``\f{a}{b}``, ``\s{x}``, ``\ol{x}``, ``*``, ``\8``, ``\apx``, ``<=``, ``>=``, ``<<``,
+    ``>>``, ``sin``/``cos``/``tan`` without backslash, ``\vec{a}``, ``\N``/``\R``, tilde
+    Greek ``~a``, ``~j``=eta, ``~h``=theta, ``~H``=Theta), and enforces FIBS fraction rules.
 
     Args:
         text: Markdown text after Stage-1 LaTeX cleanup.
 
     Returns:
-        Markdown text in bare FIBS 09/2025 notation without ``$`` math delimiters.
+        Markdown text in official FIBS minimiertes LaTeX without ``$`` math delimiters.
     """
     from backend.services.fibs_formatting import normalize_fibs_units_and_percent
 
@@ -899,6 +900,8 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
         return f"__FIBS_BARE_PROT_{len(protected_spans) - 1}__"
 
     work = fc.UNIT_PERCENT_PROTECTED_RE.sub(_mask, text)
+    # Protect spreadsheet absolute cell references ($F$1, $A$2) and opening prose '$-Zeichen'
+    work = re.sub(r"\$[A-Z]{1,3}\$\d+|(?<![0-9A-Za-z°}\\%])\$-(?=[A-ZÄÖÜ][a-zäöüß]+)", _mask, work)
 
     # 1. Convert LaTeX Greek commands before stripping $ so '$\mu$g' / '$\mu\text{m}$' keep boundaries
     work = re.sub(
@@ -909,25 +912,35 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
     for cmd in sorted(fc.LATEX_GREEK_TO_FIBS, key=len, reverse=True):
         repl = fc.LATEX_GREEK_TO_FIBS[cmd]
         work = re.sub(rf"{re.escape(cmd)}(?![a-zA-Z])", lambda _, r=repl: r, work)
+    # Repair LLM-corrupted '\simw' -> '~w' without touching '\sim M' or '\simeq'
+    work = re.sub(r"\\sim([abdfghjklmprstwDFGHLPW])(?![a-zA-Z])", r"~\1", work)
 
-    # 2. Convert \xrightarrow{...} -> \xra{...} (stripping inner \text{...} and spacing commands)
-    def _xra_repl(m: re.Match[str]) -> str:
-        lbl = m.group(1)
+    # 2. Convert \xrightarrow[unten]{oben} -> \xra[unten]{oben} and \xrightarrow{oben} -> \xra{oben}
+    def _clean_arrow_label(raw_lbl: str) -> str:
+        lbl = raw_lbl
         for _ in range(3):
             lbl = re.sub(r"\\(?:text|mathrm)\s*\{([^{}]*)\}", r"\1", lbl)
         lbl = lbl.replace("{,}", ",").replace(r"\,", " ").replace(r"\;", " ")
         lbl = lbl.replace(r"\rightarrow", r"\to").replace(r"\longrightarrow", r"\to")
         lbl = lbl.replace("→", r"\to").replace("⟶", r"\to")
-        lbl = re.sub(r"\s+", " ", lbl).strip()
-        return rf"\xra{{{lbl}}}"
+        return re.sub(r"\s+", " ", lbl).strip()
+
+    def _xra_repl(m: re.Match[str]) -> str:
+        sub_lbl = _clean_arrow_label(m.group(1) or "")
+        top_lbl = _clean_arrow_label(m.group(2) or "")
+        if sub_lbl:
+            return rf"\xra[{sub_lbl}]{{{top_lbl}}}"
+        return rf"\xra{{{top_lbl}}}"
 
     work = re.sub(
-        r"\\xrightarrow(?:\[[^\]]*\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
+        r"\\xrightarrow(?:\s*\[([^\]]*)\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
         _xra_repl,
         work,
     )
 
-    # 3. Unwrap \text{...}, \mathrm{...}, and \left / \right sizing commands
+    # 3. Unwrap \text{...}, \mathrm{...}, \limits, \displaystyle, and \left / \right sizing commands
+    work = re.sub(r"\\(?:limits|displaystyle|textstyle)(?![a-zA-Z])", "", work)
+    work = re.sub(r"(\\(?:lim|sum|prod|o?i{1,3}nt))\s+(?=[_^])", r"\1", work)
     for _ in range(3):
         work = re.sub(r"\\(?:text|mathrm)\s*\{([^{}]*)\}", r"\1", work)
     work = re.sub(
@@ -935,24 +948,141 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
         lambda m: "" if m.group(1) == "." else m.group(1),
         work,
     )
-    work = re.sub(r"\\(?:left|right)(?=\\[{}])", "", work)
+    work = re.sub(r"\\(?:left|right)\s*(?=\\[{}]|\\langle|\\rangle)", "", work)
 
     # 4. Strip $$...$$ and $...$ math delimiters (keeping display equations on their own line)
     work = re.sub(r"\$\$\s*([\s\S]*?)\s*\$\$", lambda m: m.group(1).strip(), work)
     work = re.sub(r"(?<!\\)\$(?!\$)([^\$\n]+?)(?<!\\)\$", lambda m: m.group(1).strip(), work)
     work = work.replace(r"\$", "$")
 
-    # 5. Unwrap MathJax decimal commas, thin spaces, escaped %, and remaining ^\circ
+    # 5. Unwrap MathJax decimal commas, thin spaces, escaped %, \{ / \} sets, \mid, and ^\circ
     work = work.replace("{,}", ",")
     work = re.sub(r"\\(?:[,;!]|(?:quad|qquad)(?![a-zA-Z]))", " ", work)
     work = work.replace(r"\%", "%")
     work = re.sub(r"\^\s*\{?\\circ\}?", "°", work)
+    work = re.sub(r"\s*\\mid(?![a-zA-Z])\s*", "|", work)
 
-    # 6. Normalize reaction and structural arrows per FIBS Section 8.2.1
-    work = re.sub(r"\\rightleftharpoons(?![a-zA-Z])", lambda _: r"\lra", work)
-    work = re.sub(r"\s*⇌\s*", lambda _: r" \lra ", work)
+    # 6. Official FIBS Minimierte LaTeX commands (Handreichung Kapitel 3-6, pp. 8-31)
+    # 6a. Fractions: \frac, \dfrac, \tfrac -> \f (including arbitrary nested fractions)
+    work = re.sub(r"\\(?:d|t)?frac\s+([0-9A-Za-z])\s+([0-9A-Za-z])(?![0-9A-Za-z])", r"\\f{\1}{\2}", work)
+    work = re.sub(r"\\(?:d|t)?frac(?![a-zA-Z])\s*", lambda _: r"\f", work)
+    for _ in range(3):
+        work = re.sub(r"(\\f\{(?:[^{}]|\{[^{}]*\})*\})\s+\{", r"\1{", work)
+
+    # 6b. Roots & Overlines: \sqrt[n]{x} -> \s[n]{x}, \sqrt{x} -> \s{x}, \overline{x} -> \ol{x}
+    work = re.sub(r"\\sqrt\s+([0-9A-Za-z])(?![0-9A-Za-z{\[])", r"\\s{\1}", work)
+    work = re.sub(
+        r"\\sqrt(?![a-zA-Z])\s*(?:\[\s*([^\]]*?)\s*\])?\s*\{",
+        lambda m: rf"\s[{m.group(1)}]{{".replace("[]", "") if m.group(1) is not None else r"\s{",
+        work,
+    )
+    work = re.sub(r"\\overline(?![a-zA-Z])\s*\{", lambda _: r"\ol{", work)
+    work = re.sub(r"\\overline(?![a-zA-Z])\s+([A-Za-z0-9]+)", r"\\ol{\1}", work)
+
+    # 6c. Infinity, negated relations, comparisons, equivalence, correspondence, plus/minus
+    work = re.sub(r"\\infty(?![a-zA-Z])", lambda _: r"\8", work)
+    work = re.sub(r"∞(?=[A-Za-z0-9])", lambda _: r"\8 ", work)
+    work = work.replace("∞", r"\8")
+
+    work = re.sub(r"\\not\s*\\equiv(?![a-zA-Z])", lambda _: r"\n \eqv", work)
+    work = re.sub(r"≢(?=[A-Za-z])", lambda _: r"\n \eqv ", work)
+    work = work.replace("≢", r"\n \eqv")
+    work = re.sub(r"\\not\s*\\cong(?![a-zA-Z])", lambda _: r"\n \cong", work)
+    work = re.sub(r"\\not\s*\\sim(?![a-zA-Z])", lambda _: r"\n \sim", work)
+    work = re.sub(r"\\not\s*(?:\\parallel(?![a-zA-Z])|\|\|)", lambda _: r"\n\|", work)
+    work = re.sub(r"\\not(?![a-zA-Z])", lambda _: r"\n", work)
+
+    work = re.sub(r"\\approx(?![a-zA-Z])", lambda _: r"\apx", work)
+    work = re.sub(r"\s*≈\s*", lambda _: r" \apx ", work)
+    work = re.sub(r"\\equiv(?![a-zA-Z])", lambda _: r"\eqv", work)
+    work = re.sub(r"\s*≡\s*", lambda _: r" \eqv ", work)
+    work = re.sub(r"\\(?:wide)?hat\s*\{\s*=\s*\}", lambda _: r"\^=", work)
+    work = re.sub(r"\s*≙\s*", lambda _: r" \^= ", work)
+
+    work = re.sub(r"\\(?:le|leq)(?![a-zA-Z])", "<=", work)
+    work = re.sub(r"\s*≤\s*", " <= ", work)
+    work = re.sub(r"\\(?:ge|geq)(?![a-zA-Z])", ">=", work)
+    work = re.sub(r"\s*≥\s*", " >= ", work)
+    work = re.sub(r"\\ll(?![a-zA-Z])", "<<", work)
+    work = re.sub(r"\s*≪\s*", " << ", work)
+    work = re.sub(r"\\gg(?![a-zA-Z])", ">>", work)
+    work = re.sub(r"\s*≫\s*", " >> ", work)
+    work = re.sub(r"\\ne(?![a-zA-Z])", lambda _: r"\neq", work)
+    work = re.sub(r"\s*≠\s*", lambda _: r" \neq ", work)
+    work = re.sub(
+        r"(?<=[A-Za-z0-9_)}\]])\s*!=\s*(?=[A-Za-z0-9_~(\-+\\])",
+        lambda _: r" \neq ",
+        work,
+    )
+    work = re.sub(r"±(?=[A-Za-z])", lambda _: r"\pm ", work)
+    work = work.replace("±", r"\pm")
+    work = re.sub(r"∓(?=[A-Za-z])", lambda _: r"\mp ", work)
+    work = work.replace("∓", r"\mp")
+
+    # 6d. Angle brackets, arrows, sets, logic, geometry, and dots
+    work = re.sub(r"\\langle(?![a-zA-Z])|⟨", lambda _: r"\l<", work)
+    work = re.sub(r"\\rangle(?![a-zA-Z])|⟩", lambda _: r"\r>", work)
+
+    work = re.sub(r"\\(?:Leftrightarrow|iff)(?![a-zA-Z])", lambda _: r"\Lra", work)
+    work = re.sub(r"\s*⇔\s*", lambda _: r" \Lra ", work)
+    work = re.sub(r"\\(?:Rightarrow|implies)(?![a-zA-Z])", lambda _: r"\Ra", work)
+    work = re.sub(r"\s*⇒\s*", lambda _: r" \Ra ", work)
+    work = re.sub(r"\\Leftarrow(?![a-zA-Z])", lambda _: r"\La", work)
+    work = re.sub(r"\s*⇐\s*", lambda _: r" \La ", work)
+    work = re.sub(r"\\(?:rightleftharpoons|leftrightarrow)(?![a-zA-Z])", lambda _: r"\lra", work)
+    work = re.sub(r"\s*[⇌↔]\s*", lambda _: r" \lra ", work)
     work = re.sub(r"\\(?:longrightarrow|rightarrow)(?![a-zA-Z])", lambda _: r"\to", work)
     work = re.sub(r"\s*[⟶→]\s*", lambda _: r" \to ", work)
+    work = re.sub(r"\\(?:leftarrow|gets)(?![a-zA-Z])", lambda _: r"\la", work)
+    work = re.sub(r"\s*←\s*", lambda _: r" \la ", work)
+    work = re.sub(r"\\mapsto(?![a-zA-Z])", lambda _: r"\mt", work)
+    work = re.sub(r"\s*↦\s*", lambda _: r" \mt ", work)
+
+    work = re.sub(r"\\(?:emptyset|varnothing)(?![a-zA-Z])", lambda _: r"\es", work)
+    work = re.sub(r"∅(?=[A-Za-z])", lambda _: r"\es ", work)
+    work = work.replace("∅", r"\es")
+    work = re.sub(r"\\(?:mathbb|mathds)\s*\{\s*([NZQRCP])\s*\}", r"\\\1", work)
+    for uni_bb, fibs_bb in (("ℕ", r"\N"), ("ℤ", r"\Z"), ("ℚ", r"\Q"), ("ℝ", r"\R"), ("ℂ", r"\C"), ("ℙ", r"\P")):
+        if uni_bb in work:
+            work = work.replace(uni_bb, fibs_bb)
+    work = re.sub(r"\\supseteq(?![a-zA-Z])", lambda _: r"\spsq", work)
+    work = re.sub(r"\s*⊇\s*", lambda _: r" \spsq ", work)
+    work = re.sub(r"\\supset(?![a-zA-Z])", lambda _: r"\sps", work)
+    work = re.sub(r"\s*⊃\s*", lambda _: r" \sps ", work)
+    work = re.sub(r"\\subseteq(?![a-zA-Z])", lambda _: r"\sbse", work)
+    work = re.sub(r"\s*⊆\s*", lambda _: r" \sbse ", work)
+    work = re.sub(r"\\subset(?![a-zA-Z])", lambda _: r"\sbs", work)
+    work = re.sub(r"\s*⊂\s*", lambda _: r" \sbs ", work)
+    work = re.sub(r"\\exists(?![a-zA-Z])", lambda _: r"\ex", work)
+    work = re.sub(r"∃(?=[A-Za-z])", lambda _: r"\ex ", work)
+    work = work.replace("∃", r"\ex")
+    work = re.sub(r"\\parallel(?![a-zA-Z])", lambda _: r"\|", work)
+    work = re.sub(r"\s*∥\s*", lambda _: r" \| ", work)
+
+    work = re.sub(r"\\cdots(?![a-zA-Z])|⋯", lambda _: r"\cd", work)
+    work = re.sub(r"\\(?:dots|ldots)(?![a-zA-Z])", "...", work)
+    work = re.sub(r"\\ddots(?![a-zA-Z])", lambda _: r"\dd", work)
+    work = re.sub(r"\\vdots(?![a-zA-Z])", lambda _: r"\vd", work)
+
+    # 6e. Multiplication (\cdot, ⋅, math · -> *) without touching prose bullets
+    work = re.sub(r"\\cdot(?![a-zA-Z])", "*", work)
+    work = work.replace("⋅", "*")
+    work = re.sub(r"(?<=[0-9])([ \t]*)·([ \t]*)(?=[0-9A-Za-z~(\\[])", r"\1*\2", work)
+    work = re.sub(r"(?<=[A-Za-z0-9_)}\]])·(?=[0-9])", "*", work)
+    work = re.sub(
+        r"(\b(?:mol|min|bar|rad|amu|kWh|kg|cm|km|mm|nm|ms|kJ|MJ|eV|Pa|Hz)"
+        r"|(?<![A-Za-zäöüÄÖÜß]{2})[0-9A-Za-z_)}\]])"
+        r"([ \t]*)·([ \t]*)"
+        r"(?=[0-9~\\(\[]|[A-Za-z](?:[_^0-9)\s.,;:]|$)|(?:mol|min|bar|rad|kg|cm|km|mm|Hz|Pa)\b)",
+        r"\1\2*\3",
+        work,
+    )
+
+    # 6f. Trigonometric functions without backslash; log/ln/lg/lim/sum/prod/int with backslash
+    work = re.sub(r"\\(arc(?:sin|cos|tan)|sin|cos|tan|cot)(?=~|[A-Za-z0-9])", r"\1 ", work)
+    work = re.sub(r"\\(arc(?:sin|cos|tan)|sin|cos|tan|cot)(?![a-zA-Z])", r"\1", work)
+    work = re.sub(r"(?<!\\)\b(sum|prod|lim|o?i{1,3}nt)(?=_)", r"\\\1", work)
+    work = re.sub(r"(?<!\\)\b(ln|lg|log)(?=\s*\()", r"\\\1", work)
 
     # 7. Convert Unicode micro units ('0,001µg' -> '0,001 ~mg', '2µm' -> '2 ~mm'), Unicode Greek, & tilde Greek words ('~beta' -> '~b')
     work = re.sub(r"(\d)[ \t]*[µμ](?=[a-zA-Z])", r"\1 ~m", work)
@@ -964,11 +1094,51 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
             work,
         )
 
-    # 8. Collapse redundant spaces (preserving tabs) and re-apply degree/percent rules
+    # 8. Vector bracing (S. 19: \vec a -> \vec{a}, \vec ~w -> \vec{~w}, \vec{p}_1 -> \vec{p_1}) & sub-before-sup (S. 11)
+    work = re.sub(r"\\vec\s+\{", lambda _: r"\vec{", work)
+    work = re.sub(r"\\vec\s*(~[A-Za-z](?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)", r"\\vec{\1}", work)
+    work = re.sub(
+        r"\\vec\s+([A-Za-z0-9](?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)(?![A-Za-z0-9_])",
+        r"\\vec{\1}",
+        work,
+    )
+    work = re.sub(r"\\vec\{([^{}_]+)\}_(\{[^{}]+\}|[A-Za-z0-9]+)", r"\\vec{\1_\2}", work)
+    work = re.sub(
+        r"([A-Za-z])\^(\{[^{}\\]+\}|[A-Za-z0-9+-]+)_(\{[^{}]+\}|[A-Za-z0-9+-]+)",
+        r"\1_\3^\2",
+        work,
+    )
+
+    # 9. FIBS Bruchschreibweisen: negative numeric fractions & forbidden '1/2 x' space
+    work = re.sub(r"(?<![0-9A-Za-z./\-])(\d+)/-(\d+)(?![0-9A-Za-z./\-])", r"\\f{\1}{-\2}", work)
+    work = re.sub(
+        r"([(\[=])([ \t]*)-(\d+)/(\d+)(?![0-9./\-])",
+        lambda m: f"{m.group(1)}{m.group(2)}-\\f{{{m.group(3)}}}{{{m.group(4)}}}",
+        work,
+    )
+    # Collapse multi-factor formula products after numeric fractions ('1/2 J ~w^2' -> '1/2J~w^2', '1/2 mv^2' -> '1/2mv^2')
+    work = re.sub(
+        r"(?<![0-9A-Za-z./])(\d+/\d+)[ \t]+([A-Za-z](?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)[ \t]*"
+        r"((?:~[A-Za-z]|[A-Za-z])(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+-]+))+)",
+        r"\1\2\3",
+        work,
+    )
+    # Convert '1/2 x' (numeric slash fraction + space + single math variable) -> '\f{1}{2}x'
+    work = re.sub(
+        r"(?<![0-9A-Za-z./\-])(\d+)/(\d+)[ \t]+"
+        r"([xyzXYZ](?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+-]+))?"
+        r"|~[A-Za-z](?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+-]+))?"
+        r"|[A-Za-z](?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+-]+))+)"
+        r"(?![A-Za-zäöüÄÖÜß/])",
+        r"\\f{\1}{\2}\3",
+        work,
+    )
+
+    # 10. Collapse redundant spaces (preserving tabs) and re-apply degree/percent rules
     work = re.sub(r"(?<=\S)[ ]{2,}(?=\S)", " ", work)
     work = normalize_fibs_units_and_percent(work)
 
-    for idx, val in enumerate(protected_spans):
+    for idx, val in reversed(list(enumerate(protected_spans))):
         work = work.replace(f"__FIBS_BARE_PROT_{idx}__", val)
     return work
 
@@ -998,7 +1168,18 @@ def standardize_formulas(markdown: str, *, fibs_mode: bool = False) -> str:
     from backend.services.fibs_formatting import normalize_fibs_units_and_percent
 
     # 1. Remove all <L> and </L> tags and normalize plain/wrapped degrees and percentages
-    text = strip_l_tags(markdown)
+    dollar_prot: list[str] = []
+
+    def _mask_non_math_dollar(m: re.Match[str]) -> str:
+        dollar_prot.append(m.group(0))
+        return f"__STD_DOLLAR_PROT_{len(dollar_prot) - 1}__"
+
+    text = re.sub(
+        r"\$[A-Z]{1,3}\$\d+|(?<![0-9A-Za-z°}\\%])\$-(?=[A-ZÄÖÜ][a-zäöüß]+)",
+        _mask_non_math_dollar,
+        markdown,
+    )
+    text = strip_l_tags(text)
     text = normalize_fibs_units_and_percent(text)
 
     # 2. Convert raw Unicode math expressions into LaTeX
@@ -1067,7 +1248,12 @@ def standardize_formulas(markdown: str, *, fibs_mode: bool = False) -> str:
     text = normalize_fibs_units_and_percent(text)
 
     if fibs_mode:
-        return _convert_to_fibs_bare_latex(text)
+        out_fibs = _convert_to_fibs_bare_latex(text)
+        for idx, val in reversed(list(enumerate(dollar_prot))):
+            out_fibs = out_fibs.replace(f"__STD_DOLLAR_PROT_{idx}__", val)
+        return out_fibs
 
     text = re.sub(r"(?<=\S)[ ]{2,}(?=\S)", " ", text)
+    for idx, val in reversed(list(enumerate(dollar_prot))):
+        text = text.replace(f"__STD_DOLLAR_PROT_{idx}__", val)
     return text

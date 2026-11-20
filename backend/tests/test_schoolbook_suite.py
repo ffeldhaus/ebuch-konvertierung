@@ -376,7 +376,7 @@ def test_sek2_chemie_and_biologie_fibs_challenges():
 
     assert "$" not in bio_md
     assert "~mmol/min" in bio_md
-    assert "v = \\frac{v_{\\max} \\cdot [S]}{K_M + [S]}" in bio_md
+    assert "v = \\f{v_{\\max} * [S]}{K_M + [S]}" in bio_md
     # Page-spanning table merged into a single <Tabelle> on page 412 before ((413))
     assert bio_md.count("<Tabelle>") == 1
     assert bio_md.count("</Tabelle>") == 1
@@ -633,4 +633,28 @@ def test_all_repo_test_data_free_of_noncommercial_restrictions_and_publisher_ngr
                 if " ".join(words[i : i + 7]) in pub_ngrams
             ]
             assert overlaps == [], f"Copied publisher 7-gram found in {base_name}.pdf: {overlaps[:3]}"
+
+
+def test_evaluate_formulas_supports_both_stage1_and_bare_stage2_fibs_math():
+    """Verifies that evaluate_formulas scores bare FIBS Stage-2 formulas and normalizes \\frac <-> \\f."""
+    from scripts.run_benchmark import evaluate_formulas
+
+    chem_ueb = os.path.join(GOLDEN_DIR, "sek2_chemie.uebertragungsregeln_09_2025.golden.md")
+    with open(chem_ueb, encoding="utf-8") as f:
+        gold_stage2 = f.read()
+
+    # Exact Stage-2 match scores 100.0 with >0 bare formulas detected
+    exact_eval = evaluate_formulas(gold_stage2, gold_stage2)
+    assert exact_eval["gold_count"] >= 5
+    assert exact_eval["score"] == 100.0
+
+    # Equivalent unminimized commands (\frac, \cdot, \approx) normalize to match minimized (\f, *, \apx)
+    legacy_variant = (
+        gold_stage2.replace(r"\f{", r"\frac{")
+        .replace(" * ", r" \cdot ")
+        .replace(r"\apx", r"\approx")
+    )
+    equiv_eval = evaluate_formulas(legacy_variant, gold_stage2)
+    assert equiv_eval["score"] == 100.0
+
 

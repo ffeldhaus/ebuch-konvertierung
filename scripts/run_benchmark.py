@@ -123,10 +123,64 @@ def evaluate_headings(pred_md: str, gold_md: str) -> dict[str, Any]:
     }
 
 
+_BARE_FIBS_MATH_SIGNAL_RE = re.compile(
+    r"\\(?:f|d?frac|t?frac)\s*\{|\\(?:s|sqrt)(?:\s*\[[^\]]*\])?\s*\{|"
+    r"\\(?:o?i{1,3}nt|sum|prod|lim|vec|ol|apx|eqv|neq|pm|mp|8)\b|"
+    r"(?<![A-Za-zäöüÄÖÜß]{3})[A-Za-z0-9\)\}](?:_(?:\{[^{}]+\}|[A-Za-z0-9,+-]+)|\^(?:\{[^{}]+\}|[A-Za-z0-9+-]+))+|"
+    r"~[a-zA-Z](?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+-]+))?(?![A-Za-zäöüÄÖÜß-])"
+)
+_BARE_FIBS_EXPR_CAND_RE = re.compile(
+    r"(?:\\[a-zA-Z8]+(?:\[[^\]]*\])*(?:\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})*"
+    r"|~[a-zA-Z]"
+    r"|[A-Za-z0-9]+(?:'{1,3})?"
+    r"|[_\^](?:\{[^{}]+\}|[A-Za-z0-9+-]+)"
+    r"|[()\[\]|+\-*/=<>.,°])"
+    r"(?:[ ]*(?:\\[a-zA-Z8]+(?:\[[^\]]*\])*(?:\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})*"
+    r"|~[a-zA-Z]"
+    r"|(?<![A-Za-zäöüÄÖÜß]{4})[A-Za-z0-9]+(?:'{1,3})?(?![a-zäöüß]{3})"
+    r"|[_\^](?:\{[^{}]+\}|[A-Za-z0-9+-]+)"
+    r"|[()\[\]|+\-*/=<>.,°]))*"
+)
+
+
+def _extract_bare_fibs_formulas(md_text: str) -> list[str]:
+    """Extracts bare Stage-2 FIBS math expressions when no ``$`` / ``<L>`` delimiters exist."""
+    cleaned = re.sub(r"```[\s\S]*?```|`[^`\n]*`|https?://\S+", " ", md_text)
+    cleaned = re.sub(r"(?m)^[ \t]*(?:-\t)?\^\d+:.*$", "", cleaned)
+    cleaned = re.sub(r"[A-Za-zäöüÄÖÜß]{4,}\^\d+\b", " ", cleaned)
+    found: list[str] = []
+    for line in cleaned.splitlines():
+        for m in _BARE_FIBS_EXPR_CAND_RE.finditer(line):
+            cand = m.group(0).strip(" .,;:")
+            if cand and _BARE_FIBS_MATH_SIGNAL_RE.search(cand):
+                found.append(cand)
+    return found
+
+
 def _normalize_formula_for_comparison(f_str: str) -> str:
-    r"""Normalizes LaTeX wrappers (\text{...}, \mathrm{...}, <L>, spacing, decimal commas) for semantic formula comparison."""
-    s = re.sub(r"<\/?L>", "", f_str)
-    s = re.sub(r"\\(?:text|mathrm)\s*\{\s*([^\}]*?)\s*\}", r"\1", s)
+    r"""Normalizes Stage-1 and Stage-2 FIBS LaTeX into a shared canonical form for comparison."""
+    from backend.services import fibs_constants as fc
+
+    s = re.sub(r"<\/?L>|\$", "", f_str)
+    for _ in range(2):
+        s = re.sub(r"\\(?:text|mathrm)\s*\{\s*([^\}]*?)\s*\}", r"\1", s)
+    for cmd in sorted(fc.LATEX_GREEK_TO_FIBS, key=len, reverse=True):
+        s = re.sub(rf"{re.escape(cmd)}(?![a-zA-Z])", lambda _, r=fc.LATEX_GREEK_TO_FIBS[cmd]: r, s)
+    if any(ch in s for ch in fc.UNICODE_GREEK_TO_FIBS):
+        s = "".join(fc.UNICODE_GREEK_TO_FIBS.get(ch, ch) for ch in s)
+    s = re.sub(r"\\(?:d|t)?frac(?![a-zA-Z])", lambda _: r"\f", s)
+    s = re.sub(r"\\sqrt(?![a-zA-Z])", lambda _: r"\s", s)
+    s = re.sub(r"\\overline(?![a-zA-Z])", lambda _: r"\ol", s)
+    s = re.sub(r"\\infty(?![a-zA-Z])|∞", lambda _: r"\8", s)
+    s = re.sub(r"\\approx(?![a-zA-Z])|≈", lambda _: r"\apx", s)
+    s = re.sub(r"\\equiv(?![a-zA-Z])|≡", lambda _: r"\eqv", s)
+    s = re.sub(r"\\cdot(?![a-zA-Z])|[⋅·]", "*", s)
+    s = re.sub(r"\\(?:le|leq)(?![a-zA-Z])|≤", "<=", s)
+    s = re.sub(r"\\(?:ge|geq)(?![a-zA-Z])|≥", ">=", s)
+    s = re.sub(r"\\ll(?![a-zA-Z])|≪", "<<", s)
+    s = re.sub(r"\\gg(?![a-zA-Z])|≫", ">>", s)
+    s = re.sub(r"\\mid(?![a-zA-Z])", "|", s)
+    s = re.sub(r"\\(arc(?:sin|cos|tan)|sin|cos|tan|cot)(?![a-zA-Z])", r"\1", s)
     s = s.replace("{,}", ",").replace("\\,", "").replace("\\;", "").replace("\\quad", "").replace("\\qquad", "")
     s = re.sub(r"([_\^])\{\s*([a-zA-Z0-9])\s*\}", r"\1\2", s)
     s = re.sub(r"\s+", "", s)
@@ -134,15 +188,17 @@ def _normalize_formula_for_comparison(f_str: str) -> str:
 
 
 def evaluate_formulas(pred_md: str, gold_md: str) -> dict[str, Any]:
-    """Calculates STEM formula extraction accuracy and LaTeX math precision."""
+    """Calculates STEM formula extraction accuracy across delimited Stage-1 and bare Stage-2 FIBS math."""
     gold_md = strip_ground_truth_preamble(gold_md)
-    # Strip legacy <L> tags and find all formula blocks in pred (<L>...</L>, $$...$$, $...$)
     pred_formulas = re.findall(r"<L>(.*?)</L>|\$\$(.*?)\$\$|\$([^\$\n]+)\$", pred_md, re.DOTALL)
     pred_f_texts = [("".join(f)).strip() for f in pred_formulas if ("".join(f)).strip()]
-    
-    # Strip legacy <L> tags and find all formula blocks in gold (<L>...</L>, $$...$$, $...$)
+
     gold_formulas = re.findall(r"<L>(.*?)</L>|\$\$(.*?)\$\$|\$([^\$\n]+)\$", gold_md, re.DOTALL)
     gold_f_texts = [("".join(f)).strip() for f in gold_formulas if ("".join(f)).strip()]
+
+    if not gold_f_texts and not pred_f_texts:
+        gold_f_texts = _extract_bare_fibs_formulas(gold_md)
+        pred_f_texts = _extract_bare_fibs_formulas(pred_md)
     
     if not gold_f_texts:
         return {"score": 100.0 if not pred_f_texts else 95.0, "f1": 100.0, "gold_count": 0, "pred_count": len(pred_f_texts)}

@@ -2009,5 +2009,29 @@ def test_custom_benchmark_direct_existing_transfer_evaluation_and_feedback(tmp_p
     assert report_path.read_text(encoding="utf-8") == result["feedback_report"]
 
 
+def test_docx_primed_subscripts_and_multiplication_asterisks_not_bold(tmp_path):
+    """Ensure primed subscripts and FIBS multiplication '*' are never parsed as bold runs."""
+    import docx as py_docx
+
+    md = (
+        "Beim _zentralen elastischen Stoß_ gilt:\n\n"
+        "v'_{12} = \\f{m_1 v_1 + m_2 v_2}{m_1 + m_2}\n\n"
+        "v'_1 = \\f{m_1 v_1 + m_2(2v_2 - v_1)}{m_1 + m_2}\n\n"
+        "C: = 9,81*(1-0,15*B3^2); F = 2,8 *10^3 *15 *10^3"
+    )
+    out_docx = tmp_path / "formulas_check.docx"
+    convert_markdown_to_docx(md, str(out_docx))
+
+    doc = py_docx.Document(str(out_docx))
+    bold_runs = [r.text for p in doc.paragraphs for r in p.runs if r.bold]
+    assert bold_runs == ["zentralen elastischen Stoß"]
+    all_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "v'_{12}" in all_text
+    assert "v'_1" in all_text
+    assert "9,81*(1-0,15*B3^2)" in all_text
+    assert "2,8 *10^3 *15 *10^3" in all_text
+
+
+
 
 
