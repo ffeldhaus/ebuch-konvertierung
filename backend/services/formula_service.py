@@ -192,9 +192,40 @@ def clean_latex_formula(formula_content: str) -> str:
     # Clean multiple spaces
     content = re.sub(r"\s+", " ", content).strip()
 
+    # Normalize LaTeX/Unicode primes (\prime, ^\prime, ^{\prime\prime}, ′, ″, ‴ -> ', '', ''')
+    content = re.sub(
+        r"(?<=[A-Za-z0-9°)\]}])\s+(?=[′″‴]|\\prime(?![a-zA-Z])|\^\s*\{?\s*\\prime)",
+        "",
+        content,
+    )
+    content = content.replace("‴", "'''").replace("″", "''").replace("′", "'")
+    content = re.sub(
+        r"\^\s*\{\s*((?:\\prime(?![a-zA-Z])|'|[\s])+?)\s*([0-9A-Za-z+\-]+)\s*\}",
+        lambda m: "'" * (m.group(1).count(r"\prime") + m.group(1).count("'"))
+        + (f"^{m.group(2)}" if len(m.group(2)) == 1 else f"^{{{m.group(2)}}}"),
+        content,
+    )
+    content = re.sub(r"\\prime(?![a-zA-Z])", "'", content)
+    content = re.sub(
+        r"\^\s*\{\s*(['\s]+)\s*\}",
+        lambda m: "'" * m.group(1).count("'"),
+        content,
+    )
+    content = re.sub(r"\^\s*('+)", r"\1", content)
+
     # Clean spaced subscripts/superscripts from CodeFormulaV2 (e.g. 'n _ { 1 }' -> 'n_1', 'e ^ { - x ^ { 2 } }' -> 'e^{-x^2}')
     content = re.sub(r"\s*([_\^])\s*\{\s*([a-zA-Z0-9])\s*\}", r"\1\2", content)
     content = re.sub(r"\s*([_\^])\s*\{\s*([^\}]+?)\s*\}", r"\1{\2}", content)
+    content = re.sub(
+        r"(?<=[A-Za-z0-9)\]}°'])\s*([_\^])\s*(?=[A-Za-z0-9\\+\-\{])",
+        r"\1",
+        content,
+    )
+    content = re.sub(
+        r"((?:\\[a-zA-Z]+|[A-Za-z])'{1,3})_([A-Za-z0-9+\-]{2,})(?![A-Za-z0-9_])",
+        r"\1_{\2}",
+        content,
+    )
     content = re.sub(r"\\frac\s*\{\s*([^\}]+?)\s*\}\s*\{\s*([^\}]+?)\s*\}", r"\\frac{\1}{\2}", content)
     content = re.sub(r"\\sqrt\s*\{\s*\(\s*([^\(\)]+?)\s*\)\s*\}", r"\\sqrt{\1}", content)
     content = re.sub(r"\\sqrt\s*\(\s*([^\(\)]+?)\s*\)", r"\\sqrt{\1}", content)
@@ -900,8 +931,15 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
         return f"__FIBS_BARE_PROT_{len(protected_spans) - 1}__"
 
     work = fc.UNIT_PERCENT_PROTECTED_RE.sub(_mask, text)
-    # Protect spreadsheet absolute cell references ($F$1, $A$2) and opening prose '$-Zeichen'
-    work = re.sub(r"\$[A-Z]{1,3}\$\d+|(?<![0-9A-Za-z°}\\%])\$-(?=[A-ZÄÖÜ][a-zäöüß]+)", _mask, work)
+    # Protect spreadsheet formulas (=A2+$F$1, =9,81*(1-0,15*B3^2)), $F$1 cell refs, '$-Zeichen', and <Bild-Ref ... />
+    work = re.sub(
+        r"(?:^|(?<=[\s(\[\"':]))=(?:[A-Z]{1,3}\$?\d+|\$[A-Z]{1,3}\$\d+|\d+(?:[.,]\d+)?\*\([^)\s]+\))[^\s,;)]*"
+        r"|\$[A-Z]{1,3}\$\d+"
+        r"|(?<![0-9A-Za-z°}\\%])\$-(?=[A-ZÄÖÜ][a-zäöüß]+)"
+        r"|<Bild-Ref\b[^>]*>",
+        _mask,
+        work,
+    )
 
     # 1. Convert LaTeX Greek commands before stripping $ so '$\mu$g' / '$\mu\text{m}$' keep boundaries
     work = re.sub(
@@ -955,12 +993,31 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
     work = re.sub(r"(?<!\\)\$(?!\$)([^\$\n]+?)(?<!\\)\$", lambda m: m.group(1).strip(), work)
     work = work.replace(r"\$", "$")
 
-    # 5. Unwrap MathJax decimal commas, thin spaces, escaped %, \{ / \} sets, \mid, and ^\circ
+    # 5. Unwrap MathJax decimal commas, thin spaces, escaped %, \{ / \} sets, \mid, ^\circ, & primes
     work = work.replace("{,}", ",")
     work = re.sub(r"\\(?:[,;!]|(?:quad|qquad)(?![a-zA-Z]))", " ", work)
     work = work.replace(r"\%", "%")
     work = re.sub(r"\^\s*\{?\\circ\}?", "°", work)
     work = re.sub(r"\s*\\mid(?![a-zA-Z])\s*", "|", work)
+    work = re.sub(
+        r"(?<=[A-Za-z0-9°)\]}])[ \t]+(?=[′″‴]|\\prime(?![a-zA-Z])|\^\s*\{?\s*\\prime)",
+        "",
+        work,
+    )
+    work = work.replace("‴", "'''").replace("″", "''").replace("′", "'")
+    work = re.sub(
+        r"\^\s*\{\s*((?:\\prime(?![a-zA-Z])|'|[\s])+?)\s*([0-9A-Za-z+\-]+)\s*\}",
+        lambda m: "'" * (m.group(1).count(r"\prime") + m.group(1).count("'"))
+        + (f"^{m.group(2)}" if len(m.group(2)) == 1 else f"^{{{m.group(2)}}}"),
+        work,
+    )
+    work = re.sub(r"\\prime(?![a-zA-Z])", "'", work)
+    work = re.sub(
+        r"\^\s*\{\s*(['\s]+)\s*\}",
+        lambda m: "'" * m.group(1).count("'"),
+        work,
+    )
+    work = re.sub(r"\^\s*('+)", r"\1", work)
 
     # 6. Official FIBS Minimierte LaTeX commands (Handreichung Kapitel 3-6, pp. 8-31)
     # 6a. Fractions: \frac, \dfrac, \tfrac -> \f (including arbitrary nested fractions)
@@ -996,17 +1053,12 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
     work = re.sub(r"\s*≈\s*", lambda _: r" \apx ", work)
     work = re.sub(r"\\equiv(?![a-zA-Z])", lambda _: r"\eqv", work)
     work = re.sub(r"\s*≡\s*", lambda _: r" \eqv ", work)
-    work = re.sub(r"\\(?:wide)?hat\s*\{\s*=\s*\}", lambda _: r"\^=", work)
-    work = re.sub(r"\s*≙\s*", lambda _: r" \^= ", work)
+    work = re.sub(r"\\(?:wide)?hat\s*\{\s*=\s*\}|≙", lambda _: r"\^=", work)
 
-    work = re.sub(r"\\(?:le|leq)(?![a-zA-Z])", "<=", work)
-    work = re.sub(r"\s*≤\s*", " <= ", work)
-    work = re.sub(r"\\(?:ge|geq)(?![a-zA-Z])", ">=", work)
-    work = re.sub(r"\s*≥\s*", " >= ", work)
-    work = re.sub(r"\\ll(?![a-zA-Z])", "<<", work)
-    work = re.sub(r"\s*≪\s*", " << ", work)
-    work = re.sub(r"\\gg(?![a-zA-Z])", ">>", work)
-    work = re.sub(r"\s*≫\s*", " >> ", work)
+    work = re.sub(r"\\(?:le|leq)(?![a-zA-Z])|≤", "<=", work)
+    work = re.sub(r"\\(?:ge|geq)(?![a-zA-Z])|≥", ">=", work)
+    work = re.sub(r"\\ll(?![a-zA-Z])|≪", "<<", work)
+    work = re.sub(r"\\gg(?![a-zA-Z])|≫", ">>", work)
     work = re.sub(r"\\ne(?![a-zA-Z])", lambda _: r"\neq", work)
     work = re.sub(r"\s*≠\s*", lambda _: r" \neq ", work)
     work = re.sub(
@@ -1019,7 +1071,7 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
     work = re.sub(r"∓(?=[A-Za-z])", lambda _: r"\mp ", work)
     work = work.replace("∓", r"\mp")
 
-    # 6d. Angle brackets, arrows, sets, logic, geometry, and dots
+    # 6d. Angle brackets, arrows (\rlh vs \lra), sets, logic (\forall, \ex), geometry, and dots
     work = re.sub(r"\\langle(?![a-zA-Z])|⟨", lambda _: r"\l<", work)
     work = re.sub(r"\\rangle(?![a-zA-Z])|⟩", lambda _: r"\r>", work)
 
@@ -1029,8 +1081,10 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
     work = re.sub(r"\s*⇒\s*", lambda _: r" \Ra ", work)
     work = re.sub(r"\\Leftarrow(?![a-zA-Z])", lambda _: r"\La", work)
     work = re.sub(r"\s*⇐\s*", lambda _: r" \La ", work)
-    work = re.sub(r"\\(?:rightleftharpoons|leftrightarrow)(?![a-zA-Z])", lambda _: r"\lra", work)
-    work = re.sub(r"\s*[⇌↔]\s*", lambda _: r" \lra ", work)
+    work = re.sub(r"\\rightleftharpoons(?![a-zA-Z])", lambda _: r"\rlh", work)
+    work = re.sub(r"\s*⇌\s*", lambda _: r" \rlh ", work)
+    work = re.sub(r"\\leftrightarrow(?![a-zA-Z])", lambda _: r"\lra", work)
+    work = re.sub(r"\s*↔\s*", lambda _: r" \lra ", work)
     work = re.sub(r"\\(?:longrightarrow|rightarrow)(?![a-zA-Z])", lambda _: r"\to", work)
     work = re.sub(r"\s*[⟶→]\s*", lambda _: r" \to ", work)
     work = re.sub(r"\\(?:leftarrow|gets)(?![a-zA-Z])", lambda _: r"\la", work)
@@ -1053,6 +1107,9 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
     work = re.sub(r"\s*⊆\s*", lambda _: r" \sbse ", work)
     work = re.sub(r"\\subset(?![a-zA-Z])", lambda _: r"\sbs", work)
     work = re.sub(r"\s*⊂\s*", lambda _: r" \sbs ", work)
+    work = re.sub(r"\\forall(?=[~0-9])", lambda _: r"\forall ", work)
+    work = re.sub(r"∀(?=[A-Za-z0-9~\\])", lambda _: r"\forall ", work)
+    work = work.replace("∀", r"\forall")
     work = re.sub(r"\\exists(?![a-zA-Z])", lambda _: r"\ex", work)
     work = re.sub(r"∃(?=[A-Za-z])", lambda _: r"\ex ", work)
     work = work.replace("∃", r"\ex")
@@ -1065,8 +1122,12 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
     work = re.sub(r"\\vdots(?![a-zA-Z])", lambda _: r"\vd", work)
 
     # 6e. Multiplication (\cdot, ⋅, math · -> *) without touching prose bullets
-    work = re.sub(r"\\cdot(?![a-zA-Z])", "*", work)
-    work = work.replace("⋅", "*")
+    work = re.sub(
+        r"(?<=[0-9A-Za-z)\]}°'])[ \t]*(?:\\cdot(?![a-zA-Z])|⋅)[ \t]*(?=[0-9A-Za-z~\\(\-+])",
+        " * ",
+        work,
+    )
+    work = re.sub(r"\\cdot(?![a-zA-Z])|⋅", "*", work)
     work = re.sub(r"(?<=[0-9])([ \t]*)·([ \t]*)(?=[0-9A-Za-z~(\\[])", r"\1*\2", work)
     work = re.sub(r"(?<=[A-Za-z0-9_)}\]])·(?=[0-9])", "*", work)
     work = re.sub(
@@ -1094,7 +1155,72 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
             work,
         )
 
-    # 8. Vector bracing (S. 19: \vec a -> \vec{a}, \vec ~w -> \vec{~w}, \vec{p}_1 -> \vec{p_1}) & sub-before-sup (S. 11)
+    # 8. Compact sub-/superscripts, single-char '{}' unwrapping, vector bracing, sub-before-sup, & paren trimming
+    def _strip_sup_spaces(m: re.Match[str]) -> str:
+        base = m.group(1)
+        if re.fullmatch(r"[A-Z][a-z]", base) and (
+            base not in fc.VALID_CHEMICAL_ELEMENTS or base in fc.AMBIGUOUS_GERMAN_CHEM_WORDS
+        ):
+            return m.group(0)
+        return f"{base}^"
+
+    work = re.sub(
+        rf"({fc.MATH_SCRIPT_BASE_PATTERN})[ \t]*\^[ \t]*(?=(?!\{{[0-9]+\}}_\{{\d+\}}[A-Z])(?:\{{|[A-Za-z0-9+\-~\\']))",
+        _strip_sup_spaces,
+        work,
+    )
+    work = re.sub(r"(?<=\^)\{[ \t]*([^{}\n]+?)[ \t]*\}", r"{\1}", work)
+
+    def _strip_braced_sub_spaces(m: re.Match[str]) -> str:
+        line_start = work.rfind("\n", 0, m.start()) + 1
+        line_before = work[line_start : m.start()] + m.group(1)
+        if re.search(r"(?<![A-Za-z0-9\\)\]}])_[A-Za-zÄÖÜäöüß][^_\n]*$", line_before):
+            return m.group(0)
+        return f"{m.group(1)}_{{{m.group(2).strip()}}}"
+
+    work = re.sub(
+        rf"({fc.MATH_SCRIPT_BASE_PATTERN})[ \t]*_[ \t]*\{{([^{{}}\n]+)\}}",
+        _strip_braced_sub_spaces,
+        work,
+    )
+
+    def _strip_bare_sub_spaces(m: re.Match[str]) -> str:
+        base, sub = m.group(1), m.group(2)
+        if re.fullmatch(r"[A-Z][a-z]", base) and (
+            base not in fc.VALID_CHEMICAL_ELEMENTS or base in fc.AMBIGUOUS_GERMAN_CHEM_WORDS
+        ):
+            return m.group(0)
+        line_start = work.rfind("\n", 0, m.start()) + 1
+        line_before = work[line_start : m.start()] + base
+        if re.search(r"(?<![A-Za-z0-9\\)\]}])_[A-Za-zÄÖÜäöüß][^_\n]*$", line_before):
+            return m.group(0)
+        return f"{base}_{{{sub}}}" if len(sub) > 1 else f"{base}_{sub}"
+
+    work = re.sub(
+        rf"({fc.MATH_SCRIPT_BASE_PATTERN})(?:[ \t]+_[ \t]*|_[ \t]+)([0-9]+|[A-Za-z])(?![A-Za-zÄÖÜäöüß_])",
+        _strip_bare_sub_spaces,
+        work,
+    )
+    work = re.sub(
+        r"((?:~[A-Za-z]|[A-Za-z])'{1,3})_([A-Za-z0-9+\-]{2,})(?![A-Za-z0-9_])",
+        r"\1_{\2}",
+        work,
+    )
+    work = re.sub(r"(?<=[A-Za-z0-9)\]}°'])\^\{([0-9A-Za-z+\-])\}(?![0-9])", r"^\1", work)
+
+    def _unwrap_single_sub(m: re.Match[str]) -> str:
+        line_start = work.rfind("\n", 0, m.start()) + 1
+        line_before = work[line_start : m.start() + 1]
+        if re.search(r"(?<![A-Za-z0-9\\)\]}])_[A-Za-zÄÖÜäöüß][^_\n]*$", line_before):
+            return m.group(0)
+        sub_ch = m.group(2)
+        tail_ch = work[m.end() : m.end() + 1]
+        if sub_ch.isalpha() and tail_ch and tail_ch.islower():
+            return m.group(0)
+        return f"{m.group(1)}_{sub_ch}"
+
+    work = re.sub(r"([A-Za-z0-9)\]}'])\_\{([0-9A-Za-z])\}(?![0-9])", _unwrap_single_sub, work)
+
     work = re.sub(r"\\vec\s+\{", lambda _: r"\vec{", work)
     work = re.sub(r"\\vec\s*(~[A-Za-z](?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)", r"\\vec{\1}", work)
     work = re.sub(
@@ -1104,10 +1230,14 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
     )
     work = re.sub(r"\\vec\{([^{}_]+)\}_(\{[^{}]+\}|[A-Za-z0-9]+)", r"\\vec{\1_\2}", work)
     work = re.sub(
-        r"([A-Za-z])\^(\{[^{}\\]+\}|[A-Za-z0-9+-]+)_(\{[^{}]+\}|[A-Za-z0-9+-]+)",
+        r"((?:~[A-Za-z]|[A-Za-z])(?:'{1,3})?)\^(\{\\ominus\}|\\ominus|\{[^{}\\]+\}|[A-Za-z0-9+\-]+)_(\{[^{}]+\}|[A-Za-z0-9+\-]+)",
         r"\1_\3^\2",
         work,
     )
+    work = re.sub(r"\^\{\\ominus\}(?![A-Za-z])", lambda _: r"^\ominus", work)
+    for _ in range(2):
+        work = re.sub(r"\([ \t]+(?=[^\s)])", "(", work)
+        work = re.sub(r"(?<=[^\s(])[ \t]+\)", ")", work)
 
     # 9. FIBS Bruchschreibweisen: negative numeric fractions & forbidden '1/2 x' space
     work = re.sub(r"(?<![0-9A-Za-z./\-])(\d+)/-(\d+)(?![0-9A-Za-z./\-])", r"\\f{\1}{-\2}", work)
@@ -1133,6 +1263,119 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
         r"\\f{\1}{\2}\3",
         work,
     )
+
+    # 9b. Marburger / Augenbit asymmetric operator spacing (' =', ' +', ' -', ' *', ' <=', ' >=', ' <<', ' >>', ' \^=')
+    work = re.sub(r"([(\[])([+\-])[ \t]+(?=[0-9A-Za-z~\\(])", r"\1\2", work)
+    work = re.sub(
+        r"((?:=|<=|>=|<|>|\\neq|\\apx|\\eqv|\\sim)[ \t]+)([+\-])[ \t]+(?=[0-9A-Za-z~\\(])",
+        r"\1\2",
+        work,
+    )
+
+    def _is_chem_token(tok: str) -> bool:
+        core = re.sub(r"\((?:s|l|g|aq|[IVX]+)\)$", "", tok)
+        if not core or core.upper() in fc.PROTECTED_ACRONYMS:
+            return False
+        el_str = re.sub(r"[_^](?:\{[^{}]*\}|[0-9A-Za-z+\-]+)|[()+\-]", "", core)
+        if not el_str:
+            return False
+        els = re.findall(r"[A-Z][a-z]?", el_str)
+        if not els or "".join(els) != el_str:
+            return False
+        if not all(el in fc.VALID_CHEMICAL_ELEMENTS for el in els):
+            return False
+        if "_" in core or "^" in core or core != tok or len(els) >= 2:
+            return True
+        return len(el_str) == 2 and el_str not in fc.AMBIGUOUS_GERMAN_CHEM_WORDS
+
+    def _is_right_math(rctx: str) -> bool:
+        if not rctx or rctx[0] in ("_", "*", "%", "#", "\n"):
+            return False
+        if rctx[0].isdigit():
+            return True
+        if re.match(r"^[+\-](?:[0-9~\\(]|[A-Za-z](?![a-zäöüß]{2}))", rctx):
+            return True
+        if re.match(r"^~[A-Za-z](?![a-zäöüß]{2})", rctx):
+            return True
+        if fc.FIBS_RIGHT_MATH_CMD_RE.match(rctx) and not fc.FIBS_WORD_FRAC_RE.match(rctx):
+            return True
+        if re.match(r"^(?:arc)?(?:sin|cos|tan|cot)(?=[\s(~A-Za-z0-9_^])", rctx):
+            return True
+        if re.match(
+            r"^[\(\[\{|](?:[+\-0-9~\\]|(?:arc)?(?:sin|cos|tan|cot)\b|[A-Za-z](?:['_^0-9\)\]\|\s+\-*/]|$))",
+            rctx,
+        ):
+            return True
+        if re.match(r"^[A-Za-z](?:'{1,3}|[_^(\[]|(?![A-Za-zäöüÄÖÜß]))", rctx):
+            return True
+        if re.match(
+            r"^[a-zA-Z]{2,3}(?:'{1,3})?[_^]|^[a-z][A-Z](?![A-Za-zäöüÄÖÜß])"
+            r"|^(?:ma|mg|mgh|vt|at|ds|dt|dx|dy|dz|dm|dr|dp|dv|ac|ab|bc|xy|xz|yz)\b",
+            rctx,
+        ):
+            return True
+        m_rtok = re.match(r"^[A-Za-z0-9_^{}()+\-]+", rctx)
+        return bool(m_rtok and _is_chem_token(m_rtok.group(0)))
+
+    def _is_left_math(lctx: str, op_s: str, rctx: str) -> bool:
+        if not lctx:
+            return False
+        if op_s == "-":
+            if fc.FIBS_PROSE_RANGE_PREFIX_RE.search(lctx):
+                return False
+            if re.search(r"\b\d{4}$", lctx) and re.match(
+                r"^\d{1,4}\b[ \t]+[A-ZÄÖÜ][a-zäöüß]{2,}", rctx
+            ):
+                return False
+            if re.match(r"^\d+(?:[.,]\d+)?[ \t]+[A-ZÄÖÜ][a-zäöüß]{3,}[ \t]+[a-zäöüß]", rctx):
+                return False
+            if re.fullmatch(r"[\s|:\-]+", lctx):
+                return False
+        if lctx[-1].isdigit():
+            return True
+        if lctx[-1] in ")}]|'°":
+            if lctx[-1] == "}" and re.search(r"[A-Za-zäöüÄÖÜß]{3,}\{\d+\}$", lctx):
+                return False
+            if lctx[-1] == ")" and re.search(r"\([A-Za-zäöüÄÖÜß\s.,;:]{5,}\)$", lctx):
+                return False
+            return True
+        if re.search(r"\^[+\-*]$|~[A-Za-z]$", lctx) or fc.FIBS_LEFT_MATH_CMD_RE.search(lctx):
+            return True
+        if re.search(r"(?<![A-Za-zäöüÄÖÜß_])[A-Za-z]$|[A-Za-z0-9)\]}']_[A-Za-z]$", lctx):
+            return True
+        if fc.FIBS_LEFT_MATH_UNIT_RE.search(lctx):
+            return True
+        if re.search(
+            r"(?<![A-Za-zäöüÄÖÜß])(?:[a-z][A-Z]|ma|mg|mgh|vt|at|ds|dt|dx|dy|dz|dm|dr|dp|dv|ac|ab|bc|xy|xz|yz)$",
+            lctx,
+        ):
+            return True
+        m_ltok = re.search(r"[A-Za-z0-9_^{}()]+$", lctx)
+        return bool(m_ltok and _is_chem_token(m_ltok.group(0)))
+
+    asym_parts: list[str] = []
+    asym_last = 0
+    for m_op in fc.FIBS_ASYM_OP_CANDIDATE_RE.finditer(work):
+        op_rel = m_op.group(1)
+        op_bin = m_op.group(2)
+        op_tok = op_rel or op_bin or ""
+        line_s = work.rfind("\n", 0, m_op.start()) + 1
+        line_e = work.find("\n", m_op.end())
+        line_e = len(work) if line_e < 0 else line_e
+        lctx = work[line_s : m_op.start()]
+        rctx = work[m_op.end() : line_e]
+
+        if op_rel and lctx.endswith(("{", "(", "[")) and _is_right_math(rctx):
+            asym_parts.append(work[asym_last : m_op.start()])
+            asym_parts.append(op_rel)
+            asym_last = m_op.end()
+        elif _is_right_math(rctx) and _is_left_math(lctx, op_tok, rctx):
+            asym_parts.append(work[asym_last : m_op.start()])
+            asym_parts.append(f" {op_tok}")
+            asym_last = m_op.end()
+    if asym_last:
+        asym_parts.append(work[asym_last:])
+        work = "".join(asym_parts)
 
     # 10. Collapse redundant spaces (preserving tabs) and re-apply degree/percent rules
     work = re.sub(r"(?<=\S)[ ]{2,}(?=\S)", " ", work)

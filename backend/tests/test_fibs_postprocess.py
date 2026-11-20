@@ -720,7 +720,7 @@ def test_strip_math_and_variable_emphasis_footnote_brace_fix_and_excel_dollar_pr
     from backend.services.fibs_postprocess import strip_math_and_variable_emphasis
 
     # 1. Exact user-reported rotation/mechanics cases
-    assert post_process_structure("_E_kin_ = _1/2 J omega^2_.").strip() == "E_{kin} = 1/2J~w^2."
+    assert post_process_structure("_E_kin_ = _1/2 J omega^2_.").strip() == "E_{kin} =1/2J~w^2."
     assert (
         post_process_structure("Die Teilmassen _Delta m_i_ bestimmt man einzeln.").strip()
         == "Die Teilmassen ~Dm_i bestimmt man einzeln."
@@ -779,10 +779,10 @@ def test_strip_math_and_variable_emphasis_footnote_brace_fix_and_excel_dollar_pr
         assert prod_tok in out, f"Missing {prod_tok!r} in:\n{out}"
 
     # Colon-terminated label splits trailing formula outside emphasis
-    assert r"-\t_Grenzfrequenz_ f_G = \f{W_A}{h}:" in out or "-\t_Grenzfrequenz_ f_G = \\f{W_A}{h}:" in out
+    assert r"-\t_Grenzfrequenz_ f_G =\f{W_A}{h}:" in out or "-\t_Grenzfrequenz_ f_G =\\f{W_A}{h}:" in out
 
     # Fractions never corrupted into footnote superscripts ^3 / ^10, and corrupted \frac{1}^3 repaired
-    assert r"\f{1}{3} + \f{1}{10}" in out
+    assert r"\f{1}{3} +\f{1}{10}" in out
     assert r"beschädigt \f{1}{3} und \f{5}{12}." in out
     assert "^3" not in out and "^10" not in out and "^12" not in out
 
@@ -811,14 +811,14 @@ def test_strip_math_and_variable_emphasis_footnote_brace_fix_and_excel_dollar_pr
     )
     edge_out = post_process_structure(edge_md)
 
-    assert "#### M2 Drehmoment M = rF oder M = r_a F cos ~h" in edge_out
+    assert "#### M2 Drehmoment M =rF oder M =r_a F cos ~h" in edge_out
     assert "Die _Winkelbeschleunigung_ ~a und das _Drehmoment_ M hängen zusammen." in edge_out
     assert "Werte: ~a, ~w, ~f, ~D~w, [~a], ~Dt, \\f{~Dp}{~Dt}, 9,81 m/s^2, 9,81 m/s^2, m/s^2." in edge_out
     assert (
         "Terme: m\\vec{v}, m\\vec{a}, J\\vec{~w}, -m~w^2, m~w^2, \\vec{p_1}, \\f{v^2}{r}."
         in edge_out
     )
-    assert "Stoß: v'_1 = m_2(2v_2 - v_1) + v'_2 sowie 2v_2 - v_1." in edge_out
+    assert "Stoß: v'_1 =m_2(2v_2 -v_1) +v'_2 sowie 2v_2 -v_1." in edge_out
     assert "Quotienten & Produkte: F/a, r~D~w/~Dt, r~D~w, mr~a, mr^2~a." in edge_out
 
 

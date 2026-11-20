@@ -499,6 +499,45 @@ VALID_CHEMICAL_ELEMENTS: Final[frozenset[str]] = frozenset({
     "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
 })
 
+AMBIGUOUS_GERMAN_CHEM_WORDS: Final[frozenset[str]] = frozenset({"In", "Am", "Es", "Er"})
+
+MATH_SCRIPT_BASE_PATTERN: Final[str] = (
+    r"(?:\\(?:lim|sum|prod|o?i{1,3}nt|ln|lg|log)|"
+    r"\b(?:arc)?(?:sin|cos|tan|cot)|"
+    r"~[A-Za-z](?:'{1,3})?|"
+    r"(?<![a-zäöüß_])(?:[A-Z][a-z]?){1,4}(?:'{1,3})?|"
+    r"(?<![A-Za-zÄÖÜäöüß_])[a-z](?:'{1,3})?|"
+    r"[0-9)\]}°'])"
+)
+
+FIBS_ASYM_OP_CANDIDATE_RE: Final[re.Pattern[str]] = re.compile(
+    r"[ \t]*(\\\^=|<=|>=|<<|>>)[ \t]*|[ \t]+([=+\-*])[ \t]+"
+)
+
+FIBS_RIGHT_MATH_CMD_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\\(?:f|s|ol|vec|dot|ddot|tilde|ln|lg|log|lim|sum|prod|o?i{1,3}nt|"
+    r"es|N|Z|Q|R|C|P|pm|mp|cd|va|ma|da|overset|xra|forall|ex|ominus)(?![A-Za-z])"
+    r"|^\\(?:8|\||l<)"
+)
+
+FIBS_WORD_FRAC_RE: Final[re.Pattern[str]] = re.compile(r"^\\f\{[A-ZÄÖÜa-zäöüß]{3,}\}")
+
+FIBS_LEFT_MATH_CMD_RE: Final[re.Pattern[str]] = re.compile(
+    r"\\(?:8|es|N|Z|Q|R|C|P|cd|ominus|infty)$"
+)
+
+FIBS_LEFT_MATH_UNIT_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:\d|\})[ \t]+(?:~m)?(?:cm|mm|km|nm|dm|m|g|mg|kg|t|s|min|h|d|ms|ns|"
+    r"mol|L|mL|dL|N|J|kJ|MJ|W|kW|MW|Wh|kWh|V|mV|kV|A|mA|kA|C|F|T|H|"
+    r"Hz|kHz|MHz|GHz|Pa|hPa|kPa|MPa|bar|mbar|eV|keV|MeV|FE|Euro|EUR|"
+    r"cm/[sh]|m/s(?:\^2)?|km/[sh]|g/mol|mol/L|L/mol|J/mol|kJ/mol|g/cm\^3|kg/m\^3)$"
+)
+
+FIBS_PROSE_RANGE_PREFIX_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:Jahr(?:e|en)?|Seite(?:n)?|S\.|Kapitel|Band|Nr\.|Teil|Zeile(?:n)?|"
+    r"Vers(?:e)?|Strophe(?:n)?|Klasse(?:n)?|Stufe(?:n)?|Abb\.|Bild|Aufgabe(?:n)?)[ \t]+\d+$"
+)
+
 # ---------------------------------------------------------------------------
 # DOCX Export Constants (FIBS 09/2025 Section 2.1.1)
 # ---------------------------------------------------------------------------

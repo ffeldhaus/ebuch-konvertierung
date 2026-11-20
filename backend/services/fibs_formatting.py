@@ -565,21 +565,25 @@ def normalize_versalien(markdown: str) -> str:
 
 
 def normalize_fibs_units_and_percent(text: str) -> str:
-    r"""Normalizes FIBS 09/2025 temperatures, angles, and percentages outside code and URLs.
+    r"""Normalizes FIBS 09/2025 temperatures, angles, percentages, and promille outside code and URLs.
 
-    Applies FIBS Section 8.1 rules deterministically:
-      - Unwraps standalone ``$80\,^\circ\text{C}$``, ``$90^\circ$``, and ``$50\,\%$`` spans.
+    Applies FIBS Section 8.1 and LaTeX-Handreichung rules deterministically:
+      - Unwraps standalone ``$80\,^\circ\text{C}$``, ``$90^\circ$``, ``$36^\circ 14' 10''$``,
+        ``$50\,\%$``, and ``$5\,\permil$`` spans.
       - Replaces ``<num>^\circ\text{C}`` -> ``<num> °C`` and ``<num>^\circ`` -> ``<num>°``.
       - Formats temperatures with one space before ``°C`` / ``°F`` (``33°C`` -> ``33 °C``).
-      - Formats angles and degree coordinates without a space before ``°`` (``45 °`` -> ``45°``).
+      - Formats angles, arcminutes, and arcseconds without spaces (``45 °`` -> ``45°``,
+        ``36° 14′ 10″`` -> ``36°14'10''``).
       - Formats percentages with one space before ``%`` (``50%`` -> ``50 %``), preserving
         hyphenated and suffixed forms (``5%-Klausel``, ``100%ig``).
+      - Normalizes ``‰`` and ``\textperthousand`` to ``\permil`` with one leading space
+        after numbers (``5‰`` / ``5\permil`` -> ``5 \permil``).
 
     Args:
         text: Input Markdown text.
 
     Returns:
-        Text with normalized degree and percent spacing.
+        Text with normalized degree, arcminute/arcsecond, percent, and promille spacing.
     """
     if not text:
         return text
@@ -592,7 +596,22 @@ def normalize_fibs_units_and_percent(text: str) -> str:
 
     work = fc.UNIT_PERCENT_PROTECTED_RE.sub(_mask, text)
 
-    # 1. Unwrap standalone $...$ temperatures and angles (e.g. '$80\,^\circ\text{C}$', '$90^\circ$')
+    # 1. Unwrap standalone $...$ angles with arcminutes/arcseconds, temperatures, and plain angles
+    def _unwrap_dollar_dms(m: re.Match[str]) -> str:
+        deg = m.group(1).replace("{,}", ",").replace("−", "-")
+        mins = m.group(2).replace("{,}", ",")
+        secs = (m.group(3) or "").replace("{,}", ",")
+        return f"{deg}°{mins}'{secs}''" if secs else f"{deg}°{mins}'"
+
+    work = re.sub(
+        r"\$\s*([-+−]?\d+(?:(?:\{,\}|[.,])\d+)?)\s*(?:\\,|\s)*(?:°|\^\s*\{?\\circ\}?)\s*(?:\\,|\s)*"
+        r"(\d{1,2}(?:(?:\{,\}|[.,])\d+)?)\s*(?:\^\s*\{?\s*\\prime\s*\}?|\\prime(?![a-zA-Z])|′|'(?!'))"
+        r"(?:\s*(?:\\,|\s)*(\d{1,2}(?:(?:\{,\}|[.,])\d+)?)\s*"
+        r"(?:\^\s*\{?\s*(?:\\prime\s*){2}\}?|(?:\\prime\s*){2}(?![a-zA-Z])|″|''|′′|'[ \t]+'))?\s*\$",
+        _unwrap_dollar_dms,
+        work,
+    )
+
     def _unwrap_dollar_deg(m: re.Match[str]) -> str:
         num = m.group(1).replace("{,}", ",").replace("−", "-")
         cf = m.group(2) or m.group(3)
@@ -605,7 +624,7 @@ def normalize_fibs_units_and_percent(text: str) -> str:
         work,
     )
 
-    # 2. Unwrap standalone $...$ percentages (e.g. '$50\,\%$', '$5\%$-Klausel', '$100\%$ig')
+    # 2. Unwrap standalone $...$ percentages and promille (e.g. '$50\,\%$', '$5\,\permil$')
     def _unwrap_dollar_pct(m: re.Match[str]) -> str:
         num = m.group(1).replace("{,}", ",").replace("−", "-")
         tail = work[m.end() :]
@@ -616,6 +635,12 @@ def normalize_fibs_units_and_percent(text: str) -> str:
     work = re.sub(
         r"\$\s*([-+−]?\d+(?:(?:\{,\}|[.,])\d+)?)\s*(?:\\,|\s)*\\?%\s*\$",
         _unwrap_dollar_pct,
+        work,
+    )
+    work = re.sub(
+        r"\$\s*([-+−]?\d+(?:(?:\{,\}|[.,])\d+)?)\s*(?:\\,|\s)*"
+        r"(?:‰|\\(?:textperthousand|permil)(?![a-zA-Z]))\s*\$",
+        lambda m: f"{m.group(1).replace('{,}', ',').replace('−', '-')} \\permil",
         work,
     )
 
@@ -640,10 +665,21 @@ def normalize_fibs_units_and_percent(text: str) -> str:
         work,
     )
 
-    # 5. Plain angle / coordinate degree spacing: '<num>°' (no space between number and °)
+    # 5. Plain angle / coordinate / arcminute / arcsecond spacing: '<num>°' and '36°14'10'''
     work = re.sub(
         r"(\d+(?:[.,]\d+)?)[ \t]+°(?![ \t]*[CF]\b)",
         r"\1°",
+        work,
+    )
+    work = re.sub(
+        r"(\d+(?:[.,]\d+)?)°[ \t]*(\d{1,2}(?:[.,]\d+)?)[ \t]*"
+        r"(?:\^\s*\{?\s*\\prime\s*\}?|\\prime(?![a-zA-Z])|′|'(?!'))"
+        r"(?:[ \t]*(\d{1,2}(?:[.,]\d+)?)[ \t]*"
+        r"(?:\^\s*\{?\s*(?:\\prime\s*){2}\}?|(?:\\prime\s*){2}(?![a-zA-Z])|″|''|′′|'[ \t]+'))?"
+        r"(?![a-z0-9'])",
+        lambda m: f"{m.group(1)}°{m.group(2)}'{m.group(3)}''"
+        if m.group(3)
+        else f"{m.group(1)}°{m.group(2)}'",
         work,
     )
 
@@ -653,6 +689,15 @@ def normalize_fibs_units_and_percent(text: str) -> str:
         r"\1 %",
         work,
     )
+
+    # 7. Promille normalization: '‰' and '\textperthousand' -> '\permil' with 1 space after numbers
+    work = re.sub(
+        r"(?:\\textperthousand(?![a-zA-Z])|‰)(?=[A-Za-z])",
+        lambda _: r"\permil ",
+        work,
+    )
+    work = re.sub(r"\\textperthousand(?![a-zA-Z])|‰", lambda _: r"\permil", work)
+    work = re.sub(r"(\d)[ \t]*\\permil(?![a-zA-Z])", r"\1 \\permil", work)
 
     for idx, val in enumerate(protected_spans):
         work = work.replace(f"__FIBS_PROT_{idx}__", val)

@@ -563,7 +563,7 @@ def test_compact_bild_ref_placeholders_deduplication_and_zero_loss_fallback(monk
     assert len(placeholder_md) < len(raw_md)
     # Pre-cleaned <Bild> block already has VLM tokens stripped and FIBS math/units applied
     assert "<|image|>" not in bild_map["BILD_001"]
-    assert "~a = 30°" in bild_map["BILD_001"]
+    assert "~a =30°" in bild_map["BILD_001"]
     assert "50 %" in bild_map["BILD_001"]
     assert "H_2O" in bild_map["BILD_001"]
 
@@ -587,7 +587,7 @@ def test_compact_bild_ref_placeholders_deduplication_and_zero_loss_fallback(monk
     )
     restored = restore_bild_placeholders(simulated_gemma_out, bild_map, page_bild_ids)
     assert "<Bild-Ref" not in restored
-    assert restored.count("Quelle ~a = 30°") == 1
+    assert restored.count("Quelle ~a =30°") == 1
     assert "Kurvenverlauf über 120 ms" in restored
     assert "Ansicht eines digitalen Oszilloskops" in restored
     assert "Dekorativ" not in restored

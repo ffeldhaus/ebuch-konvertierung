@@ -148,7 +148,7 @@ def test_strip_hallucinated_ocr_pseudo_formulas():
 
 
 def test_plain_degrees_temperatures_and_percentages_both_modes():
-    """Verifies 3b: temperatures, angles, and percentages never emit ^\\circ and follow FIBS spacing."""
+    r"""Verifies 3b: temperatures, angles, and percentages never emit ^\circ and follow FIBS spacing."""
     raw = (
         "Siedepunkt bei $80\\,^\\circ\\text{C}$, Stickstoff bei -196°C und Papier bei 451°F.\n"
         "Drehung um etwa 45 ° um die Achse in die $90^\\circ$-Stellung bei 0 ° N und $14{,}1^\\circ$.\n"
@@ -186,10 +186,10 @@ def test_fibs_mode_bare_latex_tilde_greek_micro_and_arrows():
     assert "\\," not in res
     assert "0,001 ~mg bzw. 0,001 ~mg" in res
     assert "2 ~mm bzw. 2 ~mm sowie 1,67 ~mm" in res
-    assert "~D s = d * sin(~a_1) = k * ~l" in res
-    assert "~g + ~b = ~d" in res
-    assert "CH_3COOH + C_2H_5OH \\lra CH_3COOC_2H_5 + H_2O" in res
-    assert "2 SO_2(g) + O_2(g) \\xra{Kat., 450 °C} 2 SO_3(g)" in res
+    assert "~D s =d *sin(~a_1) =k *~l" in res
+    assert "~g +~b =~d" in res
+    assert "CH_3COOH +C_2H_5OH \\rlh CH_3COOC_2H_5 +H_2O" in res
+    assert "2 SO_2(g) +O_2(g) \\xra{Kat., 450 °C} 2 SO_3(g)" in res
     assert "A \\xra{ATP \\to ADP} B \\to C" in res
 
 
@@ -234,7 +234,7 @@ def test_fibs_minimiertes_latex_commands_vectors_indices_and_bruchschreibweisen(
         "Verwendung von $-Zeichen in `=B2+$F$1` sowie =A2+$F$1."
     )
     out = standardize_formulas(sample, fibs_mode=True)
-    assert r"\f{\f{m_1}{m_2}}{1 + \f{a}{b}}" in out
+    assert r"\f{\f{m_1}{m_2}}{1 +\f{a}{b}}" in out
     assert r"\f{3}{8}" in out
     assert r"\s{x}" in out
     assert r"\s[3]{27}" in out
@@ -244,9 +244,9 @@ def test_fibs_minimiertes_latex_commands_vectors_indices_and_bruchschreibweisen(
     assert r"a \apx b" in out
     assert r"p \eqv q" in out
     assert r"p \n \eqv r" in out
-    assert r"1 cm \^= 5 km" in out
-    assert "x <= y >= z" in out
-    assert "d << L >> r" in out
+    assert r"1 cm \^=5 km" in out
+    assert "x <=y >=z" in out
+    assert "d <<L >>r" in out
     assert r"a \neq 0" in out
     assert r"x \pm 2 \mp 1" in out
     assert r"\l< u, v \r>" in out
@@ -254,18 +254,18 @@ def test_fibs_minimiertes_latex_commands_vectors_indices_and_bruchschreibweisen(
     assert r"x \mt x^2" in out
     assert r"A \la B" in out
     assert r"\xra[320 bis 400 °C]{Katalysator}" in out
-    assert r"M = \es" in out
+    assert r"M =\es" in out
     assert r"x \in \R" in out
     assert r"n \in \N" in out
     assert r"A \sbs B \sbse C \sps D \spsq E" in out
     assert r"\ex x" in out
     assert r"g \| h" in out
     assert "1, 2, ..., n" in out
-    assert r"a_1 + \cd + a_n" in out
-    assert "3 * 10^8" in out
+    assert r"a_1 +\cd +a_n" in out
+    assert "3 *10^8" in out
     assert "C2*0,05" in out
-    assert "sin(~h) + cos(~h) + tan(~j) + cot(~H) + arcsin(x)" in out
-    assert r"\ln(x) + \lg(y) + \log_2(z)" in out
+    assert "sin(~h) +cos(~h) +tan(~j) +cot(~H) +arcsin(x)" in out
+    assert r"\ln(x) +\lg(y) +\log_2(z)" in out
     assert r"\sum_{i=1}^n a_i^3" in out
     assert r"\int_0^1 x dx" in out
     assert r"\vec{a}" in out
@@ -273,9 +273,9 @@ def test_fibs_minimiertes_latex_commands_vectors_indices_and_bruchschreibweisen(
     assert r"\vec{p_1}" in out
     assert r"\vec{F_A}" in out
     assert r"(-\f{1}{2})" in out
-    assert r"y = -\f{1}{2}" in out
+    assert r"y =-\f{1}{2}" in out
     assert r"\f{1}{-2}" in out
-    assert "1/2 - 1/4" in out
+    assert "1/2 -1/4" in out
     assert "1/1.000.000" in out
     assert r"\f{1}{2}x" in out
     assert "$-Zeichen" in out
@@ -283,6 +283,119 @@ def test_fibs_minimiertes_latex_commands_vectors_indices_and_bruchschreibweisen(
     assert "=A2+$F$1" in out
     assert "__FIBS_BARE_PROT_" not in out
     assert "__STD_DOLLAR_PROT_" not in out
+
+
+def test_promille_temperatures_angles_arcminutes_and_primes_25c_25d():
+    r"""Verifies 25c & 25d: \permil spacing, °C/°F vs. °/'/'', LaTeX/Unicode primes, and v'_{12}."""
+    from backend.services.fibs_formatting import normalize_fibs_units_and_percent
+    from backend.services.formula_service import clean_latex_formula
+
+    # 25c: Promille, percent, temperatures vs. angles/arcminutes/arcseconds
+    units_in = (
+        "Konzentration 5‰, Grenzwert 0,5\\textperthousand, Probe $2\\,\\permil$, Anteil 33%.\n"
+        "Temperatur 12°C und 451°F; Winkel 90°, Koordinate 36°14′10″ sowie $36^\\circ\\,14'\\,10''$ und 48° 08' N."
+    )
+    norm_u = normalize_fibs_units_and_percent(units_in)
+    assert "5 \\permil" in norm_u
+    assert "0,5 \\permil" in norm_u
+    assert "2 \\permil" in norm_u
+    assert "33 %" in norm_u
+    assert "12 °C" in norm_u
+    assert "451 °F" in norm_u
+    assert "Winkel 90°," in norm_u
+    assert norm_u.count("36°14'10''") == 2
+    assert "48°08' N" in norm_u
+
+    # 25d: Primes & unbraced multi-char subscripts after primes in both clean_latex_formula and fibs_mode
+    assert clean_latex_formula(r"f^\prime(x) + f^{\prime\prime}(x) + f^{\prime\prime\prime}(x)") == (
+        "f'(x) + f''(x) + f'''(x)"
+    )
+    assert clean_latex_formula(r"v^{\prime}_1 + v'_12") == "v'_1 + v'_{12}"
+
+    primes_md = (
+        "Ableitungen: $f^\\prime(x)$, $f^{\\prime}(x)$, $f^{\\prime\\prime}(x)$, $f^{\\prime\\prime\\prime}(x)$, "
+        "y′ + y″ + y‴, Impuls $v^{\\prime}_1$, v'_12 und Winkel 36°14′10″."
+    )
+    out = standardize_formulas(primes_md, fibs_mode=True)
+    assert "f'(x), f'(x), f''(x), f'''(x)" in out
+    assert "y' +y'' +y'''" in out
+    assert "v'_1, v'_{12}" in out
+    assert "36°14'10''" in out
+
+
+def test_augenbit_compact_scripts_brace_unwrapping_sub_before_sup_and_parens_25e():
+    r"""Verifies 25e: compact _/^, single-char {} unwrapping, sub-before-sup (incl. \ominus & primes), and ( ) trim."""
+    sample = (
+        "Potenzen & Indizes: 4 ^ 3, 2 ^ {12}, x _ {n - 1}, x_{1}, a^{2}, H_{2}SO_{4}, "
+        "F_{12}, x_{n-1}, Fe^{2+}, _Wort_ und _Fachbegriff_{1}.\n"
+        "Befehle behalten Klammern: $\\frac{1}{2}$, $\\sqrt{3}$, $\\overline{x}$, $\\vec{a}$, "
+        "$\\dot{s}$, $\\ddot{s}$, $\\tilde{x}$, $A \\xrightarrow{a} B$.\n"
+        "Reihenfolge Index vor Exponent: $a^3_1$, $S^\\ominus_m$, $S^{\\ominus}_m$, "
+        "$\\Delta_B H^\\ominus_m$, $v'^2_1$, $v^{\\prime 2}_1$.\n"
+        "Klammern & Checkbox: ( r = 18 cm ) sowie\n[ ] Leeres Kästchen."
+    )
+    out = standardize_formulas(sample, fibs_mode=True)
+    assert "4^3, 2^{12}, x_{n -1}, x_1, a^2, H_2SO_4," in out
+    assert "F_{12}, x_{n-1}, Fe^{2+}, _Wort_ und _Fachbegriff_{1}." in out
+    for cmd_tok in (r"\f{1}{2}", r"\s{3}", r"\ol{x}", r"\vec{a}", r"\dot{s}", r"\ddot{s}", r"\tilde{x}", r"\xra{a}"):
+        assert cmd_tok in out
+    assert "a_1^3, S_m^\\ominus, S_m^\\ominus, ~D_B H_m^\\ominus, v'_1^2, v'_1^2." in out
+    assert "(r =18 cm)" in out
+    assert "\n[ ] Leeres Kästchen." in out
+
+
+def test_marburger_asymmetric_operator_spacing_and_rlh_forall_symbols_25f_25g():
+    r"""Verifies 25f & 25g: asymmetric spacing, prose/list/blank/Excel/XML guards, \rlh vs. \lra, and \forall."""
+    from backend.services.prompts import SYSTEM_PROMPTS, VLM_PROMPT_RULES
+
+    sample = (
+        "Rechnungen: a = 4 + 6, v = \\f{s}{t}, f_G = \\f{W_A}{h}, x_n + 1, 1/2 - 1/4, 3 * 4, x <= 8, 1 cm \\^= 5 N.\n"
+        "Alphabetische Befehle: ~a \\sim M, x \\apx 0,3, a \\neq 0, p \\eqv q, x \\in \\R, A \\sbs B, sin ~a.\n"
+        "Vorzeichen: (-5), v'_1 = -36 cm/s.\n"
+        "Wortgleichungen & Glossar: ~a = konstant, Geschwindigkeit = \\f{Weg}{Zeit}, ^1: Begriff = Erklärung.\n"
+        "Gedankenstriche: deutsch - englisch, Einfach umrühren - fertig!, "
+        "Der Gedankenstrich betont - wie man sieht - eine Pause.\n"
+        "-\tTab-Listenpunkt\n"
+        "- Leerzeichen-Listenpunkt\n"
+        "Grundschule Lücke: 24 + 37 = _..._\n"
+        "Tabellenkalkulation & Tags: =A2+$F$1, =9,81*(1-0,15*B3^2), <Bild-Ref id=\"BILD_001\" />.\n"
+        "Chemie & Logik: $N_2 + 3 H_2 \\rightleftharpoons 2 NH_3$, H_2O ⇌ H^+ + OH^-, "
+        "$A \\leftrightarrow B$, P ↔ Q, $\\forall x \\in \\mathbb{R}$, ∀x gilt x^2 >= 0."
+    )
+    out = standardize_formulas(sample, fibs_mode=True)
+
+    # 25f: Asymmetric math spacing
+    assert "a =4 +6, v =\\f{s}{t}, f_G =\\f{W_A}{h}, x_n +1, 1/2 -1/4, 3 *4, x <=8, 1 cm \\^=5 N." in out
+    assert "~a \\sim M, x \\apx 0,3, a \\neq 0, p \\eqv q, x \\in \\R, A \\sbs B, sin ~a." in out
+    assert "(-5), v'_1 =-36 cm/s." in out
+
+    # 25f: Prose, list, blank, spreadsheet, and XML attribute guards
+    assert "~a = konstant" in out
+    assert "Geschwindigkeit = \\f{Weg}{Zeit}" in out
+    assert "^1: Begriff = Erklärung." in out
+    assert "deutsch - englisch" in out
+    assert "Einfach umrühren - fertig!" in out
+    assert "Der Gedankenstrich betont - wie man sieht - eine Pause." in out
+    assert "\n-\tTab-Listenpunkt\n" in out
+    assert "\n- Leerzeichen-Listenpunkt\n" in out
+    assert "= _..._" in out
+    assert "=A2+$F$1" in out
+    assert "=9,81*(1-0,15*B3^2)" in out
+    assert '<Bild-Ref id="BILD_001" />' in out
+
+    # 25g: \rlh vs. \lra and \forall
+    assert r"N_2 +3 H_2 \rlh 2 NH_3" in out
+    assert r"H_2O \rlh H^+ +OH^-" in out
+    assert r"A \lra B" in out
+    assert r"P \lra Q" in out
+    assert r"\forall x \in \R" in out
+    assert r"\forall x gilt x^2 >=0." in out
+
+    # Prompts include 25c-25g instructions
+    sys_prompt = SYSTEM_PROMPTS["uebertragungsregeln_09_2025"]
+    for token in (r"\rlh", r"\forall x", r"5 \permil", "a =4 +6", r"v =\f{s}{t}", "~a = konstant"):
+        assert token in sys_prompt
+        assert token in VLM_PROMPT_RULES
 
 
 

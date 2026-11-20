@@ -186,7 +186,7 @@ def test_fibs_constants_and_postprocess_exports() -> None:
     processed = post_process_structure("((1))\n\n**Wichtig** und ____ sowie $\\alpha = 30^\\circ$ bei 50%")
     assert "_Wichtig_" in processed
     assert "_..._" in processed
-    assert "~a = 30°" in processed
+    assert "~a =30°" in processed
     assert "50 %" in processed
     assert "$" not in processed
     assert UNICODE_GREEK_TO_FIBS["α"] == "~a"
