@@ -1459,6 +1459,8 @@ class AppController {
       extractFormData.append('engine', this.engineSelect.value);
       extractFormData.append('method', 'auto');
       extractFormData.append('lang', this.langSelect.value);
+      extractFormData.append('ruleset', this.rulesetSelect.value);
+      extractFormData.append('chain_standardise', 'true');
       extractFormData.append(
         'describe_images',
         String(this.describeImagesToggle ? this.describeImagesToggle.checked : true),
@@ -1901,41 +1903,59 @@ class AppController {
         this.processBtn.classList.add('bg-indigo-600', 'text-white');
         this.log('Prozess wurde zuvor abgebrochen.', 'info');
       } else if (data.status === 'completed') {
-        this.progressContainer.classList.add('hidden');
-        if (this.abortProcessBtn) this.abortProcessBtn.classList.add('hidden');
-        this.currentRawMarkdown = data.raw_markdown || '';
-        this.rawMarkdownTextarea.value = this.currentRawMarkdown;
-        if (this.isRawRendered) this.updateRawRenderPreview();
-        
-        this.currentStandardisedMarkdown = data.standardised_markdown || '';
-        this.standardisedMarkdownTextarea.value = this.currentStandardisedMarkdown;
-        if (this.isStandardisedRendered) this.updateStandardisedRenderPreview();
-        this.updatePagePills();
-        this.updateCharReplaceBadge();
-        
-        this.updateStepper('ready_to_export');
-        this.downloadActions.classList.remove('hidden');
+        const hasStandardised = Boolean(
+          data.standardised_markdown && String(data.standardised_markdown).trim(),
+        );
+        if (!hasStandardised && data.raw_markdown) {
+          this.currentRawMarkdown = data.raw_markdown;
+          this.rawMarkdownTextarea.value = this.currentRawMarkdown;
+          if (this.isRawRendered) this.updateRawRenderPreview();
+          this.isPdfPaneVisible = true;
+          this.isRawPaneVisible = true;
+          this.isStandardisedPaneVisible = true;
+          this.updatePaneVisibility();
+          this.log(
+            'Roh-Extraktion wiederhergestellt – starte ausstehende E-Buch-Standardisierung...',
+            'info',
+          );
+          void this.standardiseTask(taskId);
+        } else {
+          this.progressContainer.classList.add('hidden');
+          if (this.abortProcessBtn) this.abortProcessBtn.classList.add('hidden');
+          this.currentRawMarkdown = data.raw_markdown || '';
+          this.rawMarkdownTextarea.value = this.currentRawMarkdown;
+          if (this.isRawRendered) this.updateRawRenderPreview();
 
-        // Enable Optimization controls
-        this.btnOptimize.disabled = false;
-        this.optimizationPromptInput.disabled = false;
-        
-        this.downloadDocxBtn.disabled = false;
-        this.downloadDocxBtn.classList.remove('bg-slate-800', 'text-slate-500', 'cursor-not-allowed', 'border-slate-700');
-        this.downloadDocxBtn.classList.add('bg-gradient-to-tr', 'from-indigo-500', 'to-purple-600', 'text-white', 'hover:opacity-90', 'shadow-md');
-        
-        this.processBtn.textContent = 'Extraktion abgeschlossen';
-        this.processBtn.classList.add('bg-emerald-600', 'text-white');
-        this.processBtn.classList.remove('bg-slate-800');
-        this.processBtn.disabled = false;
-        this.processBtn.classList.remove('cursor-not-allowed');
-        
-        this.isPdfPaneVisible = false;
-        this.isRawPaneVisible = false;
-        this.isStandardisedPaneVisible = true;
-        this.updatePaneVisibility();
-        
-        this.log('Zustand wiederhergestellt. Inhalt steht zur Korrektur bereit.', 'success');
+          this.currentStandardisedMarkdown = data.standardised_markdown || '';
+          this.standardisedMarkdownTextarea.value = this.currentStandardisedMarkdown;
+          if (this.isStandardisedRendered) this.updateStandardisedRenderPreview();
+          this.updatePagePills();
+          this.updateCharReplaceBadge();
+
+          this.updateStepper('ready_to_export');
+          this.downloadActions.classList.remove('hidden');
+
+          // Enable Optimization controls
+          this.btnOptimize.disabled = false;
+          this.optimizationPromptInput.disabled = false;
+
+          this.downloadDocxBtn.disabled = false;
+          this.downloadDocxBtn.classList.remove('bg-slate-800', 'text-slate-500', 'cursor-not-allowed', 'border-slate-700');
+          this.downloadDocxBtn.classList.add('bg-gradient-to-tr', 'from-indigo-500', 'to-purple-600', 'text-white', 'hover:opacity-90', 'shadow-md');
+
+          this.processBtn.textContent = 'Extraktion abgeschlossen';
+          this.processBtn.classList.add('bg-emerald-600', 'text-white');
+          this.processBtn.classList.remove('bg-slate-800');
+          this.processBtn.disabled = false;
+          this.processBtn.classList.remove('cursor-not-allowed');
+
+          this.isPdfPaneVisible = false;
+          this.isRawPaneVisible = false;
+          this.isStandardisedPaneVisible = true;
+          this.updatePaneVisibility();
+
+          this.log('Zustand wiederhergestellt. Inhalt steht zur Korrektur bereit.', 'success');
+        }
       } else if (data.status === 'failed') {
         this.progressContainer.classList.add('hidden');
         if (this.abortProcessBtn) this.abortProcessBtn.classList.add('hidden');

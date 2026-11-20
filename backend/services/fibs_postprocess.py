@@ -3823,6 +3823,337 @@ def _apply_buchkonferenz_rules(
     return text
 
 
+def strip_prepress_and_indesign_artifacts(
+    markdown_content: str,
+    directory_info: dict[str, Any] | None = None,
+) -> str:
+    """Strips PDF prepress crop/section marks and InDesign ``.indb``/``.indd`` footer slugs.
+
+    Operates strictly outside ``<Bild>`` and ``<Tabelle>`` blocks. When stripping a
+    prepress bleed line (e.g. ``#### ... Abschnittsmark...``) on a page at least
+    two pages after a chapter opened, any immediately following unnumbered
+    ``# <ChapterTitle>`` running-header echo of that earlier chapter is removed too.
+
+    Args:
+        markdown_content: Input Markdown string.
+        directory_info: Optional TOC/directory metadata dictionary.
+
+    Returns:
+        Cleaned Markdown string with prepress marks and InDesign metadata removed.
+    """
+    if not markdown_content:
+        return markdown_content
+
+    protected_blocks: list[str] = []
+
+    def _mask_block(m_blk: re.Match[str]) -> str:
+        protected_blocks.append(m_blk.group(0))
+        return f"__PREPRESS_PROT_BLK_{len(protected_blocks) - 1}__"
+
+    masked = re.sub(
+        r"<(?:Bild|Tabelle)\b[^>]*>[\s\S]*?</(?:Bild|Tabelle)>",
+        _mask_block,
+        markdown_content,
+        flags=re.IGNORECASE,
+    )
+    masked = fc.INDESIGN_FOOTER_BLOCK_RE.sub("", masked)
+    masked = re.sub(
+        r"(?im)^[ \t]*\S+\.ind[db][ \t]+\d{1,4}(?:[–-]\d{1,4})?[ \t]+\d{2}\.\d{2}\.\d{4}"
+        r"(?:[ \t]+\d{2}:\d{2}(?::\d{2})?(?:[ \t]*Uhr)?)?(?:[ \t]*©[^\n]*)?[ \t]*$",
+        "",
+        masked,
+    )
+
+    def _chapter_title_key(raw_title: str) -> str:
+        cleaned = re.sub(r"[*_#]+", " ", raw_title).strip()
+        cleaned = re.sub(
+            r"^(?:(?:Kapitel|Chapter|Abschnitt|Teil|Band|Lektion)\s+\d+\s*[:.\-–—]?\s*"
+            r"|\d+(?:\.\d+)*\.?\s*[:.\-–—]?\s*)",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        return " ".join(re.findall(r"[a-zäöüß0-9]+", cleaned.lower()))
+
+    chapter_starts: dict[str, tuple[int | None, int]] = {}
+    for entry in (directory_info or {}).get("toc_entries") or []:
+        if not isinstance(entry, dict) or int(entry.get("level") or 0) != 1:
+            continue
+        t_key = _chapter_title_key(str(entry.get("title") or ""))
+        pg_raw = str(entry.get("page") or "").strip()
+        if t_key and pg_raw.isdigit():
+            chapter_starts.setdefault(t_key, (int(pg_raw), -10))
+
+    segs = split_markdown_pages(masked)
+    any_seg_changed = False
+    for seg_idx, seg in enumerate(segs):
+        cur_pg_int = int(seg.page) if (seg.page and seg.page.isdigit()) else None
+        lines = seg.text.splitlines()
+        out_lines: list[str] = []
+        just_stripped_prepress = False
+        seg_changed = False
+        for ln in lines:
+            s = ln.strip()
+            if not s or re.match(
+                r"^\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?$",
+                s,
+            ):
+                out_lines.append(ln)
+                continue
+            if fc.PREPRESS_MARK_LINE_RE.match(ln):
+                just_stripped_prepress = True
+                seg_changed = True
+                continue
+
+            m_h1 = re.match(r"^#[ \t]+(?!#)(.+)$", s)
+            if m_h1:
+                h1_body = re.sub(r"^[_*]+|[_*]+$", "", m_h1.group(1).strip()).strip()
+                is_unnumbered_h1 = not bool(
+                    re.match(
+                        r"^(?:(?:Kapitel|Chapter|Abschnitt|Teil|Band|Lektion)\s+\d|\d+[.\s:\-–—])",
+                        h1_body,
+                        re.IGNORECASE,
+                    )
+                )
+                c_key = _chapter_title_key(h1_body)
+                if just_stripped_prepress and is_unnumbered_h1 and c_key and c_key in chapter_starts:
+                    start_pg, start_si = chapter_starts[c_key]
+                    is_two_or_more_pages_later = (
+                        cur_pg_int is not None
+                        and start_pg is not None
+                        and cur_pg_int - start_pg >= 2
+                    ) or ((cur_pg_int is None or start_pg is None) and seg_idx - start_si >= 2)
+                    if is_two_or_more_pages_later:
+                        just_stripped_prepress = False
+                        seg_changed = True
+                        continue
+                if c_key:
+                    chapter_starts.setdefault(c_key, (cur_pg_int, seg_idx))
+
+            just_stripped_prepress = False
+            out_lines.append(ln)
+
+        if seg_changed:
+            any_seg_changed = True
+            trail_nl = (
+                "\n\n"
+                if seg.text.endswith("\n\n")
+                else ("\n" if seg.text.endswith("\n") else "")
+            )
+            seg.text = re.sub(r"\n{3,}", "\n\n", "\n".join(out_lines).rstrip("\n")) + trail_nl
+
+    if any_seg_changed:
+        masked = "".join(s.text for s in segs)
+
+    trail = "\n\n" if markdown_content.endswith("\n\n") else ("\n" if markdown_content.endswith("\n") else "")
+    masked = re.sub(r"\n{3,}", "\n\n", masked.rstrip("\n"))
+    if masked and trail:
+        masked += trail
+    for idx_b, blk_val in enumerate(protected_blocks):
+        masked = masked.replace(f"__PREPRESS_PROT_BLK_{idx_b}__", blk_val)
+    return masked
+
+
+def _lift_trailing_task_difficulty_tags(
+    markdown_content: str,
+    custom_rules: str | None = None,
+) -> str:
+    """Lifts sentence-trailing task difficulty tags onto their own line under ``##### <Nr>``.
+
+    Operates outside ``<Bild>`` and ``<Tabelle>`` blocks. Also strips misplaced
+    trailing ``[einfach]``/``[mittel]``/``[schwierig]`` tags from non-task prose
+    when ``point_difficulty_map`` is active, rescuing the tag onto an adjacent
+    single untagged ``##### <Nr>`` task below on the same page when unambiguous.
+
+    Args:
+        markdown_content: Input Markdown string.
+        custom_rules: Optional book-specific rules string.
+
+    Returns:
+        Markdown string with normalized standalone task difficulty lines.
+    """
+    if not markdown_content:
+        return markdown_content
+
+    _sym_map, drop_difficulty, _inline_on_h = _parse_difficulty_rules(custom_rules)
+    profile = _parse_buchkonferenz_profile(custom_rules)
+
+    protected_blocks: list[str] = []
+
+    def _mask_block(m_blk: re.Match[str]) -> str:
+        protected_blocks.append(m_blk.group(0))
+        return f"__DIFF_PROT_BLK_{len(protected_blocks) - 1}__"
+
+    masked = re.sub(
+        r"<(?:Bild|Tabelle)\b[^>]*>[\s\S]*?</(?:Bild|Tabelle)>",
+        _mask_block,
+        markdown_content,
+        flags=re.IGNORECASE,
+    )
+
+    def _norm_tag(raw_bracket: str) -> str:
+        tag = f"[{raw_bracket.strip('[]').strip().lower()}]"
+        if profile.point_difficulty_map:
+            if tag == "[leicht]":
+                return profile.point_difficulty_map.get(1, "[einfach]")
+            if tag == "[schwer]":
+                return profile.point_difficulty_map.get(3, "[schwierig]")
+        return tag
+
+    def _is_task_block_stop(stripped_ln: str) -> bool:
+        return (
+            bool(re.match(r"^#{1,6}\s+", stripped_ln))
+            or stripped_ln.startswith("((")
+            or stripped_ln.startswith("__DIFF_PROT_BLK_")
+            or bool(
+                re.match(
+                    r"^<(?:Bild|Tabelle|Rahmen|Anmerkung)\b",
+                    stripped_ln,
+                    re.IGNORECASE,
+                )
+            )
+        )
+
+    segs = split_markdown_pages(masked)
+    any_changed = False
+    for seg in segs:
+        lines = seg.text.splitlines()
+        seg_changed = False
+        idx = 0
+        while idx < len(lines):
+            if not fc.H5_TASK_NUMBER_HEADING_RE.match(lines[idx].strip()):
+                idx += 1
+                continue
+
+            scan_end = idx + 1
+            while scan_end < len(lines) and not _is_task_block_stop(lines[scan_end].strip()):
+                scan_end += 1
+
+            first_ne: int | None = None
+            for k_ne in range(idx + 1, scan_end):
+                if lines[k_ne].strip():
+                    first_ne = k_ne
+                    break
+
+            already_tagged = first_ne is not None and bool(
+                fc.STANDALONE_DIFFICULTY_LINE_RE.match(lines[first_ne].strip())
+            )
+            if not already_tagged:
+                for body_j in range(idx + 1, scan_end):
+                    m_trail = fc.TRAILING_DIFFICULTY_TAG_RE.search(lines[body_j])
+                    if m_trail and lines[body_j][: m_trail.start()].strip():
+                        lifted_lbl = _norm_tag(m_trail.group(1))
+                        punct = m_trail.group(2) or ""
+                        lines[body_j] = lines[body_j][: m_trail.start()].rstrip() + punct
+                        if not drop_difficulty:
+                            if idx + 1 < len(lines) and not lines[idx + 1].strip():
+                                lines.insert(idx + 1, lifted_lbl)
+                                scan_end += 1
+                            else:
+                                lines.insert(idx + 1, "")
+                                lines.insert(idx + 1, lifted_lbl)
+                                scan_end += 2
+                        seg_changed = True
+                        break
+
+            idx = scan_end
+
+        if profile.point_difficulty_map:
+            task_blocks: list[tuple[int, int, bool]] = []
+            in_task_indices: set[int] = set()
+            t_idx = 0
+            while t_idx < len(lines):
+                st_t = lines[t_idx].strip()
+                if fc.H5_TASK_NUMBER_HEADING_RE.match(st_t):
+                    t_end = t_idx + 1
+                    while t_end < len(lines) and not _is_task_block_stop(lines[t_end].strip()):
+                        t_end += 1
+                    f_ne: int | None = None
+                    for k_ne in range(t_idx + 1, t_end):
+                        if lines[k_ne].strip():
+                            f_ne = k_ne
+                            break
+                    has_t = f_ne is not None and bool(
+                        fc.STANDALONE_DIFFICULTY_LINE_RE.match(lines[f_ne].strip())
+                    )
+                    task_blocks.append((t_idx, t_end, has_t))
+                    in_task_indices.update(range(t_idx, t_end))
+                    t_idx = t_end
+                    continue
+                if re.match(r"^###\s+Aufgabe\s+\d+\b", st_t, re.IGNORECASE):
+                    t_end = t_idx + 1
+                    while t_end < len(lines) and not _is_task_block_stop(lines[t_end].strip()):
+                        t_end += 1
+                    in_task_indices.update(range(t_idx, t_end))
+                    t_idx = t_end
+                    continue
+                t_idx += 1
+
+            rescued: list[tuple[int, str]] = []
+            in_anm = False
+            stray_re = re.compile(
+                r"[ \t]+(\[(?:einfach|mittel|schwierig)\])([.,;:!?])?[ \t]*$",
+                re.IGNORECASE,
+            )
+            for p_idx, p_ln in enumerate(lines):
+                ps = p_ln.strip()
+                if in_anm:
+                    if re.search(r"</Anmerkung>", ps, re.IGNORECASE):
+                        in_anm = False
+                    continue
+                if re.match(r"^<Anmerkung\b", ps, re.IGNORECASE):
+                    if not re.search(r"</Anmerkung>", ps, re.IGNORECASE):
+                        in_anm = True
+                    continue
+                if (
+                    p_idx in in_task_indices
+                    or not ps
+                    or ps.startswith(("#", "((", "__DIFF_PROT_BLK_", "<"))
+                    or fc.STANDALONE_DIFFICULTY_LINE_RE.match(ps)
+                ):
+                    continue
+                m_stray = stray_re.search(p_ln)
+                if m_stray and p_ln[: m_stray.start()].strip():
+                    rescued_lbl = _norm_tag(m_stray.group(1))
+                    punct = m_stray.group(2) or ""
+                    lines[p_idx] = p_ln[: m_stray.start()].rstrip() + punct
+                    rescued.append((p_idx, rescued_lbl))
+                    seg_changed = True
+
+            untagged_tasks = [(h_i, s_e) for (h_i, s_e, has_t) in task_blocks if not has_t]
+            if (
+                not drop_difficulty
+                and len(rescued) == 1
+                and len(task_blocks) >= 1
+                and len(untagged_tasks) == 1
+                and untagged_tasks[0][0] > rescued[0][0]
+            ):
+                target_h = untagged_tasks[0][0]
+                rescued_lbl = rescued[0][1]
+                if target_h + 1 < len(lines) and not lines[target_h + 1].strip():
+                    lines.insert(target_h + 1, rescued_lbl)
+                else:
+                    lines.insert(target_h + 1, "")
+                    lines.insert(target_h + 1, rescued_lbl)
+                seg_changed = True
+
+        if seg_changed:
+            any_changed = True
+            trail_nl = (
+                "\n\n"
+                if seg.text.endswith("\n\n")
+                else ("\n" if seg.text.endswith("\n") else "")
+            )
+            seg.text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines).rstrip("\n")) + trail_nl
+
+    if any_changed:
+        masked = "".join(s.text for s in segs)
+
+    for idx_b, blk_val in enumerate(protected_blocks):
+        masked = masked.replace(f"__DIFF_PROT_BLK_{idx_b}__", blk_val)
+    return masked
+
+
 def post_process_structure(
     markdown_content: str,
     raw_markdown: str | None = None,
@@ -3858,10 +4189,16 @@ def post_process_structure(
     markdown_content, _ = clean_vlm_repetition_loops(markdown_content)
     markdown_content = normalize_heading_page_markers(markdown_content)
     markdown_content = normalize_split_decimal_headings(markdown_content)
+    markdown_content = strip_prepress_and_indesign_artifacts(
+        markdown_content, directory_info=directory_info
+    )
     if raw_markdown:
         raw_markdown, _ = clean_vlm_repetition_loops(raw_markdown)
         raw_markdown = normalize_heading_page_markers(raw_markdown)
         raw_markdown = normalize_split_decimal_headings(raw_markdown)
+        raw_markdown = strip_prepress_and_indesign_artifacts(
+            raw_markdown, directory_info=directory_info
+        )
 
     hyphen_pattern = (
         r"(\w+)-[ \t]*\n+(?:(\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\)(?:\s*/\s*\(\((?:\d+|[IVXLCDMivxlcdm]+)\)\))?)[ \t]*\n+)?"
@@ -4081,6 +4418,7 @@ def post_process_structure(
         ruleset_key=ruleset_key,
         directory_info=directory_info,
     )
+    processed = _lift_trailing_task_difficulty_tags(processed, custom_rules=custom_rules)
     processed = _apply_linked_worterklaerungen_and_randspalten(processed, custom_rules=custom_rules)
 
     if raw_markdown:

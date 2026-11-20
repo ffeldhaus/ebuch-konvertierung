@@ -2676,6 +2676,10 @@ def fuse_vlm_page_with_docling(
     cleaned_text = clean_markdown_fences(fix_escaped_dollars(loop_cleaned_text))
     cleaned_text = convert_html_tables_to_markdown(cleaned_text)
     cleaned_text = normalize_heading_page_markers(cleaned_text)
+    cleaned_text = fc.INDESIGN_FOOTER_BLOCK_RE.sub("", cleaned_text)
+    cleaned_text = "\n".join(
+        ln for ln in cleaned_text.splitlines() if not fc.PREPRESS_MARK_LINE_RE.match(ln)
+    )
 
     # Strip degenerate diagram pipe tables already present in VLM output
     cleaned_text = re.sub(
@@ -4309,8 +4313,11 @@ def recover_text_truncation(markdown_content: str, pdf_path: str | None = None) 
             except Exception:
                 pass
 
-    # 0b. Strip InDesign print-production slug lines and inline fragments
-    # (e.g. 'DO01_...indd 18 11.11.2025 15:08:08', '110796_...indd 26-27 12.07.2021 15:46:49 Uhr © ...', '01_..._Inhalt_S001 1 20.06.2023 11:02:30')
+    # 0b. Strip PDF prepress bleed marks and InDesign print-production footer/slug blocks
+    processed = fc.INDESIGN_FOOTER_BLOCK_RE.sub("", processed)
+    processed = "\n".join(
+        ln for ln in processed.splitlines() if not fc.PREPRESS_MARK_LINE_RE.match(ln)
+    )
     processed = re.sub(
         r"(?m)^[ \t]*\S+\.ind[db][ \t]+\d{1,4}(?:[–-]\d{1,4})?[ \t]+\d{2}\.\d{2}\.\d{4}(?:[ \t]+\d{2}:\d{2}(?::\d{2})?(?:[ \t]*Uhr)?)?(?:[ \t]*©[^\n]*)?[ \t]*\n?",
         "",
@@ -5664,6 +5671,10 @@ def clean_running_headers_and_footers(markdown_content: str, content_list_path: 
     """
     if not markdown_content:
         return markdown_content
+
+    from backend.services.fibs_postprocess import strip_prepress_and_indesign_artifacts
+
+    markdown_content = strip_prepress_and_indesign_artifacts(markdown_content)
 
     def _strip_page_number(s: str) -> tuple[str, bool]:
         m = re.match(

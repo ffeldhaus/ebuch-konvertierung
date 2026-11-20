@@ -394,9 +394,31 @@ async def extract_markdown(
     lang: str = Form("en"),
     engine: str = Form("lightonocr"),
     describe_images: bool = Form(True),
+    ruleset: str = Form("uebertragungsregeln_09_2025"),
+    chain_standardise: bool = Form(False),
 ):
-    """Step 2: Run extraction (LightOnOCR-3, Infinity-Parser2-Flash, or Docling) on the uploaded document.
-    Streams progress logs, ending with the extracted Markdown payload.
+    """Run Stage 1 extraction and optionally chain Stage 2+3 standardisation server-side.
+
+    Streams Stage 1 progress logs and the extracted Markdown payload as NDJSON.
+    When ``chain_standardise`` is ``True``, the task-owned background job
+    immediately transitions into VLM image descriptions and Gemma standardisation
+    after extraction completes without waiting for a second HTTP request.
+
+    Args:
+        task_id: Conversion task identifier returned by ``/api/upload``.
+        pages: Optional physical page range selection (e.g. ``"45-48"``).
+        method: Extraction mode (default ``"auto"``).
+        lang: Document language hint.
+        engine: Extraction engine identifier.
+        describe_images: Whether Stage 2 VLM image descriptions are enabled.
+        ruleset: Active FIBS ruleset identifier for chained standardisation.
+        chain_standardise: Whether to chain Stage 2+3 immediately on the server.
+
+    Returns:
+        NDJSON ``StreamingResponse`` of Stage 1 extraction events.
+
+    Raises:
+        HTTPException: If the task does not exist (404) or ``pages`` is invalid (400).
     """
     task = await task_manager.get(task_id)
     if not task:
@@ -436,6 +458,7 @@ async def extract_markdown(
         task.method = method
         task.lang = lang
         task.engine = engine
+        task.ruleset = ruleset
         task.describe_images = (
             describe_images if isinstance(describe_images, bool) else True
         )
@@ -447,20 +470,47 @@ async def extract_markdown(
         # Release GPU memory before extraction (GPU sequencing)
         release_gpu_memory()
 
-        task_coro = run_background_extraction(
-            task=task.__dict__,
-            input_path=task.input_path,
-            output_root=os.path.join(OUTPUT_DIR, task_id),
-            upload_dir=UPLOAD_DIR,
-            pages_str=pages,
-            method=method,
-            lang=lang,
-            backend="vlm-engine",
-            engine=engine,
-        )
+        async def _extraction_or_pipeline_job() -> None:
+            try:
+                await run_background_extraction(
+                    task=task.__dict__,
+                    input_path=task.input_path,
+                    output_root=os.path.join(OUTPUT_DIR, task_id),
+                    upload_dir=UPLOAD_DIR,
+                    pages_str=pages,
+                    method=method,
+                    lang=lang,
+                    backend="vlm-engine",
+                    engine=engine,
+                )
+            finally:
+                # Extraction already closed all Stage 1 listener queues with None.
+                task.listeners.clear()
+                task.save_meta()
+
+            if (
+                chain_standardise
+                and task.status == "completed"
+                and not task.is_abort_requested
+                and task.raw_markdown
+            ):
+                req = StandardiseRequest(
+                    task_id=task_id,
+                    markdown=task.raw_markdown,
+                    ruleset=ruleset or "uebertragungsregeln_09_2025",
+                    describe_images=bool(task.describe_images),
+                )
+                _prepare_standardise(task, req)
+                await _run_standardise_job(task, req)
+
         from backend.services.task_jobs import start_task_job
-        # Task-owned job: survives client disconnects; extraction closes its listeners itself.
-        start_task_job(task, "extraction", task_coro, close_listeners_on_finish=False)
+
+        start_task_job(
+            task,
+            "pipeline" if chain_standardise else "extraction",
+            _extraction_or_pipeline_job(),
+            close_listeners_on_finish=bool(chain_standardise),
+        )
     else:
         # If already actively processing (concurrent client attaching to in-flight extraction), yield all historical logs first
         for past_log in task.logs:

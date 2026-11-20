@@ -1643,6 +1643,54 @@ def test_two_col_3dot_order_diagram_circle_rejection_rubric_banner_rescue_and_sp
     assert any("48" in t for t in p1_furn_txts)
 
 
+def test_strip_prepress_marks_echoed_running_h1_and_indesign_footer_blocks():
+    """Verifies 22a: prepress crop/section marks, echoed running H1s, and .indb/.indd footers are stripped."""
+    raw_doc = (
+        "((10))\n\n"
+        "# 2 Thermodynamik\n\n"
+        "Einführung in die Zustandsgrößen idealer Gase.\n\n"
+        "---\n"
+        "**Page Number:** 10\n"
+        "**Date:** 14.10.2025\n"
+        "**Time:** 09:42:15\n"
+        "**Document ID:** Lehrbuch_Gesamt_Druck.indb\n\n"
+        "((11))\n\n"
+        "Der Druck steigt proportional zur Temperatur bei konstantem Volumen.\n\n"
+        "Document ID: Kapitel_02_Einzeln.indd\n\n"
+        "((12))\n\n"
+        "#### 2 Abschnittsmarke\n\n"
+        "# Thermodynamik\n\n"
+        "## 2.1 Spezifische Wärmekapazität\n\n"
+        "Schnittmarken Passkreuze Farbkontrollstreifen\n\n"
+        "Die aufgenommene Wärme hängt vom Stoff und der Masse ab.\n"
+    )
+    cleaned = clean_running_headers_and_footers(raw_doc)
+    recovered = recover_text_truncation(cleaned)
+
+    assert "Abschnittsmarke" not in recovered
+    assert "Schnittmarken" not in recovered
+    assert "Farbkontrollstreifen" not in recovered
+    assert ".indb" not in recovered
+    assert ".indd" not in recovered
+    assert "Page Number" not in recovered
+    assert "Document ID" not in recovered
+    assert "# 2 Thermodynamik" in recovered
+    assert "\n# Thermodynamik\n" not in recovered
+    assert "## 2.1 Spezifische Wärmekapazität" in recovered
+
+    fused = fuse_vlm_page_with_docling(
+        "#### Abschnittsmarkierung\n\n## 3.2 Elektrische Felder\n\nFeldlinien verlaufen von Plus nach Minus.\n\n"
+        "---\n**Page Numbers:** 34\n**Date:** 02.11.2025\n**Time:** 16:05\n**Document ID:** Teilband_B.indb",
+        page_images=[],
+        phys_num=34,
+    )
+    assert "Abschnittsmarkierung" not in fused
+    assert "Teilband_B.indb" not in fused
+    assert "Page Numbers" not in fused
+    assert "Feldlinien verlaufen von Plus nach Minus." in fused
+
+
+
 
 
 

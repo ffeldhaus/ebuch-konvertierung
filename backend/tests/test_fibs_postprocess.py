@@ -625,6 +625,97 @@ def test_vlm_caption_echo_strip_rubric_banners_duplicate_headings_and_panel_pair
     assert "Wie verändert sich die Konzentration" in out
 
 
+def test_post_process_strips_prepress_and_indesign_outside_bild_and_tabelle():
+    """Verifies 22a in post_process_structure while protecting <Bild> and <Tabelle> blocks."""
+    md_in = (
+        "((20))\n\n"
+        "# 3 Zellatmung\n\n"
+        "Zellen gewinnen Energie durch den schrittweisen Abbau organischer Stoffe.\n\n"
+        "---\n"
+        "**Page Number:** 20\n"
+        "**Date:** 19.11.2025\n"
+        "**Time:** 08:15:30\n"
+        "**Document ID:** Biologie_Band2.indb\n\n"
+        "((22))\n\n"
+        "#### 3 Abschnittsmarke\n\n"
+        "# Zellatmung\n\n"
+        "## 3.1 Glykolyse im Überblick\n\n"
+        "<Bild> Grafik:\n"
+        "Beschreibung mit Bildtext: Schema mit Abschnittsmarkierung A und B.\n"
+        "</Bild>\n\n"
+        "Document ID: Kapitel_03.indd\n"
+    )
+    out = post_process_structure(md_in)
+    assert "#### 3 Abschnittsmarke" not in out
+    assert "\n# Zellatmung\n" not in out
+    assert "# 3 Zellatmung" in out
+    assert "## 3.1 Glykolyse im Überblick" in out
+    assert "Biologie_Band2.indb" not in out
+    assert "Kapitel_03.indd" not in out
+    assert "Page Number" not in out
+    assert "Schema mit Abschnittsmarkierung A und B." in out
+
+
+def test_lift_trailing_task_difficulty_tags_and_strip_stray_prose_tags():
+    """Verifies 22b: sentence-trailing difficulty tags lift under ##### <Nr> and stray prose tags strip."""
+    # 1. Generic FIBS mode (without custom_rules): trailing [schwierig] / [mittel] lifted under ##### <Nr>
+    md_generic = (
+        "((30))\n\n"
+        "##### Aufgaben\n\n"
+        "##### 1\n\n"
+        "Beschreiben Sie den Aufbau einer Pflanzenzelle. [einfach]\n\n"
+        "##### 2\n\n"
+        "a)\tNennen Sie zwei Zellorganellen.\n"
+        "b)\tBegründen Sie deren Funktion im Stoffwechsel [schwierig].\n\n"
+        "<Bild> Diagramm:\n"
+        "Beschreibung: Balkenvergleich für Gruppe A [mittel].\n"
+        "</Bild>\n"
+    )
+    out_generic = post_process_structure(md_generic)
+    assert "##### 1\n[einfach]\n\nBeschreiben Sie den Aufbau einer Pflanzenzelle." in out_generic
+    assert (
+        "##### 2\n[schwierig]\n\na)\tNennen Sie zwei Zellorganellen.\n"
+        "b)\tBegründen Sie deren Funktion im Stoffwechsel."
+    ) in out_generic
+    assert "Balkenvergleich für Gruppe A [mittel]." in out_generic
+
+    # 2. Buchkonferenz point_difficulty_map active: [leicht]/[schwer] normalized and stray prose [mittel] rescued/stripped
+    bk_rules = (
+        "##### Überschrift 5: Aufgabennummern\n"
+        "Sonstiges:\n"
+        "- Schwierigkeitsgrade bei Aufgaben:\n"
+        "  1 Punkt: [einfach]\n"
+        "  2 Punkte: [mittel]\n"
+        "  3 Punkte: [schwierig]\n"
+    )
+    md_bk = (
+        "((31))\n\n"
+        "Die Messreihe zeigt eine deutliche Zunahme der Reaktionsrate bei Erwärmung. [mittel]\n\n"
+        "##### 1\n\n"
+        "Werten Sie die dargestellte Messreihe quantitativ aus.\n\n"
+        "##### 2\n\n"
+        "Formulieren Sie eine kurze Definition der Aktivierungsenergie. [leicht]\n\n"
+        "((32))\n\n"
+        "Einleitender Sachtext zur Katalyse im Laborversuch. [mittel]\n\n"
+        "##### 1\n[einfach]\n\n"
+        "Benennen Sie die verwendeten Reagenzien.\n\n"
+        "##### 2\n\n"
+        "Diskutieren Sie mögliche Fehlerquellen der Messung. [schwer]\n"
+    )
+    out_bk = post_process_structure(md_bk, custom_rules=bk_rules)
+    assert "bei Erwärmung. [mittel]" not in out_bk
+    assert "Die Messreihe zeigt eine deutliche Zunahme der Reaktionsrate bei Erwärmung." in out_bk
+    assert "##### 1\n[mittel]\n\nWerten Sie die dargestellte Messreihe quantitativ aus." in out_bk
+    assert (
+        "##### 2\n[einfach]\n\nFormulieren Sie eine kurze Definition der Aktivierungsenergie."
+        in out_bk
+    )
+    assert "im Laborversuch. [mittel]" not in out_bk
+    assert "Einleitender Sachtext zur Katalyse im Laborversuch." in out_bk
+    assert "##### 2\n[schwierig]\n\nDiskutieren Sie mögliche Fehlerquellen der Messung." in out_bk
+
+
+
 
 
 

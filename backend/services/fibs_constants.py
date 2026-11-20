@@ -69,6 +69,36 @@ SPLIT_HEADING_EXCLUDED_PREFIX_RE: Final[re.Pattern[str]] = re.compile(
 POINT_DIFFICULTY_TAG_RE: Final[re.Pattern[str]] = re.compile(
     r"\[([123])\s*Punkte?\]", re.IGNORECASE
 )
+H5_TASK_NUMBER_HEADING_RE: Final[re.Pattern[str]] = re.compile(
+    r"^#####[ \t]+(?!Aufgaben\b)([A-LN-Z]?\d+(?:\.\d+)*[a-z]?)[ \t]*$"
+)
+STANDALONE_DIFFICULTY_LINE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:[○◐●□◩■◇◈◆★☆]+[ \t]*)?\[(?:einfach|leicht|mittel|schwierig|schwer)\](?:[ \t]+\[[^\]]+\])*$",
+    re.IGNORECASE,
+)
+TRAILING_DIFFICULTY_TAG_RE: Final[re.Pattern[str]] = re.compile(
+    r"[ \t]+(\[(?:einfach|leicht|mittel|schwierig|schwer)\])([.,;:!?])?[ \t]*$",
+    re.IGNORECASE,
+)
+PREPRESS_MARK_LINE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]+)?[^\n]*\b(?:Abschnittsmark\w*|Schnittmarken?|"
+    r"Passkreuze?|Falzmarken?|Druckkontrollstreifen|Farbkontrollstreifen)\b[^\n]*$",
+    re.IGNORECASE,
+)
+INDESIGN_FOOTER_BLOCK_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:^[ \t]*---[ \t]*\n+)?"
+    r"(?:^[ \t]*(?:[-*•][ \t]+)?(?:\*\*|_)*(?:Page[ \t]+Numbers?|Date|Time):?(?:\*\*|_)*:?[ \t]*"
+    r"(?:\d{1,4}(?:[–-]\d{1,4})?|\d{2}\.\d{2}\.\d{4}|\d{2}:\d{2}(?::\d{2})?(?:[ \t]*Uhr)?)[ \t]*\n+)*"
+    r"^[ \t]*(?:[-*•][ \t]+)?(?:"
+    r"(?:(?:\*\*|_)*(?:Page[ \t]+Numbers?|Date|Time):?(?:\*\*|_)*:?[ \t]*[^|\n]+[ \t]*\|?[ \t]*)*"
+    r"(?:\*\*|_)*Document[ \t]+ID:?(?:\*\*|_)*:?[ \t]*[^\n]*?\.ind[bd](?![A-Za-z0-9])[^\n]*"
+    r"|[^\s#<>]+\.ind[bd](?![A-Za-z0-9])"
+    r"(?:[ \t]+(?:\d{1,4}(?:[–-]\d{1,4})?|\d{2}\.\d{2}\.\d{4}|\d{2}:\d{2}(?::\d{2})?(?:[ \t]*Uhr)?|©[^\n]*))*[ \t]*"
+    r")$"
+    r"(?:\n+[ \t]*(?:[-*•][ \t]+)?(?:\*\*|_)*(?:Page[ \t]+Numbers?|Date|Time):?(?:\*\*|_)*:?[ \t]*"
+    r"(?:\d{1,4}(?:[–-]\d{1,4})?|\d{2}\.\d{2}\.\d{4}|\d{2}:\d{2}(?::\d{2})?(?:[ \t]*Uhr)?)[ \t]*)*",
+    re.IGNORECASE | re.MULTILINE,
+)
 DOT_BULLET_RUN_RE: Final[re.Pattern[str]] = re.compile(r"[•●○◦∙⋅]{2,3}")
 ECHO_WORD_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[a-zäöüß0-9]{2,}")
 DIDACTIC_RUBRIC_BANNER_RE: Final[re.Pattern[str]] = re.compile(

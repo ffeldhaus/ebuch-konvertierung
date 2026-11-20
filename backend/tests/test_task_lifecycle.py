@@ -384,3 +384,118 @@ def test_gpu_semaphore_queues_concurrent_jobs_sequentially():
         assert t2.status == "completed"
 
     asyncio.run(scenario())
+
+
+def test_extract_persists_meta_and_chains_standardisation_on_disconnect(
+    lifespan_client, tmp_path, monkeypatch
+):
+    """Verifies /api/extract persists task_info.json and chains Stage 2+3 when chain_standardise=true."""
+    import backend.main as main_mod
+    from backend.main import task_manager
+
+    out_dir = tmp_path / "assets" / "output"
+    up_dir = tmp_path / "assets" / "uploads"
+    out_dir.mkdir(parents=True)
+    up_dir.mkdir(parents=True)
+    monkeypatch.setattr(tm, "_project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", str(out_dir))
+    monkeypatch.setattr(main_mod, "UPLOAD_DIR", str(up_dir))
+    monkeypatch.setattr("backend.services.llm_service.start_rapid_mlx", lambda: None)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    async def fake_extraction(*, task, **_kwargs):
+        raw_md = "((1))\n\n# 1 Mechanik\n\nEin **wichtiger** Merksatz zur Bewegung."
+        task["raw_markdown"] = raw_md
+        task["images"] = []
+        task["status"] = "completed"
+        task["progress"] = {
+            "percent": 25,
+            "current": 1,
+            "total": 1,
+            "unit": "Seiten",
+            "phase": "Extraktion abgeschlossen",
+        }
+        task["logs"].append("Mock-Extraktion beendet.")
+        completed_line = json.dumps(
+            {
+                "status": "completed",
+                "markdown": raw_md,
+                "image_count": 0,
+                "progress_percent": 25,
+            }
+        ) + "\n"
+        for q in list(task["listeners"]):
+            await q.put(completed_line)
+            await q.put(None)
+
+    monkeypatch.setattr(main_mod, "run_background_extraction", fake_extraction)
+
+    # 1. Standalone /api/extract (chain_standardise=False default) persists completed status to task_info.json
+    standalone_id = "test-extract-standalone"
+    src_file = up_dir / f"{standalone_id}.txt"
+    src_file.write_text("Beispiel", encoding="utf-8")
+    t_standalone = Task(
+        task_id=standalone_id,
+        original_name="probe.txt",
+        input_path=str(src_file),
+        extension=".txt",
+        status="pending",
+    )
+    task_manager._tasks[standalone_id] = t_standalone
+    try:
+        with lifespan_client.stream(
+            "POST", "/api/extract", data={"task_id": standalone_id}
+        ) as res:
+            assert res.status_code == 200
+            events = [json.loads(ln) for ln in res.iter_lines() if ln.strip()]
+        assert events[-1]["status"] == "completed"
+        meta_file = out_dir / standalone_id / "task_info.json"
+        assert meta_file.exists()
+        saved_meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        assert saved_meta["status"] == "completed"
+        assert "Mock-Extraktion beendet." in saved_meta["logs_tail"]
+        assert t_standalone.standardised_markdown is None
+    finally:
+        task_manager._tasks.pop(standalone_id, None)
+
+    # 2. Chained /api/extract (chain_standardise=true) runs Stage 2+3 server-side without client calling /api/standardise
+    chained_id = "test-extract-chained"
+    src_file2 = up_dir / f"{chained_id}.txt"
+    src_file2.write_text("Beispiel", encoding="utf-8")
+    t_chained = Task(
+        task_id=chained_id,
+        original_name="kapitel.txt",
+        input_path=str(src_file2),
+        extension=".txt",
+        status="pending",
+    )
+    task_manager._tasks[chained_id] = t_chained
+    try:
+        with lifespan_client.stream(
+            "POST",
+            "/api/extract",
+            data={
+                "task_id": chained_id,
+                "ruleset": "uebertragungsregeln_09_2025",
+                "chain_standardise": "true",
+            },
+        ) as res:
+            assert res.status_code == 200
+            ext_events = [json.loads(ln) for ln in res.iter_lines() if ln.strip()]
+        assert ext_events[-1]["status"] == "completed"
+
+        # Client never calls /api/standardise (simulates sleep/disconnect); attach to /stream to await completion
+        with lifespan_client.stream("GET", f"/api/tasks/{chained_id}/stream") as stream:
+            std_events = [json.loads(ln) for ln in stream.iter_lines() if ln.strip()]
+        assert std_events[-1]["status"] == "completed"
+        assert std_events[-1].get("stage") == "standardisation"
+        assert "_wichtiger_" in (t_chained.standardised_markdown or "")
+        assert (out_dir / chained_id / "standardise_request.json").exists()
+        chained_meta = json.loads(
+            (out_dir / chained_id / "task_info.json").read_text(encoding="utf-8")
+        )
+        assert chained_meta["status"] == "completed"
+        assert not tm.sleep_assertion_active()
+    finally:
+        task_manager._tasks.pop(chained_id, None)
+
