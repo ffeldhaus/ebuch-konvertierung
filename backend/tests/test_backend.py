@@ -2032,6 +2032,29 @@ def test_docx_primed_subscripts_and_multiplication_asterisks_not_bold(tmp_path):
     assert "2,8 *10^3 *15 *10^3" in all_text
 
 
+def test_to_state_dict_refreshes_standardised_markdown_from_disk_even_when_raw_cached(tmp_path):
+    """Ensure completed tasks re-read updated *_standardised.md from disk when raw_markdown is cached in RAM."""
+    import uuid
 
+    from backend.services.task_manager import Task
 
+    tid = f"sync-{uuid.uuid4().hex[:8]}"
+    task_dir = tmp_path / tid
+    task_dir.mkdir(parents=True)
+    std_path = task_dir / f"{tid}_standardised.md"
+    std_path.write_text("#### M2 Drehmoment M =rF oder M =r_a F cos ~h", encoding="utf-8")
+
+    task = Task(
+        task_id=tid,
+        original_name="sample.pdf",
+        input_path=str(tmp_path / "sample.pdf"),
+        extension=".pdf",
+    )
+    task.status = "completed"
+    task.raw_markdown = "((78))\n\nRaw cached in memory"
+    task.standardised_markdown = "#### M2 Drehmoment M = rF oder _M = r_a F \\cos ~q"
+
+    state = task.to_state_dict(output_dir=str(tmp_path))
+    assert state["standardised_markdown"] == "#### M2 Drehmoment M =rF oder M =r_a F cos ~h"
+    assert task.standardised_markdown == "#### M2 Drehmoment M =rF oder M =r_a F cos ~h"
 

@@ -288,34 +288,38 @@ class Task:
 
     def to_state_dict(self, output_dir: str | None = None, sibling_tasks: list[Any] | None = None) -> dict:
         """Return full state dict for task reattach endpoint."""
-        raw_md = self.raw_markdown
-        if not raw_md:
-            import glob
-            import os
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            out_root = output_dir or os.path.join(base_dir, "assets", "output")
-            task_out_dir = os.path.join(out_root, self.task_id)
-            if os.path.exists(task_out_dir):
-                md_files = glob.glob(os.path.join(task_out_dir, "**", "*.md"), recursive=True)
-                for f in md_files:
-                    if not f.endswith("_standardised.md") and not f.endswith("ground_truth.md"):
-                        try:
-                            with open(f, encoding="utf-8") as mdf:
-                                content = mdf.read()
-                                if content:
-                                    raw_md = content
-                                    self.raw_markdown = content
-                                    break
-                        except Exception:
-                            pass
+        import glob
+        import os
 
-                std_file = os.path.join(task_out_dir, f"{self.task_id}_standardised.md")
-                if os.path.exists(std_file):
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        out_root = output_dir or os.path.join(base_dir, "assets", "output")
+        task_out_dir = os.path.join(out_root, self.task_id)
+
+        raw_md = self.raw_markdown
+        if not raw_md and os.path.exists(task_out_dir):
+            md_files = glob.glob(os.path.join(task_out_dir, "**", "*.md"), recursive=True)
+            for f in md_files:
+                if not f.endswith("_standardised.md") and not f.endswith("ground_truth.md"):
                     try:
-                        with open(std_file, encoding="utf-8") as sf:
-                            self.standardised_markdown = sf.read()
+                        with open(f, encoding="utf-8") as mdf:
+                            content = mdf.read()
+                            if content:
+                                raw_md = content
+                                self.raw_markdown = content
+                                break
                     except Exception:
                         pass
+
+        if self.status not in ("processing", "queued") or not self.standardised_markdown:
+            std_file = os.path.join(task_out_dir, f"{self.task_id}_standardised.md")
+            if os.path.exists(std_file):
+                try:
+                    with open(std_file, encoding="utf-8") as sf:
+                        disk_std = sf.read()
+                    if disk_std:
+                        self.standardised_markdown = disk_std
+                except Exception:
+                    pass
 
         def _sanitize(txt):
             if not txt:

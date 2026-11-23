@@ -2212,20 +2212,28 @@ async def export_document(request: ExportRequest):
         raise HTTPException(status_code=404, detail="Task not found.")
 
     try:
-        output_docx = os.path.join(OUTPUT_DIR, request.task_id, "ebuch_output.docx")
+        task_dir = os.path.join(OUTPUT_DIR, request.task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        output_docx = os.path.join(task_dir, "ebuch_output.docx")
+        std_md_path = os.path.join(task_dir, f"{request.task_id}_standardised.md")
         template_path = _resolve_task_docx_template_path(
             request.task_id, request.template_mode or "default"
         )
         doc_meta = _build_task_doc_metadata(task, request.markdown)
 
-        await asyncio.to_thread(
-            convert_markdown_to_docx,
-            request.markdown,
-            output_docx,
-            template_path,
-            doc_meta,
-        )
+        def _export_and_sync_md() -> None:
+            convert_markdown_to_docx(
+                request.markdown,
+                output_docx,
+                template_path,
+                doc_meta,
+            )
+            with open(std_md_path, "w", encoding="utf-8") as sf:
+                sf.write(request.markdown)
 
+        await asyncio.to_thread(_export_and_sync_md)
+
+        task.standardised_markdown = request.markdown
         task.output_path = output_docx
 
         return {
