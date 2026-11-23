@@ -91,7 +91,7 @@ c) 105, 215, 335, 465, _..._, _..._ (Regel: + 110, + 120, + 130, ...)
 _Merksatz: Sachaufgaben in 3 Schritten lösen (Frage – Rechnung – Antwort)_
 -	1. Schritt (Frage & Angaben): Lies den Text genau und unterstreiche alle wichtigen Zahlen.
 -	2. Schritt (Rechnung): Zerlege schwierige Aufgaben in Teilrechnungen (z. B. Kinder und Erwachsene getrennt berechnen) und addiere anschließend die Teilergebnisse.
--	3. Schritt (Antwort & Überschlag): Prüfe dein Ergebnis mit einem Überschlag (100 · 4 Euro = 400 Euro) und schreibe einen vollständigen Antwortsatz mit der passenden Einheit.
+-	3. Schritt (Antwort & Überschlag): Prüfe dein Ergebnis mit einem Überschlag (100 * 4 Euro = 400 Euro) und schreibe einen vollständigen Antwortsatz mit der passenden Einheit.
 -	Zusatzfrage für Schnelle: Für die Busfahrt bezahlt die Schule pauschal 260 Euro. Wie viel kostet der Ausflug insgesamt mit Busfahrt? Rechnung: 440 Euro + 260 Euro = _..._ Euro.
 </Rahmen>
 
