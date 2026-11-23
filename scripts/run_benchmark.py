@@ -148,12 +148,30 @@ def _extract_bare_fibs_formulas(md_text: str) -> list[str]:
     cleaned = re.sub(r"```[\s\S]*?```|`[^`\n]*`|https?://\S+", " ", md_text)
     cleaned = re.sub(r"(?m)^[ \t]*(?:-\t)?\^\d+:.*$", "", cleaned)
     cleaned = re.sub(r"[A-Za-zäöüÄÖÜß]{4,}\^\d+\b", " ", cleaned)
+    # Strip FIBS bold/emphasis wrappers (_Wort_) so underscores do not mimic subscripts (e.g. _UND_-Verknüpfung).
+    cleaned = re.sub(
+        r"(?<![A-Za-z0-9_])_([A-Za-zÄÖÜäöüß0-9][^\n_]*?[A-Za-zÄÖÜäöüß0-9])_(?![A-Za-z0-9_])",
+        r"\1",
+        cleaned,
+    )
     found: list[str] = []
     for line in cleaned.splitlines():
-        for m in _BARE_FIBS_EXPR_CAND_RE.finditer(line):
-            cand = m.group(0).strip(" .,;:")
-            if cand and _BARE_FIBS_MATH_SIGNAL_RE.search(cand):
-                found.append(cand)
+        if re.match(r"^\s*\|.*\|\s*$", line):
+            if re.match(r"^\s*\|[\s:\-|]+\|\s*$", line):
+                continue
+            inner = line.strip()[1:-1]
+            segments = (
+                re.split(r"[ \t]+\|(?=[ \t]+)", inner)
+                if " | " in inner
+                else re.split(r"(?<!\()[ \t]*\|[ \t]*(?!\d+\))", inner)
+            )
+        else:
+            segments = [line]
+        for seg in segments:
+            for m in _BARE_FIBS_EXPR_CAND_RE.finditer(seg):
+                cand = m.group(0).strip(" .,;:")
+                if cand and _BARE_FIBS_MATH_SIGNAL_RE.search(cand):
+                    found.append(cand)
     return found
 
 
@@ -1996,6 +2014,7 @@ def run_comprehensive_benchmark(
                     checkpoint_file=checkpoint_file,
                     has_external_docs=has_external_docs,
                     skip_standardisation=skip_standardisation,
+                    external_data_dir=external_data_dir,
                 )
 
         # Final snapshot
@@ -2011,6 +2030,7 @@ def run_comprehensive_benchmark(
             checkpoint_file=checkpoint_file,
             has_external_docs=has_external_docs,
             skip_standardisation=skip_standardisation,
+            external_data_dir=external_data_dir,
         )
 
         check_recent_crash_reports(start_bench_time)
@@ -2158,6 +2178,7 @@ def save_benchmark_snapshot(
     checkpoint_file: str | None = None,
     has_external_docs: bool = False,
     skip_standardisation: bool = False,
+    external_data_dir: str | None = None,
 ) -> dict[str, Any]:
     """Persists intermediate or final benchmark results to disk (run_{run_id}.json) and updates LEADERBOARD.md."""
     def compute_summary_for_docs(doc_filter_fn, label_suffix: str = "") -> list[dict[str, Any]]:
@@ -2326,8 +2347,11 @@ def save_benchmark_snapshot(
 
     if update_md and (summary_digital or summary_scanned):
         ext_runs_dir = out_runs_dir if has_external_docs else None
-        if not ext_runs_dir:
-            ext_data_root = resolve_external_data_dir()
+        is_default_repo_lb = os.path.abspath(LEADERBOARD_PATH) == os.path.abspath(
+            os.path.join(PROJECT_ROOT, "benchmarks", "LEADERBOARD.md")
+        )
+        if not ext_runs_dir and (external_data_dir is not None or is_default_repo_lb):
+            ext_data_root = resolve_external_data_dir(external_data_dir)
             if ext_data_root and os.path.isdir(ext_data_root):
                 ext_runs_dir = os.path.join(ext_data_root, "benchmarks", "runs")
                 os.makedirs(ext_runs_dir, exist_ok=True)
@@ -2481,7 +2505,10 @@ def _load_latest_runs_by_tier(
     """
     tiers: dict[str, dict[str, Any]] = {}
     search_dirs = [RUNS_DIR]
-    ext_dir = resolve_external_data_dir()
+    is_default_runs_dir = os.path.abspath(RUNS_DIR) == os.path.abspath(
+        os.path.join(PROJECT_ROOT, "benchmarks", "runs")
+    )
+    ext_dir = resolve_external_data_dir() if is_default_runs_dir else None
     if ext_dir:
         ext_rdir = os.path.join(ext_dir, "benchmarks", "runs")
         if os.path.isdir(ext_rdir) and ext_rdir not in search_dirs:

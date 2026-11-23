@@ -384,5 +384,67 @@ def test_decoupled_ocr_and_gemma_benchmark_modes(tmp_path, monkeypatch):
     assert judge_calls == ["uebertragungsregeln_09_2025"]
 
 
+def test_evaluate_formulas_splits_pipe_tables_and_ignores_fibs_bold_emphasis():
+    """Verify pipe-table cells are evaluated individually and bold _Wort_ markup does not trigger fake subscripts."""
+    from scripts.run_benchmark import _extract_bare_fibs_formulas
+
+    gold_md = (
+        "<Tabelle>\n"
+        "Symbol\tBedeutung\tWert\n"
+        "c\tLichtgeschwindigkeit\t2.9979 \\times 10^8 m/s\n"
+        "n_{Glas}\tKronglas\t1.51 - 1.54\n"
+        "Wendepunkt W\tx_W = 2,00\tW(2|1)\n"
+        "</Tabelle>\n\n"
+        "Erkläre die _UND_-Verknüpfung für d_{rechts} > d_{links}.\n"
+    )
+    pred_md = (
+        "| Symbol | Bedeutung | Wert |\n"
+        "| --- | --- | --- |\n"
+        "| c | Lichtgeschwindigkeit | 2.9979 \\times 10^8 m/s |\n"
+        "| n_{Glas} | Kronglas | 1.51 - 1.54 |\n"
+        "| Wendepunkt W | x_W =2,00 | W(2|1) |\n\n"
+        "Erkläre die _UND_-Verknüpfung für d_{rechts} > d_{links}.\n"
+    )
+    res = evaluate_formulas(pred_md, gold_md)
+    assert res["score"] == 100.0
+    assert res["gold_count"] == res["pred_count"]
+
+    extracted = _extract_bare_fibs_formulas(pred_md)
+    assert any("d_{rechts}" in item for item in extracted)
+    assert not any("_UND_" in item or "D_-" in item for item in extracted)
+
+
+def test_redirected_benchmark_run_never_touches_default_external_leaderboard(tmp_path, monkeypatch):
+    """Ensure tests redirecting RUNS_DIR/LEADERBOARD_PATH never overwrite companion repo LEADERBOARD.md."""
+    from scripts import run_benchmark as rb
+
+    fake_ext = tmp_path / "fake_ext"
+    (fake_ext / "benchmarks" / "runs").mkdir(parents=True)
+    ext_lb = fake_ext / "benchmarks" / "LEADERBOARD.md"
+    ext_lb.write_text("ORIGINAL_EXTERNAL_LEADERBOARD", encoding="utf-8")
+
+    monkeypatch.setattr(rb, "DEFAULT_EXTERNAL_DATA_DIR", str(fake_ext))
+    monkeypatch.setattr(rb, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(rb, "LEADERBOARD_PATH", str(tmp_path / "LEADERBOARD.md"))
+    monkeypatch.setattr(
+        rb,
+        "run_docling_extraction",
+        lambda pdf_path, output_dir, task=None, in_process=False: (
+            "((45))\n\n# Kapitel\n\nText.\n",
+            0.2,
+        ),
+    )
+
+    run_comprehensive_benchmark(
+        engines=["docling"],
+        datasets=["test_educational.pdf"],
+        skip_standardisation=True,
+    )
+
+    assert ext_lb.read_text(encoding="utf-8") == "ORIGINAL_EXTERNAL_LEADERBOARD"
+    assert (tmp_path / "LEADERBOARD.md").exists()
+
+
+
 
 

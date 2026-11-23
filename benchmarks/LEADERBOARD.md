@@ -12,7 +12,7 @@ Evaluations are performed against **Golden Ground Truth** references using both 
 
 | Benchmark Tier | Pipeline Scope | Latest Run | Docs (`N`) | Best Engine | Raw Score | FIBS 09/2025 Score | `<Bild>` | `<Rahmen>` | Page `((N))` | Speed (s/p) |
 | :--- | :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| ⚡ **Tier 1: Fast Regression** (`--mode fast`) | Docling + Deterministic FIBS (`open_all`) | `20261123_215430` | **19** | **docling** | 87.0/100 | **95.7/100** | 97.2% | 95.6% | 100.0% | 1.5 s |
+| ⚡ **Tier 1: Fast Regression** (`--mode fast`) | Docling + Deterministic FIBS (`open_all`) | `20261123_222834` | **19** | **docling** | 87.0/100 | **96.7/100** | 97.2% | 95.6% | 100.0% | 6.55 s |
 | 🧪 **Tier 2: Multi-Engine + Gemma Smoke** (`--mode smoke`) | All 3 OCR Engines + Gemma 4 12B (Smoke Subset) | `20261020_224457` | **2** | **lightonocr** | 96.1/100 | **97.7/100** | 100.0% | 98.0% | 100.0% | 18.22 s |
 | 🏛️ **Tier 3: Comprehensive Open Suite** (`core` / `open_all`) | All 3 OCR Engines + Gemma 4 12B (Open Textbooks) | `20261120_091049` | **19** | **docling** | 90.2/100 | **90.7/100** | 96.7% | 85.8% | 100.0% | 1.18 s |
 | 🔒 **Tier 4: Extended Publisher Suite** (`--mode full`) | All 3 OCR Engines + Gemma 4 12B (Open + Publisher Corpus) | `20261105_212319` | **10** | **lightonocr** | 87.2/100 | **91.0/100** | 94.5% | 76.4% | 96.3% | 59.43 s |
@@ -29,7 +29,7 @@ Evaluations are performed against **Golden Ground Truth** references using both 
 ### 📄 Digital Native PDFs
 | Rank | Extraction Engine | Docs (`N`) | Source | Score | Recall (15%) | Flow (10%) | Judge (20%) | Tables (15%) | Formulas (15%) | Headings (10%) | `<Bild>` (10%) | A11y (5%) | `<Rahmen>` | Page `((N))` | DOCX BM | Speed (s/p) |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **#1** | 🚀 **Docling** (IBM Research v2.151.1) | 19 | `📄 Digital` | **90.2/100** | 98.6% | 97.4% | 92.8% | 99.5% | 77.6% | 93.1% | 91.7% | 36.8% | 100.0% | 100.0% | 100.0% | **1.18 s** |
+| **#1** | 🚀 **Docling** (IBM Research v2.152.0) | 19 | `📄 Digital` | **90.2/100** | 98.6% | 97.4% | 92.8% | 99.5% | 77.6% | 93.1% | 91.7% | 36.8% | 100.0% | 100.0% | 100.0% | **1.18 s** |
 | **#2** | 🔥 **LightOnOCR-3-0.8B** (LightOn AI v0.7.2) | 6 | `📄 Digital` | **84.5/100** | 97.9% | 97.5% | 87.2% | 100.0% | 68.2% | 82.1% | 85.2% | 21.7% | 100.0% | 100.0% | 100.0% | **14.97 s** |
 
 
@@ -42,7 +42,7 @@ Evaluations are performed against **Golden Ground Truth** references using both 
 ### 📄 Digital Native PDFs
 | Rank | Extraction Engine | Docs (`N`) | Source | Score | Recall (15%) | Flow (10%) | Judge (18%) | Tables (12%) | Formulas (12%) | Headings (10%) | `<Bild>` (10%) | A11y (5%) | `<Rahmen>` (8%) | Page `((N))` | DOCX BM | Improvement |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **#1** | 🚀 **Docling** (IBM Research v2.151.1) | 19 | `📄 Digital` | **90.7/100** | 98.1% | 96.8% | 89.0% | 74.9% | 86.4% | 82.4% | 96.7% | 98.9% | 85.8% | 100.0% | 100.0% | **+0.5 pts** |
+| **#1** | 🚀 **Docling** (IBM Research v2.152.0) | 19 | `📄 Digital` | **90.7/100** | 98.1% | 96.8% | 89.0% | 74.9% | 86.4% | 82.4% | 96.7% | 98.9% | 85.8% | 100.0% | 100.0% | **+0.5 pts** |
 | **#2** | 🔥 **LightOnOCR-3-0.8B** (LightOn AI v0.7.2) | 6 | `📄 Digital` | **89.7/100** | 98.8% | 97.2% | 87.5% | 85.4% | 84.5% | 69.5% | 96.2% | 100.0% | 80.7% | 100.0% | 100.0% | **+5.2 pts** |
 
 
@@ -50,16 +50,16 @@ Evaluations are performed against **Golden Ground Truth** references using both 
 
 ## ⚡ 3. Fast Regression (`--mode fast`) & Multi-Engine Smoke (`--mode smoke`) Standings
 
-### ⚡ Latest Fast Regression Run (`20261123_215430` – 2026-11-23 21:54:30, Deterministic FIBS Post-Process)
+### ⚡ Latest Fast Regression Run (`20261123_222834` – 2026-11-23 22:28:34, Deterministic FIBS Post-Process)
 | Rank | Extraction Engine | Docs (`N`) | Source | Score | Recall (15%) | Flow (10%) | Judge (18%) | Tables (12%) | Formulas (12%) | Headings (10%) | `<Bild>` (10%) | A11y (5%) | `<Rahmen>` (8%) | Page `((N))` | DOCX BM | Improvement |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **#1** | 🚀 **Docling** (IBM Research v2.151.1) | 19 | `📄 Digital` | **95.7/100** | 97.9% | 96.3% | 95.2% | 99.1% | 81.4% | 94.5% | 97.2% | 98.8% | 95.6% | 100.0% | 98.2% | **+8.7 pts** |
+| **#1** | 🚀 **Docling** (IBM Research v2.152.0) | 19 | `📄 Digital` | **96.7/100** | 97.9% | 96.3% | 96.2% | 99.1% | 94.6% | 94.5% | 97.2% | 98.8% | 95.6% | 100.0% | 98.2% | **+9.7 pts** |
 
 ### 🧪 Latest Multi-Engine + Gemma Smoke Run (`20261020_224457` – 2026-10-20 22:44:57)
 | Rank | Extraction Engine | Docs (`N`) | Source | Score | Recall (15%) | Flow (10%) | Judge (18%) | Tables (12%) | Formulas (12%) | Headings (10%) | `<Bild>` (10%) | A11y (5%) | `<Rahmen>` (8%) | Page `((N))` | DOCX BM | Improvement |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **#1** | 🔥 **LightOnOCR-3-0.8B** (LightOn AI v0.7.2) | 2 | `📄 Digital` | **97.7/100** | 98.5% | 94.6% | 97.3% | 98.9% | 101.4% | 91.3% | 100.0% | 99.0% | 98.0% | 100.0% | 100.0% | **+1.6 pts** |
-| **#2** | 🚀 **Docling** (IBM Research v2.151.1) | 2 | `📄 Digital` | **97.4/100** | 98.5% | 95.5% | 97.1% | 97.8% | 96.4% | 94.7% | 100.0% | 100.0% | 98.0% | 100.0% | 100.0% | **+1.4 pts** |
+| **#2** | 🚀 **Docling** (IBM Research v2.152.0) | 2 | `📄 Digital` | **97.4/100** | 98.5% | 95.5% | 97.1% | 97.8% | 96.4% | 94.7% | 100.0% | 100.0% | 98.0% | 100.0% | 100.0% | **+1.4 pts** |
 | **#3** | ⚡ **Infinity-Parser2-Flash** (INF Tech v0.7.2) | 2 | `📄 Digital` | **81.6/100** | 98.5% | 84.2% | 76.2% | 50.0% | 101.4% | 91.5% | 100.0% | 99.0% | 30.1% | 100.0% | 100.0% | **-4.9 pts** |
 
 
@@ -69,15 +69,15 @@ Evaluations are performed against **Golden Ground Truth** references using both 
 
 *Breaks down quality across textbook types and page geometries (DIN A4, B5+, B5-Breitformat, Querformat/Doppelseite `((N)) / ((N+1))`, and University STEM).*
 
-*Source Run: `20261123_215430` (2026-11-23 21:54:30)*
+*Source Run: `20261123_222834` (2026-11-23 22:28:34)*
 
 | Textbook Category / Format | Engine | Docs (`N`) | Raw Score | FIBS 09/2025 Score | Recall | Headings | Formulas | Tables | `<Bild>` | `<Rahmen>` | Page `((N))` | A11y |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Core Baseline (4)** | `docling` | 4 | 93.6/100 | **97.1/100** | 99.2% | 96.7% | 78.5% | 97.5% | 100.0% | 99.2% | 100.0% | 100.0% |
+| **Core Baseline (4)** | `docling` | 4 | 93.6/100 | **98.7/100** | 99.2% | 96.7% | 100.0% | 97.5% | 100.0% | 99.2% | 100.0% | 100.0% |
 | **OpenStax STEM/Uni (3)** | `docling` | 3 | 74.7/100 | **91.3/100** | 95.8% | 78.3% | 96.7% | 100.0% | 94.9% | 87.0% | 100.0% | 93.3% |
 | **Grundschule & Doppelseite (3)** | `docling` | 3 | 83.1/100 | **97.9/100** | 96.1% | 98.0% | 100.0% | 100.0% | 100.0% | 97.3% | 100.0% | 100.0% |
-| **Sekundarstufe I (5)** | `docling` | 5 | 90.5/100 | **97.1/100** | 98.6% | 98.6% | 66.7% | 98.5% | 100.0% | 96.1% | 100.0% | 99.6% |
-| **Sekundarstufe II & Verzeichnisse (4)** | `docling` | 4 | 88.1/100 | **94.3/100** | 98.3% | 96.5% | 78.9% | 99.8% | 92.5% | 98.5% | 100.0% | 100.0% |
+| **Sekundarstufe I (5)** | `docling` | 5 | 90.5/100 | **98.1/100** | 98.6% | 98.6% | 100.0% | 98.5% | 100.0% | 96.1% | 100.0% | 99.6% |
+| **Sekundarstufe II & Verzeichnisse (4)** | `docling` | 4 | 88.1/100 | **95.9/100** | 98.3% | 96.5% | 89.5% | 99.8% | 92.5% | 98.5% | 100.0% | 100.0% |
 
 ---
 
@@ -93,11 +93,16 @@ Evaluations are performed against **Golden Ground Truth** references using both 
 
 ## 📜 Historical Runs Log
 
+### Run `20261123_222834` (2026-11-23 22:28:34) — Tier: `fast`
+| Engine | Docs (`N`) | Version | License | Raw Score | Übertragungsregeln 09/25 | Headings | Formulas | Tables | `<Bild>` | `<Rahmen>` | Speed (s/page) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| docling | 19 | v2.152.0 | Apache 2.0 *(Commercial)* | 87.0 | **96.7** | 94.5% | 94.6% | 99.1% | 97.2% | 95.6% | 6.55 s |
+
+
 ### Run `20261123_215430` (2026-11-23 21:54:30) — Tier: `fast`
 | Engine | Docs (`N`) | Version | License | Raw Score | Übertragungsregeln 09/25 | Headings | Formulas | Tables | `<Bild>` | `<Rahmen>` | Speed (s/page) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | docling | 19 | v2.151.1 | Apache 2.0 *(Commercial)* | 87.0 | **95.7** | 94.5% | 81.4% | 99.1% | 97.2% | 95.6% | 1.5 s |
-
 
 ### Run `20261123_214555` (2026-11-23 21:45:55) — Tier: `fast`
 | Engine | Docs (`N`) | Version | License | Raw Score | Übertragungsregeln 09/25 | Headings | Formulas | Tables | `<Bild>` | `<Rahmen>` | Speed (s/page) |
