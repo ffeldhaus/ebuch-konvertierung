@@ -144,6 +144,12 @@ _ENTRY_WITH_PAGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Matches a leading-page TOC line where page number precedes title:
+# e.g. "10 Grundlagen der Zellbiologie" or "12 WERKSTATT Mikroskopie"
+_ENTRY_LEADING_PAGE_RE = re.compile(
+    r"^\s*(?P<page>\d{1,4})[ \t]+(?P<title>[A-ZÄÖÜ„\"'(][^\n]{2,})$"
+)
+
 # Prefixes identifying figure, table, or picture entries
 _FIGURE_PREFIX_RE = re.compile(
     r"^(?:Abb(?:ildung)?\.?|Fig(?:ure)?\.?|Diagramm|Grafik|Karte|Schema)\s*"
@@ -503,7 +509,13 @@ def _match_directory_header(line_text: str) -> str | None:
 
 
 def _parse_directory_entry_line(
-    line_info: dict[str, Any], active_dir_type: str, page_idx: int
+    line_info: dict[str, Any],
+    active_dir_type: str,
+    page_idx: int,
+    *,
+    allow_leading_page: bool = False,
+    min_leading_page: int = 1,
+    max_page: int = 5000,
 ) -> dict[str, Any] | None:
     """Attempt to parse a single line inside an active directory section into a structured entry."""
     raw_text = line_info.get("text", "").strip()
@@ -514,7 +526,21 @@ def _parse_directory_entry_line(
     if re.match(r"^(?:Seite|Page|S\.)?\s*\d{1,4}$", raw_text, re.IGNORECASE):
         return None
 
+    is_leading_page = False
     m = _ENTRY_WITH_PAGE_RE.match(raw_text)
+    if not m and allow_leading_page and active_dir_type == "toc":
+        if not re.match(r"^\s*\d+\.\d+", raw_text):
+            m_lead = _ENTRY_LEADING_PAGE_RE.match(raw_text)
+            if m_lead:
+                lead_pg = int(m_lead.group("page"))
+                lead_title = m_lead.group("title").strip()
+                if (
+                    min_leading_page <= lead_pg <= max_page
+                    and not (1800 <= lead_pg <= 2100)
+                    and not (lead_title.endswith(".") and len(lead_title.split()) > 15)
+                ):
+                    m = m_lead
+                    is_leading_page = True
     if not m:
         return None
 
@@ -589,6 +615,7 @@ def _parse_directory_entry_line(
         "indent": float(line_info.get("indent", 48.0)),
         "height": float(line_info.get("height", 10.0)),
         "directory_page_idx": page_idx,
+        "leading_page": is_leading_page,
     }
 
 
@@ -631,8 +658,12 @@ def _infer_toc_heading_levels(toc_entries: list[dict[str, Any]]) -> None:
         next_title = toc_entries[idx_e + 1]["title"] if idx_e + 1 < len(toc_entries) else ""
         followed_by_ch1 = bool(re.match(r"^1(?:\.?\s+|\.1\b)", next_title))
 
+        # 0. Explicit structural level hint from parser (e.g. unpaginated chapter/category header)
+        if entry.get("level_hint"):
+            lvl = int(entry["level_hint"])
+            last_numbered_level = lvl
         # 1. Explicit Chapter / Part / Module prefix or overarching Part right before Chapter 1 -> H1
-        if _CHAPTER_PREFIX_RE.match(title) or followed_by_ch1:
+        elif _CHAPTER_PREFIX_RE.match(title) or followed_by_ch1:
             lvl = 1
             last_numbered_level = 1
         # 2. Decimal numbering: '5' -> H1, '5.1' -> H2, '5.1.1' -> H3, '5.1.1.1' -> H4
@@ -803,9 +834,25 @@ def _resolve_page_numbers_from_directories(
         and max(directory_page_indices) + 1 < scanned_pages
         else 0
     )
+    toc_title_pages: dict[str, set[int]] = {}
     for entry in all_entries:
+        if entry.get("page_inferred"):
+            continue
+        t_pg = entry.get("page")
+        if not isinstance(t_pg, int) or t_pg <= 0:
+            continue
+        t_norm = _normalize_text_for_match(entry.get("clean_title") or entry.get("title") or "")
+        if t_norm:
+            toc_title_pages.setdefault(t_norm, set()).add(t_pg)
+
+    for entry in all_entries:
+        if entry.get("page_inferred"):
+            continue
         target_page = entry.get("page")
         if not isinstance(target_page, int) or target_page <= 0:
+            continue
+        e_norm = _normalize_text_for_match(entry.get("clean_title") or entry.get("title") or "")
+        if e_norm and len(toc_title_pages.get(e_norm, ())) >= 2:
             continue
 
         best_idx = None
@@ -918,12 +965,25 @@ def check_document_directories(
     active_dir_type: str | None = None
     non_entry_streak = 0
     pending_chapter_line: dict[str, Any] | None = None
+    pending_category_line: dict[str, Any] | None = None
     pending_wrapped_line: dict[str, Any] | None = None
+    last_added_toc_entry: dict[str, Any] | None = None
+    last_toc_page = 0
+    toc_uses_leading_pages = False
+    max_valid_page = max(total_pages + 20, 50) if total_pages > 0 else 5000
+    allcaps_lower_words = {
+        "und", "oder", "der", "die", "das", "des", "dem", "den",
+        "ein", "eine", "eines", "einer", "einem", "einen",
+        "im", "in", "am", "an", "auf", "aus", "bei", "durch",
+        "für", "mit", "nach", "über", "unter", "von", "vor",
+        "zu", "zum", "zur", "ihre",
+    }
 
     for page_idx, lines_on_page in enumerate(pages_lines):
         page_entries_count = 0
         page_candidate_entries: list[dict[str, Any]] = []
         pending_wrapped_line = None
+        last_added_toc_entry = None
         if page_idx < len(all_page_texts):
             raw_p_lines = [ln.strip() for ln in all_page_texts[page_idx].splitlines() if ln.strip()]
             for hdr_cand in raw_p_lines[:3] + raw_p_lines[-3:]:
@@ -935,9 +995,12 @@ def check_document_directories(
                     non_entry_streak = 0
                     break
 
-        for line_info in lines_on_page:
+        for l_idx, line_info in enumerate(lines_on_page):
             text = line_info.get("text", "").strip()
             if not text or ".indb" in text.lower():
+                continue
+
+            if active_dir_type is not None and re.fullmatch(r"\d{1,3}|[IVXLCDM]{1,6}", text):
                 continue
 
             header_type = _match_directory_header(text)
@@ -947,38 +1010,130 @@ def check_document_directories(
                 directory_page_indices.add(page_idx)
                 non_entry_streak = 0
                 pending_wrapped_line = None
+                pending_category_line = None
+                last_added_toc_entry = None
                 continue
 
             if active_dir_type is not None:
                 eff_line_info = line_info
-                if pending_wrapped_line is not None and not re.match(r"^\d", text):
+                if (
+                    not toc_uses_leading_pages
+                    and pending_wrapped_line is not None
+                    and not re.match(r"^\d", text)
+                ):
                     eff_line_info = dict(pending_wrapped_line)
                     eff_line_info["text"] = f"{pending_wrapped_line['text'].rstrip('-')} {text}"
-                parsed = _parse_directory_entry_line(eff_line_info, active_dir_type, page_idx)
+
+                next_line_text = ""
+                for nxt_li in lines_on_page[l_idx + 1 :]:
+                    nxt_s = nxt_li.get("text", "").strip()
+                    if nxt_s and not re.fullmatch(r"\d{1,3}|[IVXLCDM]{1,6}", nxt_s):
+                        next_line_text = nxt_s
+                        break
+
+                min_lead = last_toc_page if last_toc_page > 0 else 1
+                if (
+                    active_dir_type == "toc"
+                    and last_toc_page == 0
+                    and re.match(r"^1\s+\S", text)
+                    and re.match(r"^(?:[3-9]|\d{2,})\s+\S", next_line_text)
+                ):
+                    min_lead = 2
+
+                parsed = _parse_directory_entry_line(
+                    eff_line_info,
+                    active_dir_type,
+                    page_idx,
+                    allow_leading_page=(active_dir_type == "toc"),
+                    min_leading_page=min_lead,
+                    max_page=max_valid_page,
+                )
                 if parsed is not None:
                     pending_wrapped_line = None
-                    if (
-                        pending_chapter_line is not None
-                        and parsed["type"] == "toc"
-                        and str(parsed.get("number") or "").startswith(f"{pending_chapter_line['ch_num']}.")
-                    ):
-                        entries_by_type["toc"].append({
-                            "type": "toc",
-                            "title": pending_chapter_line["title"],
-                            "clean_title": pending_chapter_line["clean_title"],
-                            "number": pending_chapter_line["ch_num"],
-                            "label": None,
-                            "page": parsed["page"],
-                            "indent": pending_chapter_line["indent"],
-                            "height": pending_chapter_line["height"],
-                            "directory_page_idx": pending_chapter_line["page_idx"],
-                        })
-                        pending_chapter_line = None
+                    if parsed.get("leading_page"):
+                        toc_uses_leading_pages = True
+                    if parsed["type"] == "toc":
+                        last_toc_page = max(last_toc_page, int(parsed["page"]))
+                        if pending_category_line is not None:
+                            entries_by_type["toc"].append({
+                                "type": "toc",
+                                "title": pending_category_line["title"],
+                                "clean_title": pending_category_line["clean_title"],
+                                "number": None,
+                                "label": None,
+                                "page": parsed["page"],
+                                "page_inferred": True,
+                                "level_hint": 1,
+                                "indent": pending_category_line["indent"],
+                                "height": pending_category_line["height"],
+                                "directory_page_idx": pending_category_line["page_idx"],
+                            })
+                            pending_category_line = None
+                        if pending_chapter_line is not None:
+                            is_dec_child = str(parsed.get("number") or "").startswith(
+                                f"{pending_chapter_line['ch_num']}."
+                            )
+                            if is_dec_child or toc_uses_leading_pages:
+                                entries_by_type["toc"].append({
+                                    "type": "toc",
+                                    "title": pending_chapter_line["title"],
+                                    "clean_title": pending_chapter_line["clean_title"],
+                                    "number": pending_chapter_line["ch_num"],
+                                    "label": None,
+                                    "page": parsed["page"],
+                                    "page_inferred": not is_dec_child,
+                                    "level_hint": 1,
+                                    "indent": pending_chapter_line["indent"],
+                                    "height": pending_chapter_line["height"],
+                                    "directory_page_idx": pending_chapter_line["page_idx"],
+                                })
+                                pending_chapter_line = None
                     entries_by_type[parsed["type"]].append(parsed)
+                    last_added_toc_entry = parsed if parsed["type"] == "toc" else None
                     page_entries_count += 1
                     directory_page_indices.add(page_idx)
                     non_entry_streak = 0
                 else:
+                    if (
+                        active_dir_type == "toc"
+                        and toc_uses_leading_pages
+                        and pending_chapter_line is not None
+                        and len(text) <= 65
+                        and not re.match(r"^\d", text)
+                        and not text.isupper()
+                        and (
+                            text[0].islower()
+                            or pending_chapter_line["title"].rstrip().endswith(
+                                ("-", "–", "und", "oder", "der", "die", "das", "des", "im", "in", "am", "vom", "zur")
+                            )
+                        )
+                    ):
+                        sep_c = "" if pending_chapter_line["title"].endswith("-") else " "
+                        base_ct = pending_chapter_line["title"].rstrip("-") if sep_c == "" else pending_chapter_line["title"]
+                        clean_ct = pending_chapter_line["clean_title"].rstrip("-") if sep_c == "" else pending_chapter_line["clean_title"]
+                        pending_chapter_line["title"] = f"{base_ct}{sep_c}{text}".strip()
+                        pending_chapter_line["clean_title"] = f"{clean_ct}{sep_c}{text}".strip()
+                        non_entry_streak = 0
+                        continue
+
+                    if (
+                        active_dir_type == "toc"
+                        and toc_uses_leading_pages
+                        and pending_chapter_line is None
+                        and last_added_toc_entry is not None
+                        and len(text) <= 55
+                        and not re.search(r"\d", text)
+                        and not text.isupper()
+                        and text[0].islower()
+                    ):
+                        sep_t = "" if last_added_toc_entry["title"].endswith("-") else " "
+                        base_t = last_added_toc_entry["title"].rstrip("-") if sep_t == "" else last_added_toc_entry["title"]
+                        base_cl = last_added_toc_entry["clean_title"].rstrip("-") if sep_t == "" else last_added_toc_entry["clean_title"]
+                        last_added_toc_entry["title"] = f"{base_t}{sep_t}{text}".strip()
+                        last_added_toc_entry["clean_title"] = f"{base_cl}{sep_t}{text}".strip()
+                        non_entry_streak = 0
+                        continue
+
                     m_ch_np = (
                         re.match(r"^(\d{1,2})\.?\s+([A-ZÄÖÜ][^\n\d]{3,80})$", text)
                         if active_dir_type == "toc"
@@ -987,18 +1142,51 @@ def check_document_directories(
                     if m_ch_np:
                         pending_chapter_line = {
                             "ch_num": m_ch_np.group(1),
-                            "title": text,
-                            "clean_title": m_ch_np.group(2).strip(),
+                            "title": re.sub(r"\s+", " ", text).strip(),
+                            "clean_title": re.sub(r"\s+", " ", m_ch_np.group(2)).strip(),
                             "indent": float(line_info.get("indent", 48.0)),
                             "height": float(line_info.get("height", 10.0)),
                             "page_idx": page_idx,
                         }
+                        last_added_toc_entry = None
                         pending_wrapped_line = None
                         non_entry_streak = 0
-                    elif active_dir_type == "toc" and len(text) <= 65 and not re.search(r"\d{2,}", text):
+                        continue
+
+                    alpha_chars = [ch for ch in text if ch.isalpha()]
+                    if (
+                        active_dir_type == "toc"
+                        and 4 <= len(text) <= 70
+                        and not re.search(r"\d", text)
+                        and len(alpha_chars) >= 4
+                        and (sum(1 for ch in alpha_chars if ch.isupper()) / len(alpha_chars)) >= 0.75
+                    ):
+                        tc_words = [
+                            w.lower() if (wi > 0 and w.lower() in allcaps_lower_words) else w.capitalize()
+                            for wi, w in enumerate(text.split())
+                        ]
+                        cat_title = " ".join(tc_words)
+                        pending_category_line = {
+                            "title": cat_title,
+                            "clean_title": cat_title,
+                            "indent": float(line_info.get("indent", 48.0)),
+                            "height": float(line_info.get("height", 10.0)),
+                            "page_idx": page_idx,
+                        }
+                        last_added_toc_entry = None
+                        non_entry_streak = 0
+                        continue
+
+                    if (
+                        active_dir_type == "toc"
+                        and not toc_uses_leading_pages
+                        and len(text) <= 65
+                        and not re.search(r"\d{2,}", text)
+                    ):
                         pending_wrapped_line = dict(line_info, text=text)
                     elif len(text) > 110:
                         pending_wrapped_line = None
+                        last_added_toc_entry = None
                         non_entry_streak += 1
                         if non_entry_streak >= 2:
                             active_dir_type = None
@@ -1518,6 +1706,17 @@ def apply_directory_page_numbers(
     )
 
     # Cross-check each segment's content against directory entries and accumulate offset votes
+    title_page_sets: dict[str, set[int]] = {}
+    for entry in all_entries:
+        if entry.get("page_inferred"):
+            continue
+        pg_v = entry.get("page")
+        if not isinstance(pg_v, int):
+            continue
+        t_norm = _normalize_text_for_match(entry.get("clean_title") or entry.get("title") or "")
+        if t_norm:
+            title_page_sets.setdefault(t_norm, set()).add(pg_v)
+
     offset_votes: dict[int, int] = {}
     if len(marker_indices) == len(known_pages) and known_pages:
         init_off = (1 - roman_prefix_count) if roman_prefix_count > 0 else int(known_pages[0])
@@ -1535,8 +1734,13 @@ def apply_directory_page_numbers(
         )
         if not has_dir_header and norm_seg:
             for entry in all_entries:
+                if entry.get("page_inferred"):
+                    continue
                 target_pg = entry.get("page")
                 if not isinstance(target_pg, int):
+                    continue
+                t_norm = _normalize_text_for_match(entry.get("clean_title") or entry.get("title") or "")
+                if t_norm and len(title_page_sets.get(t_norm, ())) >= 2:
                     continue
                 w = _entry_matches_page_text(entry, norm_seg)
                 if w > 0 and (target_pg - seg_pos) >= min_allowed_offset:
@@ -1545,6 +1749,15 @@ def apply_directory_page_numbers(
 
     effective_max_pages = max_pages or directory_info.get("extracted_page_count") or directory_info.get("page_count")
     max_known_page = max((int(p) for p in known_pages if str(p).isdigit()), default=None)
+
+    existing_arabic = [int(tok) for tok in existing_tokens if tok.isdigit()]
+    has_valid_monotonic_existing = (
+        len(existing_arabic) == len(marker_indices)
+        and existing_arabic[0] >= 1
+        and existing_arabic == [existing_arabic[0] + idx_k for idx_k in range(len(existing_arabic))]
+        and (max_known_page is None or existing_arabic[-1] <= max_known_page)
+    )
+    existing_start = existing_arabic[0] if has_valid_monotonic_existing else None
 
     def _bound_arabic(val: int, start_val: int) -> int:
         upper = None
@@ -1555,10 +1768,13 @@ def apply_directory_page_numbers(
         return min(val, upper) if upper is not None else val
 
     if offset_votes:
-        best_offset = max(offset_votes.items(), key=lambda kv: (kv[1], -abs(kv[0])))[0]
+        best_offset = max(
+            offset_votes.items(),
+            key=lambda kv: (kv[1], 1 if existing_start is not None and kv[0] == existing_start else 0, -abs(kv[0])),
+        )[0]
         if best_offset <= 0:
             r_len = 1 - best_offset
-            inferred_marker_labels = [
+            inferred_marker_labels: list[str | None] = [
                 (
                     str(known_labels[i])
                     if i < len(known_labels) and not str(known_labels[i]).isdigit()
@@ -1582,6 +1798,10 @@ def apply_directory_page_numbers(
         inferred_marker_labels = [str(known_labels[i]) for i in range(len(marker_indices))]
     elif known_labels and len(known_labels) == len(marker_indices):
         inferred_marker_labels = [str(lbl) for lbl in known_labels]
+    elif has_valid_monotonic_existing and (
+        not known_labels or len(marker_indices) != len(known_labels)
+    ):
+        inferred_marker_labels = [None] * len(marker_indices)
     elif known_pages:
         start_pg = int(known_pages[0])
         inferred_marker_labels = [

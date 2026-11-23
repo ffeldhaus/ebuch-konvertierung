@@ -1690,6 +1690,134 @@ def test_strip_prepress_marks_echoed_running_h1_and_indesign_footer_blocks():
     assert "Feldlinien verlaufen von Plus nach Minus." in fused
 
 
+def test_fusion_deduplicates_headings_unwraps_image_table_and_classifies_circle_glyphs():
+    """Verifies Items 5, 6c, and 7a in extraction_postprocess.py with synthetic inputs."""
+    import ctypes
+    from PIL import Image, ImageDraw
+    from backend.services.extraction_postprocess import (
+        _attach_circle_task_difficulties,
+        _detect_page_circle_task_difficulties,
+    )
+
+    # Item 5 & 6c: Dedup recovered Docling heading ('B 1' vs 'B1') while keeping distinct numbered headings,
+    # and unwrap 1-row flowchart pipe table preserving embedded image marker.
+    raw_vlm = (
+        "### Thema Alpha (▷ B 1)\n\n"
+        "### 1 Erster Versuch\n\n"
+        "Kurze Beobachtung im Labor.\n\n"
+        "| Schritt A | Schritt B |\n"
+        "| --- | --- |\n"
+        "| ![](images/fig1.png) Ausgangsstoff | Endprodukt |"
+    )
+    doc_layout = {
+        "text_blocks_by_page": {
+            0: [
+                {"type": "section_header", "text": "Thema Alpha (▻B1)", "page_idx": 0},
+                {"type": "section_header", "text": "2 Zweiter Versuch", "page_idx": 0},
+            ]
+        }
+    }
+    fused = fuse_vlm_page_with_docling(
+        raw_vlm,
+        page_images=[],
+        phys_num=15,
+        docling_layout=doc_layout,
+        page_idx=0,
+    )
+    assert fused.lower().count("thema alpha") == 1
+    assert "### 1 Erster Versuch" in fused
+    assert "2 Zweiter Versuch" in fused
+    assert "![](images/fig1.png)" in fused
+    assert "| Schritt A |" not in fused
+
+    # Item 7a: Geometric circle difficulty detection on synthetic rendered glyph bitmap
+    pw, ph = 400.0, 400.0
+    scale = 4.0
+    img = Image.new("RGB", (int(pw * scale), int(ph * scale)), "white")
+    draw = ImageDraw.Draw(img)
+
+    text_stream = (
+        "1 X Nenne wichtige Bestandteile der Zelle.\n"
+        "2 Y Erkläre den Vorgang an der Membran.\n"
+        "3 Z Bewerte das dargestellte Ergebnis.\n"
+    )
+    # Glyph pixel boxes (size 24x24 px = 6x6 pt at x=48..54 pt)
+    glyph_boxes: dict[int, tuple[float, float, float, float]] = {}
+    glyph_specs = [
+        (text_stream.index("1 X") + 2, 330.0, "open"),
+        (text_stream.index("2 Y") + 2, 250.0, "half"),
+        (text_stream.index("3 Z") + 2, 170.0, "solid"),
+    ]
+    for ci_idx, y_b, kind in glyph_specs:
+        lx0, lb0, lr0, lt0 = 48.0, y_b, 54.0, y_b + 6.0
+        glyph_boxes[ci_idx] = (lx0, lb0, lr0, lt0)
+        px0 = lx0 * scale
+        py0 = (ph - lt0) * scale
+        px1 = lr0 * scale
+        py1 = (ph - lb0) * scale
+        draw.ellipse([px0, py0, px1, py1], outline="black", width=2)
+        if kind == "solid":
+            draw.ellipse([px0 + 1, py0 + 1, px1 - 1, py1 - 1], fill="black")
+        elif kind == "half":
+            draw.pieslice([px0, py0, px1, py1], start=90, end=270, fill="black")
+
+    class _FakeBitmap:
+        def to_pil(self):
+            return img
+
+    class _FakePage:
+        def render(self, scale: float = 1.0):  # noqa: ARG002
+            return _FakeBitmap()
+
+    class _FakeTextPage:
+        raw = object()
+
+        def count_chars(self) -> int:
+            return len(text_stream)
+
+    class _FakePdfium:
+        @staticmethod
+        def FPDFText_GetUnicode(_tp_raw, ci: int) -> int:
+            return ord(text_stream[ci])
+
+        @staticmethod
+        def FPDFText_GetFontInfo(_tp_raw, ci: int, buf_ptr, _buflen: int, _flags) -> None:
+            font_b = b"SymbolGlyph" if ci in glyph_boxes else b"BodyText-Regular"
+            ctypes.memmove(buf_ptr, font_b + b"\x00", len(font_b) + 1)
+
+        @staticmethod
+        def FPDFText_GetCharBox(_tp_raw, ci: int, l_p, r_p, b_p, t_p) -> None:
+            if ci in glyph_boxes:
+                lv, bv, rv, tv = glyph_boxes[ci]
+            else:
+                line_idx = text_stream[:ci].count("\n")
+                col_pos = ci - (text_stream.rfind("\n", 0, ci) + 1)
+                lv = 36.0 + col_pos * 5.0
+                rv = lv + 4.5
+                bv = [330.0, 250.0, 170.0][min(line_idx, 2)]
+                tv = bv + 8.0
+            ctypes.c_double.from_address(ctypes.addressof(l_p._obj)).value = lv
+            ctypes.c_double.from_address(ctypes.addressof(r_p._obj)).value = rv
+            ctypes.c_double.from_address(ctypes.addressof(b_p._obj)).value = bv
+            ctypes.c_double.from_address(ctypes.addressof(t_p._obj)).value = tv
+
+    detected = _detect_page_circle_task_difficulties(
+        _FakePage(), _FakeTextPage(), pw, ph, 0.0, 0.0, 0, _FakePdfium()
+    )
+    assert [d["symbol"] for d in detected] == ["○", "◐", "●"]
+
+    repaired = _attach_circle_task_difficulties(
+        "1. 0 Nenne wichtige Bestandteile der Zelle.\n"
+        "2. ○ Erkläre den Vorgang an der Membran.\n"
+        "3. . Bewerte das dargestellte Ergebnis.",
+        detected,
+    )
+    assert "1. ○ Nenne wichtige Bestandteile" in repaired
+    assert "2. ◐ Erkläre den Vorgang" in repaired
+    assert "3. ● Bewerte das dargestellte Ergebnis" in repaired
+
+
+
 
 
 

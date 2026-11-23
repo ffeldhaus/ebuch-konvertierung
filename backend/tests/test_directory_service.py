@@ -113,3 +113,45 @@ def test_apply_directory_page_numbers_deduplicates_and_bounds_markers():
     assert markers == [272, 273, 274]
     assert "((275))" not in repaired
     assert "### Unterabschnitt Wärme" in repaired
+
+
+def test_apply_directory_page_numbers_preserves_partial_slice_and_ignores_ambiguous_titles():
+    """Verifies Item 1: valid monotonic partial-range page markers are not clobbered back to ((1))
+    when offset votes are empty, and repeated ambiguous TOC entries do not hijack offset voting.
+    """
+    dir_info_no_votes = {
+        "has_any_directory": True,
+        "physical_start_page": 1,
+        "page_numbers": list(range(1, 101)),
+        "page_labels": [str(i) for i in range(1, 101)],
+        "roman_prefix_count": 0,
+        "toc_entries": [],
+        "figure_entries": [],
+        "table_entries": [],
+        "picture_entries": [],
+    }
+    partial_md = "((8))\n\nErster Abschnitt des Kapitels.\n\n((9))\n\nZweiter Abschnitt.\n\n((10))\n\nDritter Abschnitt.\n"
+    preserved = apply_directory_page_numbers(partial_md, dir_info_no_votes, max_pages=3)
+    assert [int(m) for m in re.findall(r"\(\((\d+)\)\)", preserved)] == [8, 9, 10]
+
+    # Repeated generic headings ("Aufgaben" on pp. 29, 59, 107) must not outvote unique titles
+    dir_info_ambig = {
+        "has_any_directory": True,
+        "physical_start_page": 1,
+        "page_numbers": list(range(1, 121)),
+        "page_labels": [str(i) for i in range(1, 121)],
+        "roman_prefix_count": 0,
+        "toc_entries": [
+            {"title": "Aufgaben", "clean_title": "Aufgaben", "page": 29, "level": 3},
+            {"title": "Aufgaben", "clean_title": "Aufgaben", "page": 59, "level": 3},
+            {"title": "Aufgaben", "clean_title": "Aufgaben", "page": 107, "level": 3},
+            {"title": "Stoffwechsel in Pflanzenzellen", "clean_title": "Stoffwechsel in Pflanzenzellen", "page": 11, "level": 2},
+        ],
+        "figure_entries": [],
+        "table_entries": [],
+        "picture_entries": [],
+    }
+    ambig_md = "((10))\n\nEinleitungstext.\n\n((11))\n\n### Stoffwechsel in Pflanzenzellen\n\n### Aufgaben\n"
+    resolved = apply_directory_page_numbers(ambig_md, dir_info_ambig, max_pages=2)
+    assert [int(m) for m in re.findall(r"\(\((\d+)\)\)", resolved)] == [10, 11]
+

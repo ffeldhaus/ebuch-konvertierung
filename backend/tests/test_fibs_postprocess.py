@@ -156,7 +156,7 @@ def test_buchkonferenz_custom_rules_tables_captions_tasks_hierarchy_ions_and_fro
         "2 Erklären Sie die Wirkung der Ionenverteilung.\n"
         "### A1 Vergleichen Sie die beiden Kurvenverläufe.\n"
     )
-    res = post_process_structure(md, custom_rules=custom_rules)
+    res = post_process_structure(md, custom_rules=custom_rules, table_max_cells=9)
 
     # 6b: Frontmatter <Anmerkung> prepended before ((50))
     assert res.startswith("<Anmerkung>\nInformationen zur Übertragung:")
@@ -820,6 +820,139 @@ def test_strip_math_and_variable_emphasis_footnote_brace_fix_and_excel_dollar_pr
     )
     assert "Stoß: v'_1 =m_2(2v_2 -v_1) +v'_2 sowie 2v_2 -v_1." in edge_out
     assert "Quotienten & Produkte: F/a, r~D~w/~Dt, r~D~w, mr~a, mr^2~a." in edge_out
+
+
+def test_buchkonferenz_enhancements_prefixes_circles_tables_arrows_rahmen_and_self_assessment():
+    """Verifies Items 3, 4, 6, and 7b with 100% synthetic German schoolbook fixtures."""
+    from backend.services.fibs_postprocess import (
+        _parse_buchkonferenz_profile,
+        _parse_difficulty_rules,
+        _resolve_figure_caption_prefix,
+    )
+
+    assert _resolve_figure_caption_prefix("Zur Orientierung ist ein B für Bildmaterial vorangestellt.") == ("B", True)
+    assert _resolve_figure_caption_prefix("B + Bildunterschrift als Überschrift 4") == ("B", True)
+
+    bk_rules = (
+        "# Überschrift 1: Hauptthema\n"
+        "## Überschrift 2: Teilkapitel\n"
+        "### Überschrift 3: Basiswissen\n"
+        "#### Überschrift 4: Abschnittsüberschriften, B + Bildunterschrift (ist ein B für Bildmaterial vorangestellt)\n"
+        "##### Überschrift 5: Aufgaben, Aufgabennummern\n"
+        "- Schwierigkeitsgrade von Aufgaben: leerer Kreis: [einfach], halb gefüllter Kreis: [mittel], gefüllter Kreis: [schwer]\n"
+        "- Verweise mit Pfeil: z. B. [siehe] B2, [siehe] S. xy\n"
+        "- Selbsteinschätzung:\n"
+        "  [Selbsteinschätzung:]\n"
+        "  [ ] Super!\n"
+        "  [ ] Fragen? [siehe] S. 10/11\n"
+    )
+    prof = _parse_buchkonferenz_profile(bk_rules)
+    assert prof.tasks_h5 is True
+    assert prof.text_subheadings_h4 is True
+    assert prof.arrow_ref_label == "[siehe]"
+    assert prof.has_self_assessment_box is True
+
+    sym_map, drop_diff, _ = _parse_difficulty_rules(bk_rules)
+    assert drop_diff is False
+    assert sym_map["○"] == "[einfach]"
+    assert sym_map["◯"] == "[einfach]"
+    assert sym_map["◐"] == "[mittel]"
+    assert sym_map["●"] == "[schwer]"
+
+    dir_info = {
+        "has_any_directory": True,
+        "detected_types": ["toc"],
+        "toc_entries": [
+            {"title": "1 Grundlagen der Zelllehre", "page": 10, "level": 1},
+            {"title": "Aufbau der Biomembran", "clean_title": "Aufbau der Biomembran", "page": 10, "level": 2},
+        ],
+    }
+
+    vocab_rows = "\n".join(f"| Begriff {i} | Erklärung {i} |" for i in range(1, 10))
+    raw_md = (
+        "((10))\n\n"
+        "# Grundlagen der Zelllehre\n\n"
+        "## Aufbau der Biomembran\n\n"
+        "### 1 Erste Versuchsreihe\n\n"
+        "**Material**\n\nMessbecher und Stoppuhr.\n\n"
+        "**Zusammenfassung**\n\n"
+        "Siehe Modellversuch (▶ B 1) und Diagramm (>> B 2, links) sowie Seite (≥ B 4).\n"
+        "Vergleichswert x >= 4 bleibt erhalten.\n\n"
+        "| Begriff | Bedeutung |\n"
+        "| --- | --- |\n"
+        f"{vocab_rows}\n\n"
+        "##### Aufgaben\n\n"
+        "1. ○ a) Nenne die wichtigsten Bausteine.\n"
+        "   ○ b) Ordne die Begriffe zu.\n"
+        "   👍 Super! ? ▶ S. 8/9\n\n"
+        "2. ◐ Erkläre die Transportvorgänge (▶ S. 12).\n\n"
+        "3. ● Bewerte das Experiment.\n"
+    )
+    llm_md = (
+        "((10))\n\n"
+        "<Rahmen>\n_Zusammenfassung_\n</Rahmen>\n\n"
+        "## Aufbau der Biomembran\n\n"
+        "### 1 Erste Versuchsreihe\n\n"
+        "_Material_\n\nMessbecher und Stoppuhr.\n\n"
+        "Siehe Modellversuch (▶ B 1) und Diagramm (>>B 2, links) sowie Seite (≥ B 4).\n"
+        "Vergleichswert x >= 4 bleibt erhalten.\n\n"
+        "| Original | Denkmodell | Modell |\n"
+        "| --- | --- | --- |\n"
+        "| <Bild> Abbildung:\nBeschreibung: Schema von A \\to B.\n</Bild> links | mitte | rechts |\n\n"
+        "<Rahmen>\n_Zusammenfassung Kapitel 1: Kernpunkte_\n- Punkt eins.\n</Rahmen>\n\n"
+        "##### Aufgaben\n\n"
+        "1. ○ a) Nenne die wichtigsten Bausteine.\n"
+        "   ○ b) Ordne die Begriffe zu.\n"
+        "[siehe] S. 8/9\n\n"
+        "2. ◐ Erkläre die Transportvorgänge (▶ S. 12).\n\n"
+        "3. ● Bewerte das Experiment.\n"
+    )
+
+    out = post_process_structure(
+        llm_md,
+        raw_markdown=raw_md,
+        directory_info=dir_info,
+        custom_rules=bk_rules,
+        table_max_cells=6,
+    )
+
+    # Item 3: Non-media '### 1 Erste Versuchsreihe' does NOT become '#### B1'; TOC Ü2 stays ###; circles convert
+    assert "#### B1 Erste Versuchsreihe" not in out
+    assert "### Aufbau der Biomembran" in out
+    assert "##### 1\n\na) [einfach] Nenne die wichtigsten Bausteine.\nb) [einfach] Ordne die Begriffe zu." in out
+    assert "##### 2\n[mittel]\n\nErkläre die Transportvorgänge ([siehe] S. 12)." in out
+    assert "##### 3\n[schwer]\n\nBewerte das Experiment." in out
+
+    # Item 4: Dropped 20-cell table recovered & kept as <Tabelle> when table_max_cells=6
+    assert "<Tabelle>" in out
+    assert "| Begriff 9 | Erklärung 9 |" in out
+
+    # Item 6: Arrow normalization outside <Bild>/math, label-only <Rahmen> unwrapped, body box kept, flowchart unwrapped
+    assert "([siehe] B 1)" in out
+    assert "([siehe] B 2, links)" in out
+    assert "([siehe] B 4)" in out
+    assert "x >=4" in out or "x >= 4" in out
+    assert r"A \to B" in out
+    assert "<Rahmen>\n_Zusammenfassung_\n</Rahmen>" not in out
+    assert "### Zusammenfassung\n\n### Aufbau der Biomembran" in out
+    assert "<Rahmen>\n_Zusammenfassung Kapitel 1: Kernpunkte_\n-\tPunkt eins.\n</Rahmen>" in out
+    assert "Die folgende Tabelle wurde aufgelöst." not in out
+    assert "<Bild> Abbildung:\nBeschreibung: Schema von A \\to B.\n</Bild>" in out
+
+    # Item 7b: [Selbsteinschätzung:] recovered from condensed '[siehe] S. 8/9' via raw_markdown
+    assert "[Selbsteinschätzung:]\n[ ] Super!\n[ ] Fragen? [siehe] S. 8/9" in out
+
+    # Direct conversion from raw 👍 Super! line + table_max_cells=0 disabling table resolution
+    direct_out = post_process_structure(
+        "((10))\n\n<Tabelle>\n\n| A | B |\n| :--- | :--- |\n| 1 | 2 |\n\n</Tabelle>\n\n"
+        "##### Aufgaben\n\n##### 1\n\nAufgabentext.\n👍 Super! ? ▶ S. 4/5\n",
+        custom_rules=bk_rules,
+        table_max_cells=0,
+    )
+    assert "<Tabelle>" in direct_out
+    assert "Die folgende Tabelle wurde aufgelöst." not in direct_out
+    assert "[Selbsteinschätzung:]\n[ ] Super!\n[ ] Fragen? [siehe] S. 4/5" in direct_out
+
 
 
 

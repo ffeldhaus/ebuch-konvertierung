@@ -253,7 +253,7 @@ CHUNK_MODE_INSTRUCTIONS: Final[str] = (
     "'[KONTEXT: FOLGENDE SEITE …]'.\n"
     "- Übertrage und gib ausschließlich den Inhalt des ABSCHNITTS vollständig aus – ohne die Markierungszeilen "
     "in eckigen Klammern.\n"
-    "- VOLLSTÄNDIGKEITSGEBOT: Lasse NIEMALS Absätze, Aufgabenstellungen (1., 2., a., b.), Wortlisten, "
+    "- VOLLSTÄNDIGKEITSGEBOT: Lasse NIEMALS Absätze, Tabellen, Aufgabenstellungen (1., 2., a., b.), Wortlisten, "
     "<Bild-Ref>-Platzhalter oder <Rahmen>-Kästen des Abschnitts weg und fasse niemals Text zusammen.\n"
     "- Die Kontextblöcke dienen nur zur Orientierung (Überschriftenebenen fortsetzen, Sätze, Tabellen und Formeln "
     "über Seitengrenzen verstehen). Ihren Text gibst du NIEMALS aus, auch nicht teilweise.\n"
@@ -329,7 +329,10 @@ def build_custom_rules_block(custom_rules: str) -> str:
         t"in eine eigene Überschrift und einen nachfolgenden Absatz auf (z.B. '#### Stichwort\\n\\nText...').\n"
         t"- Selbst wenn dateispezifische Regeln kursive Wörter als _Wort_ hervorheben, dürfen mathematische/physikalische "
         t"Variablen, Formelzeichen, Symbole und Gleichungen NIEMALS mit _..._ umschlossen werden (immer E_{{kin}} =1/2J~w^2, "
-        t"~Dm_i, \\f{{a}}{{b}}, \\s{{x}}, * statt \\cdot, sin/cos/tan ohne Backslash, ~j = eta, ~h = theta)."
+        t"~Dm_i, \\f{{a}}{{b}}, \\s{{x}}, * statt \\cdot, sin/cos/tan ohne Backslash, ~j = eta, ~h = theta).\n"
+        t"- Übernimm und formatiere dateispezifische Aufgaben-Zusatzblöcke (z. B. Selbsteinschätzung mit "
+        t"Ankreuzkästchen '[ ] ...' und Seitenverweisen) sowie Pfeil-Querverweise (z. B. '[siehe] ...') exakt "
+        t"gemäß den dateispezifischen Regeln – lasse solche Bewertungs- oder Hinweiszeilen NIEMALS weg."
     )
 
 

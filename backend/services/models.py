@@ -282,6 +282,10 @@ class BuchkonferenzProfile(DomainModel):
     """Whether TOC-only main chapter headings should be injected as '# <Title>' on their start page."""
     plain_italic_intro: bool = False
     """Whether italic introductory paragraphs right under headings strip emphasis ('nicht fett')."""
+    arrow_ref_label: str = ""
+    """Replacement text indicator for arrow cross-references (e.g. '[siehe]') when specified."""
+    has_self_assessment_box: bool = False
+    """Whether custom rules define a '[Selbsteinschätzung:]' checkbox block for tasks."""
 
 
 

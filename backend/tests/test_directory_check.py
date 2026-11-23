@@ -694,6 +694,64 @@ def test_insert_page_numbers_orders_pages_monotonically_with_sparse_docling_bloc
     assert re.findall(r"\(\((\d+)\)\)", injected) == [str(p) for p in range(62, 70)]
 
 
+def test_multipage_leading_page_toc_parsing_and_allcaps_supercategories(tmp_path, monkeypatch):
+    """Verifies Item 2: multi-page leading-page TOC format (<page> <Title>), wrapped titles,
+    unpaginated chapters, and ALL-CAPS super-categories are parsed without corrupting page offsets.
+    """
+    from backend.services import directory_service
+
+    dummy_pdf = tmp_path / "synthetic_leading_toc.pdf"
+    dummy_pdf.write_bytes(b"%PDF-1.4\n")
+
+    pages_lines = [
+        [],  # page 1 cover
+        [  # page 2 TOC page 1
+            {"text": "Inhalt", "indent": 40.0, "right": 120.0, "height": 18.0, "y_mid": 700.0},
+            {"text": "LEBENSRAUM WALD", "indent": 40.0, "right": 200.0, "height": 13.0, "y_mid": 660.0},
+            {"text": "1 Grundlagen des Ökosystems", "indent": 40.0, "right": 260.0, "height": 14.0, "y_mid": 635.0},
+            {"text": "10 Produzenten und Konsumenten", "indent": 50.0, "right": 300.0, "height": 11.0, "y_mid": 610.0},
+            {"text": "12 WERKSTATT Bodenproben untersuchen", "indent": 50.0, "right": 340.0, "height": 11.0, "y_mid": 585.0},
+        ],
+        [  # page 3 TOC continuation page WITHOUT repeated 'Inhalt' header
+            {"text": "2\u2002 Stoffkreisläufe und", "indent": 40.0, "right": 220.0, "height": 14.0, "y_mid": 700.0},
+            {"text": "Energiefluss", "indent": 40.0, "right": 150.0, "height": 14.0, "y_mid": 680.0},
+            {"text": "22 STRATEGIE Vernetzt denken", "indent": 50.0, "right": 280.0, "height": 11.0, "y_mid": 650.0},
+            {"text": "und vergleichen", "indent": 58.0, "right": 180.0, "height": 11.0, "y_mid": 635.0},
+            {"text": "26 Aufgaben", "indent": 50.0, "right": 150.0, "height": 11.0, "y_mid": 610.0},
+        ],
+        [],  # page 4 body page 10
+    ]
+    all_page_texts = [
+        "Titelseite",
+        "\n".join(x["text"] for x in pages_lines[1]),
+        "\n".join(x["text"] for x in pages_lines[2]),
+        "10\nProduzenten und Konsumenten\nGrüne Pflanzen nutzen Sonnenlicht.",
+    ]
+
+    monkeypatch.setattr(
+        directory_service,
+        "_extract_pages_with_docling_fast",
+        lambda *_args, **_kwargs: (12, pages_lines, all_page_texts),
+    )
+    info = check_document_directories(str(dummy_pdf), max_pages=10)
+    assert info["has_toc"] is True
+    titles = [e["title"] for e in info["toc_entries"]]
+    assert "Lebensraum Wald" in titles
+    assert "1 Grundlagen des Ökosystems" in titles
+    assert "Produzenten und Konsumenten" in titles
+    assert "WERKSTATT Bodenproben untersuchen" in titles
+    assert "2 Stoffkreisläufe und Energiefluss" in titles
+    assert "STRATEGIE Vernetzt denken und vergleichen" in titles
+
+    by_title = {e["title"]: e for e in info["toc_entries"]}
+    assert by_title["Lebensraum Wald"]["level"] == 1
+    assert by_title["Lebensraum Wald"].get("page_inferred") is True
+    assert by_title["1 Grundlagen des Ökosystems"]["level"] == 1
+    assert by_title["1 Grundlagen des Ökosystems"].get("page_inferred") is True
+    assert by_title["STRATEGIE Vernetzt denken und vergleichen"]["page"] == 22
+
+
+
 
 
 

@@ -951,7 +951,16 @@ def insert_page_numbers_from_metadata(
     except Exception as ex:
         logger.warning(f"Error deduplicating page numbers: {ex}")
 
-    if directory_info and directory_info.get("has_any_directory"):
+    has_dir_entries = bool(
+        directory_info
+        and any(
+            directory_info.get(k)
+            for k in ("toc_entries", "figure_entries", "table_entries", "picture_entries")
+        )
+    )
+    if directory_info and directory_info.get("has_any_directory") and (
+        not sidecar_labels or has_dir_entries
+    ):
         try:
             from backend.services.directory_service import apply_directory_page_numbers
             modified_markdown = apply_directory_page_numbers(

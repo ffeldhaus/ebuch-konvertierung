@@ -834,6 +834,16 @@ def _unroll_subtask_tables_and_convert_md_tables(text: str) -> str:
         table_md = "\n".join(formatted_rows)
         return f"<Tabelle>\n\n{table_md}\n\n</Tabelle>\n"
 
+    # Unwrap degenerate flowchart/diagram pipe tables broken across a multi-line <Bild>...</Bild> block
+    text = re.sub(
+        r"(?mi)^[ \t]*\|[^\n]+\|\s*\n[ \t]*\|[\s\|:\-]+\|\s*\n[ \t]*\|[^\n]*<Bild\b[^>]*>[\s\S]*?</Bild>[^\n]*(?:\n[ \t]*\|[^\n]+\|[ \t]*)*",
+        lambda m: "\n\n".join(
+            re.findall(r"<Bild\b[^>]*>[\s\S]*?</Bild>", m.group(0), flags=re.IGNORECASE)
+        )
+        + "\n",
+        text,
+    )
+
     parts = re.split(r"(<Tabelle\b[^>]*>.*?</Tabelle>)", text, flags=re.DOTALL | re.IGNORECASE)
     for idx in range(len(parts)):
         if idx % 2 == 0:
@@ -845,7 +855,14 @@ def _unroll_subtask_tables_and_convert_md_tables(text: str) -> str:
             )
         else:
             t_rows = _parse_tabelle_data_rows(parts[idx])
-            if _is_placeholder_only_table(t_rows):
+            if re.search(r"<Bild\b|!\[[^\]]*\]\([^)\n]+\)", parts[idx], re.IGNORECASE) and len(t_rows) <= 2:
+                imgs_in_tbl = re.findall(
+                    r"<Bild\b[^>]*>[\s\S]*?</Bild>|!\[[^\]]*\]\([^)\n]+\)",
+                    parts[idx],
+                    flags=re.IGNORECASE,
+                )
+                parts[idx] = "\n\n".join(im.strip() for im in imgs_in_tbl)
+            elif _is_placeholder_only_table(t_rows):
                 parts[idx] = ""
     text = "".join(parts)
 
@@ -871,6 +888,135 @@ def _unroll_subtask_tables_and_convert_md_tables(text: str) -> str:
             i += 1
 
     return "\n".join(out_lines)
+
+
+def _recover_dropped_tables(processed: str, raw_markdown: str) -> str:
+    """Recovers multi-row data tables from ``raw_markdown`` when dropped by the LLM.
+
+    Skips degenerate flowchart/diagram tables containing images, placeholder-only tables,
+    or subtask grid tables. Reinserts recovered tables as ``<Tabelle>...</Tabelle>`` on the
+    corresponding page (before an ``Aufgaben`` block when the raw table preceded tasks).
+
+    Args:
+        processed: Post-processed LLM Markdown output.
+        raw_markdown: Original Stage 1 extracted Markdown containing pipe or ``<Tabelle>`` tables.
+
+    Returns:
+        Markdown string with missing multi-row tables restored.
+    """
+    if not raw_markdown or ("|" not in raw_markdown and "<Tabelle" not in raw_markdown):
+        return processed
+
+    from backend.services.extraction_postprocess import _is_degenerate_diagram_table
+
+    def _sig_words(txt: str) -> list[str]:
+        cleaned = re.sub(r"</?[A-Za-zÄÖÜäöüß]+[^>]*>", " ", txt)
+        return [w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9]{3,}", cleaned)]
+
+    raw_segs = split_markdown_pages(raw_markdown)
+    proc_segs = split_markdown_pages(processed)
+    proc_by_page = {s.page: idx for idx, s in enumerate(proc_segs) if s.page is not None}
+    all_proc_words = set(_sig_words(processed))
+    subtask_cell_re = re.compile(r"^[a-z]\)\s+", re.IGNORECASE)
+
+    modified = False
+    for r_seg in raw_segs:
+        r_masked = re.sub(
+            r"<Bild\b[^>]*>[\s\S]*?</Bild>",
+            " __DROP_TBL_BILD__ ",
+            r_seg.text,
+            flags=re.IGNORECASE,
+        )
+        raw_candidates: list[tuple[int, list[list[str]]]] = []
+        for m_t in re.finditer(
+            r"<Tabelle\b[^>]*>([\s\S]*?)</Tabelle>", r_masked, flags=re.IGNORECASE
+        ):
+            inner_t = m_t.group(1)
+            if "__DROP_TBL_BILD__" in inner_t or "![" in inner_t:
+                continue
+            rows_t = _parse_tabelle_data_rows(inner_t)
+            if len(rows_t) >= 2 and not _is_placeholder_only_table(rows_t):
+                raw_candidates.append((m_t.start(), rows_t))
+
+        r_no_tab = re.sub(
+            r"<Tabelle\b[^>]*>[\s\S]*?</Tabelle>",
+            lambda m: " " * len(m.group(0)),
+            r_masked,
+            flags=re.IGNORECASE,
+        )
+        for m_p in re.finditer(
+            r"(?:^[ \t]*\|[^\n]+\|[ \t]*(?:\n|$)){2,}", r_no_tab, flags=re.MULTILINE
+        ):
+            pipe_blk = m_p.group(0)
+            if "__DROP_TBL_BILD__" in pipe_blk or "![" in pipe_blk:
+                continue
+            if _is_degenerate_diagram_table(pipe_blk):
+                continue
+            rows_p = _parse_tabelle_data_rows(pipe_blk)
+            if len(rows_p) < 2 or _is_placeholder_only_table(rows_p):
+                continue
+            cells_p = [c.strip() for row in rows_p for c in row if c.strip()]
+            if not cells_p:
+                continue
+            sub_cnt = sum(1 for c in cells_p if subtask_cell_re.match(c))
+            if sub_cnt >= 2 and sub_cnt >= 0.6 * len(cells_p):
+                continue
+            raw_candidates.append((m_p.start(), rows_p))
+
+        if not raw_candidates:
+            continue
+
+        p_idx = proc_by_page.get(r_seg.page) if r_seg.page is not None else 0
+        if p_idx is None or p_idx >= len(proc_segs):
+            continue
+
+        p_text = proc_segs[p_idx].text
+        p_words = set(_sig_words(p_text))
+        m_r_aufg = re.search(r"(?im)^(?:#{1,6}\s+|\*\*|_)?Aufgaben\b", r_seg.text)
+
+        for r_pos, rows in sorted(raw_candidates, key=lambda kv: kv[0]):
+            t_words = _sig_words(" ".join(c for r in rows for c in r))
+            if len(t_words) < 4:
+                continue
+            unique_t = set(t_words)
+            page_recall = len(unique_t & p_words) / len(unique_t)
+            doc_recall = len(unique_t & all_proc_words) / len(unique_t)
+            if page_recall >= 0.35 or doc_recall >= 0.45:
+                continue
+
+            max_cols = max(len(r) for r in rows)
+            fmt_rows: list[str] = []
+            for r_i, r_cells in enumerate(rows):
+                clean_c = [
+                    re.sub(r"^(?:\*\*|_)+|(?:\*\*|_)+$", "", c.strip()).strip()
+                    for c in r_cells
+                ]
+                padded = clean_c + [""] * (max_cols - len(clean_c))
+                fmt_rows.append("| " + " | ".join(padded) + " |")
+                if r_i == 0:
+                    fmt_rows.append("| " + " | ".join([":---"] * max_cols) + " |")
+            tabelle_blk = "<Tabelle>\n\n" + "\n".join(fmt_rows) + "\n\n</Tabelle>"
+
+            m_p_aufg = re.search(
+                r"(?im)^(?:#{1,6}\s+|\*\*|_)?Aufgaben\b|^#####\s+1\b", p_text
+            )
+            if m_r_aufg and r_pos < m_r_aufg.start() and m_p_aufg:
+                ins_pos = m_p_aufg.start()
+                p_text = (
+                    p_text[:ins_pos].rstrip()
+                    + f"\n\n{tabelle_blk}\n\n"
+                    + p_text[ins_pos:].lstrip()
+                )
+            else:
+                p_text = p_text.rstrip() + f"\n\n{tabelle_blk}\n\n"
+            proc_segs[p_idx].text = p_text
+            p_words |= unique_t
+            all_proc_words |= unique_t
+            modified = True
+
+    if not modified:
+        return processed
+    return "".join(s.text for s in proc_segs).strip()
 
 
 def _parse_difficulty_rules(
@@ -906,10 +1052,43 @@ def _parse_difficulty_rules(
         )
     )
     for m_map in re.finditer(
-        r"(★★★|★★|★|[□◩■◇◈◆○◐●☆])\s*(?:=|->|→|:)\s*(\[[^\],\n]+\])",
+        r"(★★★|★★|★|[□◩■◇◈◆○◯◐◑◒◓●☆])\s*(?:=|->|→|:)\s*(\[[^\],\n]+\])",
         custom_rules,
     ):
         symbol_map[m_map.group(1)] = m_map.group(2).strip()
+
+    verbal_specs = [
+        (
+            r"\b(?:leer\w*|weiß\w*|weiss\w*|offen\w*|ungefüllt\w*)\s+Kreis\w*\s*(?::|=|->|→|–|-|entspricht)?\s*(\[[^\]\n,]+\])",
+            ("○", "◯"),
+        ),
+        (
+            r"\b(?:halb\s*(?:gefüllt\w*|ausgefüllt\w*|voll\w*|schwarz\w*)|halbkreis\w*)\s*(?:Kreis\w*)?\s*(?::|=|->|→|–|-|entspricht)?\s*(\[[^\]\n,]+\])",
+            ("◐", "◑", "◒", "◓"),
+        ),
+        (
+            r"(?<!halb\s)(?<!halb)(?:gefüllt\w*|ausgefüllt\w*|voll\w*|schwarz\w*)\s+Kreis\w*\s*(?::|=|->|→|–|-|entspricht)?\s*(\[[^\]\n,]+\])",
+            ("●",),
+        ),
+        (
+            r"\b(?:leer\w*|weiß\w*|weiss\w*|offen\w*)\s+(?:Quadrat\w*|Kästchen)\s*(?::|=|->|→|–|-|entspricht)?\s*(\[[^\]\n,]+\])",
+            ("□",),
+        ),
+        (
+            r"\bhalb\s*(?:gefüllt\w*|ausgefüllt\w*)\s+(?:Quadrat\w*|Kästchen)\s*(?::|=|->|→|–|-|entspricht)?\s*(\[[^\]\n,]+\])",
+            ("◩",),
+        ),
+        (
+            r"(?<!halb\s)(?<!halb)(?:gefüllt\w*|ausgefüllt\w*|schwarz\w*)\s+(?:Quadrat\w*|Kästchen)\s*(?::|=|->|→|–|-|entspricht)?\s*(\[[^\]\n,]+\])",
+            ("■",),
+        ),
+    ]
+    for pat, syms in verbal_specs:
+        m_v = re.search(pat, custom_rules, re.IGNORECASE)
+        if m_v:
+            lbl_v = m_v.group(1).strip()
+            for s_k in syms:
+                symbol_map.setdefault(s_k, lbl_v)
 
     return symbol_map, drop_difficulty, inline_on_heading
 
@@ -1497,18 +1676,19 @@ def _resolve_figure_caption_prefix(
             return "", True
 
         m_letter = re.search(
-            r"(?:Abbildungs|Bild|Material)nummern?\s+(?:wird\s+)?(?:jeweils\s+)?ein\s+[\"'„“]?([A-Z])[\"'“”]?\s+vorangestellt"
-            r"|\bein\s+[\"'„“]?([A-Z])[\"'“”]?\s+vorangestellt",
+            r"(?:Abbildungs|Bild|Material)nummern?\s+(?:wird\s+)?(?:jeweils\s+)?ein\s+[\"'„“]?([A-Z])(?![A-Za-zäöüß])[\"'“”]?(?:\s+\S+){0,4}?\s+vorangestellt"
+            r"|\bein\s+[\"'„“]?([A-Z])(?![A-Za-zäöüß])[\"'“”]?(?:\s+\S+){0,4}?\s+vorangestellt"
+            r"|\b([MBQ])\s*\+\s*(?:Bild|Abbildungs)unterschrift\b",
             custom_rules,
         )
         if not m_letter:
             m_letter = re.search(
-                r"(?:Abbildungs|Bild|Material)nummern?\s+(?:wird\s+)?(?:jeweils\s+)?ein\s+[\"'„“]?([a-zA-Z])[\"'“”]?\s+vorangestellt",
+                r"(?:Abbildungs|Bild|Material)nummern?\s+(?:wird\s+)?(?:jeweils\s+)?ein\s+[\"'„“]?([a-zA-Z])(?![A-Za-zäöüß])[\"'“”]?(?:\s+\S+){0,4}?\s+vorangestellt",
                 custom_rules,
                 re.IGNORECASE,
             )
         if m_letter:
-            letter = (m_letter.group(1) or m_letter.group(2) or "").upper()
+            letter = (m_letter.group(1) or m_letter.group(2) or m_letter.group(3) or "").upper()
             return letter, True
 
         if re.search(r"\b(?:Grundschule|Primarstufe)\b", custom_rules, re.IGNORECASE):
@@ -1568,6 +1748,7 @@ def _promote_and_clean_bild_captions(
     text: str,
     custom_rules: str | None = None,
     ruleset_key: str = "uebertragungsregeln_09_2025",
+    directory_info: dict[str, Any] | None = None,
 ) -> str:
     """Promotes figure captions above ``<Bild>`` as ``Ü4`` with FIBS/Buchkonferenz prefix and cleans echoes.
 
@@ -1579,6 +1760,7 @@ def _promote_and_clean_bild_captions(
         text: Post-processed Markdown text containing ``<Bild>`` blocks.
         custom_rules: Optional book-specific rules string.
         ruleset_key: Active FIBS ruleset identifier.
+        directory_info: Optional detected TOC/directory metadata dictionary.
 
     Returns:
         Markdown text with ``#### {prefix}{num} ...`` captions placed above ``<Bild>``.
@@ -1590,6 +1772,19 @@ def _promote_and_clean_bild_captions(
     text_subheadings_h4 = bool(
         custom_rules and _parse_buchkonferenz_profile(custom_rules).text_subheadings_h4
     )
+    protected_heading_norms: set[str] = set()
+    for toc_e in (directory_info or {}).get("toc_entries") or []:
+        if not isinstance(toc_e, dict):
+            continue
+        raw_t = str(toc_e.get("title") or "").strip()
+        lvl_e = int(toc_e.get("level") or 0)
+        if lvl_e == 1 or re.match(r"^\d+\.?\s+\S", raw_t):
+            norm_f = re.sub(r"\W+", " ", raw_t).strip().lower()
+            if norm_f:
+                protected_heading_norms.add(norm_f)
+            norm_c = re.sub(r"\W+", " ", str(toc_e.get("clean_title") or "")).strip().lower()
+            if norm_c:
+                protected_heading_norms.add(norm_c)
 
     # 19f: Strip contiguous >= 2 pairs of orphan in-diagram subheading + single-letter panel heading after </Bild>
     pair_segs = re.split(r"(<Bild\b[^>]*>[\s\S]*?</Bild>)", text, flags=re.IGNORECASE)
@@ -1925,10 +2120,26 @@ def _promote_and_clean_bild_captions(
                             and not let_pre
                             and not bool(custom_rules and custom_rules.strip())
                         )
-                        if not is_chapter_h1_h2 and not re.match(
-                            r"^(?:Kapitel|Chapter|Teil|Part|Lektion|Band)\b",
-                            pre_body_clean,
-                            re.IGNORECASE,
+                        cand_full_norm = re.sub(
+                            r"\W+", " ", f"{m_pre.group(4)} {pre_body_clean}"
+                        ).strip().lower()
+                        cand_body_norm = re.sub(r"\W+", " ", pre_body_clean).strip().lower()
+                        is_toc_chapter = (
+                            not word_pre
+                            and not let_pre
+                            and (
+                                cand_full_norm in protected_heading_norms
+                                or cand_body_norm in protected_heading_norms
+                            )
+                        )
+                        if (
+                            not is_chapter_h1_h2
+                            and not is_toc_chapter
+                            and not re.match(
+                                r"^(?:Kapitel|Chapter|Teil|Part|Lektion|Band)\b",
+                                pre_body_clean,
+                                re.IGNORECASE,
+                            )
                         ):
                             formatted_cap, c_clean = _build_formatted_caption(
                                 word_pre,
@@ -3170,8 +3381,8 @@ def _parse_buchkonferenz_profile(custom_rules: str | None) -> BuchkonferenzProfi
 
     text_subheadings_h4 = bool(
         re.search(
-            r"(?:(?:Überschrift|Ebene)\s*4|Ü\s*4)[\s\S]{0,160}Textüberschrift"
-            r"|Textüberschrift\w*[^\n]{0,60}(?:(?:Überschrift|Ebene)\s*4|Ü\s*4)",
+            r"(?:(?:Überschrift|Ebene)\s*4|Ü\s*4)[\s\S]{0,180}(?:Text|Abschnitts|Zwischen)überschrift"
+            r"|(?:Text|Abschnitts|Zwischen)überschrift\w*[^\n]{0,60}(?:(?:Überschrift|Ebene)\s*4|Ü\s*4)",
             custom_rules,
             re.IGNORECASE,
         )
@@ -3188,7 +3399,7 @@ def _parse_buchkonferenz_profile(custom_rules: str | None) -> BuchkonferenzProfi
         or re.search(
             r"Überschrift\s*1\s*:?\s*[^\n]*(?:Hauptthema|Hauptkapitel|Kapitel)"
             r"|Überschrift\s*3\s*:?[^\n]*(?:Material|IM\s+BLICKPUNKT|Methode|Basiskonzept|Exkurs)"
-            r"|Überschrift\s*4\s*:?[^\n]*(?:Kapitelinterne|Textüberschrift)",
+            r"|Überschrift\s*4\s*:?[^\n]*(?:Kapitelinterne|(?:Text|Abschnitts|Zwischen)überschrift)",
             custom_rules,
             re.IGNORECASE,
         )
@@ -3211,6 +3422,19 @@ def _parse_buchkonferenz_profile(custom_rules: str | None) -> BuchkonferenzProfi
             re.IGNORECASE,
         )
     )
+    arrow_ref_label = ""
+    m_arrow = re.search(
+        r"(?:Verweise?\s+mit\s+Pfeil\w*|Pfeilverweise?|[▶►▷▻])[ \t]*(?::|=|->|→)[ \t]*"
+        r"(?:[^\n\[\]]{0,30}?)(\[[^\]\n,]+\])",
+        custom_rules,
+        re.IGNORECASE,
+    )
+    if m_arrow:
+        arrow_ref_label = m_arrow.group(1).strip()
+    has_self_assessment_box = bool(
+        re.search(r"Selbsteinschätzung", custom_rules, re.IGNORECASE)
+        and re.search(r"\[\s*\]", custom_rules)
+    )
 
     return BuchkonferenzProfile(
         tasks_h5=tasks_h5,
@@ -3221,6 +3445,8 @@ def _parse_buchkonferenz_profile(custom_rules: str | None) -> BuchkonferenzProfi
         text_subheadings_h4=text_subheadings_h4,
         adopt_toc_u1=adopt_toc_u1,
         plain_italic_intro=plain_italic_intro,
+        arrow_ref_label=arrow_ref_label,
+        has_self_assessment_box=has_self_assessment_box,
     )
 
 
@@ -3255,7 +3481,7 @@ def _inject_toc_u1_chapters(
             norm_unnum = re.sub(r"^\d+\.?\s+", "", norm_t).strip()
             if norm_unnum:
                 toc_u1_norms.add(norm_unnum)
-        if raw_t and pg_t:
+        if raw_t and pg_t and not entry.get("page_inferred"):
             u1_by_page.setdefault(pg_t, []).append(raw_t)
 
     if not inject_missing or not u1_by_page or not text:
@@ -3306,6 +3532,8 @@ def _apply_buchkonferenz_rules(
     custom_rules: str | None,
     ruleset_key: str = "uebertragungsregeln_09_2025",
     directory_info: dict[str, Any] | None = None,
+    raw_markdown: str | None = None,
+    table_max_cells: int | None = None,
 ) -> str:
     """Applies generic Buchkonferenz structural and formatting directives from ``custom_rules``.
 
@@ -3314,6 +3542,8 @@ def _apply_buchkonferenz_rules(
         custom_rules: Optional book-specific rules string from ``custom_ruleset.txt``.
         ruleset_key: Active FIBS ruleset identifier.
         directory_info: Optional detected TOC/directory metadata dictionary.
+        raw_markdown: Optional Stage 1 extracted Markdown for context recovery.
+        table_max_cells: Optional cell threshold overriding ``table_resolve_max_cells``.
 
     Returns:
         Markdown text transformed according to the detected Buchkonferenz directives.
@@ -3342,7 +3572,12 @@ def _apply_buchkonferenz_rules(
     )
 
     # Global FIBS 09/2025 Ü4 captions above <Bild> with Buchkonferenz prefix priority
-    text = _promote_and_clean_bild_captions(text, custom_rules=custom_rules, ruleset_key=ruleset_key)
+    text = _promote_and_clean_bild_captions(
+        text,
+        custom_rules=custom_rules,
+        ruleset_key=ruleset_key,
+        directory_info=directory_info,
+    )
 
     # Normalize standalone rubric banner + heading pairs and 'material mitaufgaben' even without custom_rules
     rubric_canon = {
@@ -3507,15 +3742,33 @@ def _apply_buchkonferenz_rules(
     if sb_changed:
         text = "".join(s.text for s in sb_pages)
 
-    # 1. Resolve <Tabelle> blocks up to 30 cells (2c) and drop placeholder tables (2a)
+    # 1. Resolve <Tabelle> blocks up to table_resolve_max_cells (2c) and drop placeholder tables (2a)
+    if table_max_cells is not None:
+        effective_table_max_cells = int(table_max_cells)
+    else:
+        try:
+            from backend.services.settings_service import get_setting
+
+            effective_table_max_cells = int(get_setting("table_resolve_max_cells"))
+        except Exception:
+            effective_table_max_cells = 6
+
     def _resolve_custom_tabelle(m: re.Match[str]) -> str:
-        data_rows = _parse_tabelle_data_rows(m.group(1))
+        inner_t = m.group(1)
+        data_rows = _parse_tabelle_data_rows(inner_t)
         if not data_rows:
             return m.group(0)
+        if re.search(r"<Bild\b|!\[[^\]]*\]\([^)\n]+\)", inner_t, re.IGNORECASE) and len(data_rows) <= 2:
+            imgs_t = re.findall(
+                r"<Bild\b[^>]*>[\s\S]*?</Bild>|!\[[^\]]*\]\([^)\n]+\)",
+                inner_t,
+                flags=re.IGNORECASE,
+            )
+            return "\n\n".join(im.strip() for im in imgs_t)
         if _is_placeholder_only_table(data_rows):
             return ""
         total_cells = sum(len(r) for r in data_rows)
-        if len(data_rows) >= 2 and total_cells <= 30:
+        if effective_table_max_cells > 0 and len(data_rows) >= 2 and total_cells <= effective_table_max_cells:
             headers = [
                 re.sub(r"^(?:\*\*|_)+|(?:\*\*|_)+$", "", h.strip()).strip()
                 for h in data_rows[0]
@@ -3631,6 +3884,25 @@ def _apply_buchkonferenz_rules(
     tasks_h5_any = profile.tasks_h5 or profile.tasks_h5_numbers_only
     emit_aufgaben_hdr = profile.tasks_h5 and not profile.tasks_h5_numbers_only
     if tasks_h5_any:
+        sym_map_t, drop_diff_t, _ = _parse_difficulty_rules(custom_rules)
+        sym_keys_sorted = sorted(sym_map_t.keys(), key=len, reverse=True)
+        sym_alts = "|".join(re.escape(k) for k in sym_keys_sorted)
+        sym_or_bracket_pat = (
+            f"(?:{sym_alts}|[○◯◐◑◒◓●□◩■◇◈◆★☆]|\\[(?:einfach|leicht|mittel|schwierig|schwer)\\])"
+            if sym_alts
+            else r"(?:[○◯◐◑◒◓●□◩■◇◈◆★☆]|\[(?:einfach|leicht|mittel|schwierig|schwer)\])"
+        )
+
+        def _resolve_sym_tok(tok_s: str | None) -> str:
+            t_s = (tok_s or "").strip()
+            if not t_s or drop_diff_t:
+                return ""
+            if t_s in sym_map_t:
+                return sym_map_t[t_s]
+            if t_s.startswith("[") and t_s.endswith("]"):
+                return t_s
+            return ""
+
         t_lines = text.splitlines()
         out_t_lines: list[str] = []
         in_bild = False
@@ -3826,15 +4098,19 @@ def _apply_buchkonferenz_rules(
 
             # Heading with task number + sentence: ### 1 Erklären Sie... or #### A1 Erläutern Sie... or ### Aufgabe 1: ...
             m_h_task = re.match(
-                r"^(#{1,6})\s+(?:(?:\*\*|_)?Aufgabe\s+)?([A-LN-Z]?\d+(?:\.\d+)?)([ \t]*\[[^\]]+\])?[.:]?\s+([A-ZÄÖÜ].+)$",
+                rf"^(#{{1,6}})\s+(?:(?:\*\*|_)?Aufgabe\s+)?([A-LN-Z]?\d+(?:\.\d+)?)"
+                rf"([ \t]*(?:\[[^\]]+\]|[○◯◐◑◒◓●□◩■◇◈◆★☆]+))?[.:]?\s+"
+                rf"(?:({sym_or_bracket_pat})[ \t]+)?(?:([a-z]\))[ \t]+)?([A-ZÄÖÜ„\"'(].+)$",
                 s,
             )
             if m_h_task:
-                hashes_t, t_num, t_inline_ind, t_body = (
+                hashes_t, t_num, t_inline_ind, t_body_sym, t_sub_tok, t_body = (
                     m_h_task.group(1),
                     m_h_task.group(2),
                     (m_h_task.group(3) or "").strip(),
-                    m_h_task.group(4).strip(),
+                    (m_h_task.group(4) or "").strip(),
+                    (m_h_task.group(5) or "").strip(),
+                    m_h_task.group(6).strip(),
                 )
                 is_task_h = (
                     "aufgabe" in s.lower()
@@ -3849,8 +4125,21 @@ def _apply_buchkonferenz_rules(
                         out_t_lines.append("")
                     in_aufgaben = True
                     out_t_lines.append(f"##### {t_num}")
-                    out_t_lines.append("")
-                    out_t_lines.append(f"{t_body} {t_inline_ind}".strip() if t_inline_ind else t_body)
+                    lbl_h = _resolve_sym_tok(t_body_sym or t_inline_ind)
+                    if t_sub_tok:
+                        out_t_lines.append("")
+                        out_t_lines.append(
+                            f"{t_sub_tok} {lbl_h} {t_body}".strip() if lbl_h else f"{t_sub_tok} {t_body}"
+                        )
+                    else:
+                        if lbl_h:
+                            out_t_lines.append(lbl_h)
+                        out_t_lines.append("")
+                        out_t_lines.append(
+                            f"{t_body} {t_inline_ind}".strip()
+                            if (t_inline_ind and not lbl_h)
+                            else t_body
+                        )
                     continue
 
             # Reset in_aufgaben on non-task H1..H4 headings
@@ -3859,19 +4148,61 @@ def _apply_buchkonferenz_rules(
                 out_t_lines.append(ln)
                 continue
 
-            # Plain-text or list-formatted task line: "1 Erklären Sie...", "- A2 Beschreiben Sie...", "Ü. 1 Erläutern Sie..."
+            # Convert standalone difficulty symbols, subtask lines, or symbol-prefixed task lines inside active tasks
+            if in_aufgaben:
+                if s in sym_map_t or fc.STANDALONE_DIFFICULTY_LINE_RE.match(s):
+                    lbl_only = _resolve_sym_tok(s)
+                    if lbl_only:
+                        out_t_lines.append(lbl_only)
+                    continue
+                m_sub_pre = re.match(
+                    rf"^({sym_or_bracket_pat})[ \t]+([a-z]\))[ \t]+(.+)$", s
+                )
+                m_sub_post = (
+                    None
+                    if m_sub_pre
+                    else re.match(rf"^([a-z]\))[ \t]+({sym_or_bracket_pat})[ \t]+(.+)$", s)
+                )
+                if m_sub_pre or m_sub_post:
+                    if m_sub_pre:
+                        raw_s_tok, sub_tok, sub_rest = m_sub_pre.groups()
+                    else:
+                        sub_tok, raw_s_tok, sub_rest = m_sub_post.groups()  # type: ignore[union-attr]
+                    lbl_sub = _resolve_sym_tok(raw_s_tok)
+                    out_t_lines.append(
+                        f"{sub_tok} {lbl_sub} {sub_rest.strip()}" if lbl_sub else f"{sub_tok} {sub_rest.strip()}"
+                    )
+                    continue
+                m_sym_body = re.match(
+                    rf"^({sym_or_bracket_pat})[ \t]+([A-ZÄÖÜ„\"'(].+)$", s
+                )
+                if m_sym_body and not re.match(r"^\[\s*(?:siehe|vgl|\.\.\.)", s, re.IGNORECASE):
+                    lbl_b = _resolve_sym_tok(m_sym_body.group(1))
+                    if lbl_b:
+                        while out_t_lines and not out_t_lines[-1].strip():
+                            out_t_lines.pop()
+                        out_t_lines.append(lbl_b)
+                        out_t_lines.append("")
+                    out_t_lines.append(m_sym_body.group(2).strip())
+                    continue
+
+            # Plain-text or list-formatted task line: "1 Erklären Sie...", "1. ○ a) ...", "- A2 Beschreiben Sie...", "Ü. 1 Erläutern Sie..."
             m_plain_task = re.match(
-                r"^(?:(\d+)\.\t|(?:[-*•][\t ]+)?(?:Ü\.?\s+)?(?:\*\*|_)?([A-LN-Z]\d+|\d+)(?:\*\*|_)?[.:]?\s+)([A-ZÄÖÜ].+)$",
+                rf"^(?:(\d+)\.\t|(?:[-*•][\t ]+)?(?:Ü\.?\s+)?(?:\*\*|_)?([A-LN-Z]\d+|\d+)(?:\*\*|_)?[.:]?\s+)"
+                rf"(?:({sym_or_bracket_pat})[ \t]+)?(?:([a-z]\))[ \t]+)?([A-ZÄÖÜ„\"'(].+)$",
                 s,
             )
             if m_plain_task:
                 t_num = m_plain_task.group(1) or m_plain_task.group(2)
-                t_body = m_plain_task.group(3).strip()
+                p_sym_tok = (m_plain_task.group(3) or "").strip()
+                p_sub_tok = (m_plain_task.group(4) or "").strip()
+                t_body = m_plain_task.group(5).strip()
                 is_explicit_op_or_q = (
                     bool(_TASK_OPERATOR_VERB_RE.match(t_body))
                     or t_body.endswith("?")
                     or bool(re.search(r"^[A-ZÄÖÜ][a-zäöüß]+en\s+Sie\b", t_body))
                     or bool(fc.POINT_DIFFICULTY_TAG_RE.search(t_body))
+                    or bool(p_sym_tok)
                 )
                 if is_explicit_op_or_q or (
                     in_aufgaben
@@ -3882,8 +4213,17 @@ def _apply_buchkonferenz_rules(
                         out_t_lines.append("")
                     in_aufgaben = True
                     out_t_lines.append(f"##### {t_num}")
-                    out_t_lines.append("")
-                    out_t_lines.append(t_body)
+                    lbl_p = _resolve_sym_tok(p_sym_tok)
+                    if p_sub_tok:
+                        out_t_lines.append("")
+                        out_t_lines.append(
+                            f"{p_sub_tok} {lbl_p} {t_body}".strip() if lbl_p else f"{p_sub_tok} {t_body}"
+                        )
+                    else:
+                        if lbl_p:
+                            out_t_lines.append(lbl_p)
+                        out_t_lines.append("")
+                        out_t_lines.append(t_body)
                     continue
 
             out_t_lines.append(ln)
@@ -3974,6 +4314,25 @@ def _apply_buchkonferenz_rules(
                 elif re.match(r"^###\s+\S", st_sc):
                     pages_with_h3.add(cur_pg_scan)
 
+        toc_u2_u3_norms: set[str] = set()
+        for toc_e in (directory_info or {}).get("toc_entries") or []:
+            if not isinstance(toc_e, dict) or int(toc_e.get("level") or 0) not in (2, 3):
+                continue
+            for field_k in ("title", "clean_title"):
+                raw_tk = str(toc_e.get(field_k) or "").strip()
+                if not raw_tk:
+                    continue
+                norm_tk = re.sub(r"\W+", " ", raw_tk).strip().lower()
+                if norm_tk:
+                    toc_u2_u3_norms.add(norm_tk)
+                    stripped_rub = re.sub(
+                        r"^(?:werkstatt|strategie|extra|lexikon|infografik|methode|basiskonzept|exkurs)\s*:?\s+",
+                        "",
+                        norm_tk,
+                    ).strip()
+                    if stripped_rub:
+                        toc_u2_u3_norms.add(stripped_rub)
+
         h_lines = text.splitlines()
         out_h_lines: list[str] = []
         in_bild = False
@@ -3982,7 +4341,7 @@ def _apply_buchkonferenz_rules(
         after_m1_caption = False
         cur_pg_h = ""
         seen_mat_h3_on_page = False
-        for ln in h_lines:
+        for idx_h, ln in enumerate(h_lines):
             s = ln.strip()
             m_pm_h = re.match(r"^\(\((\d+)\)\)", s)
             if m_pm_h:
@@ -4088,17 +4447,48 @@ def _apply_buchkonferenz_rules(
             # Numbered figure/table caption heading: e.g. "## 3 Ionenkonzentrationen..." -> "#### M3 ..."
             if caption_h4:
                 m_num_cap = re.match(
-                    r"^#{1,4}\s+(?:[MBQ]\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n]{3,600})$",
+                    r"^#{1,4}\s+(?:([MBQ])\s*)?(\d{1,2})\s+([A-ZÄÖÜ][^\n]{3,600})$",
                     s,
                 )
-                c_body_cand = m_num_cap.group(2).strip() if m_num_cap else ""
+                has_explicit_pfx_c = bool(m_num_cap and m_num_cap.group(1))
+                c_body_cand = m_num_cap.group(3).strip() if m_num_cap else ""
+                c_full_norm = (
+                    re.sub(r"\W+", " ", f"{m_num_cap.group(2)} {c_body_cand}").strip().lower()
+                    if m_num_cap
+                    else ""
+                )
+                c_body_norm = re.sub(r"\W+", " ", c_body_cand).strip().lower() if c_body_cand else ""
+                adj_has_media = has_explicit_pfx_c
+                if m_num_cap and not has_explicit_pfx_c:
+                    ne_back: list[str] = []
+                    for b_i in range(idx_h - 1, -1, -1):
+                        sb_l = h_lines[b_i].strip()
+                        if sb_l and sb_l != "---":
+                            ne_back.append(sb_l)
+                            break
+                    ne_fwd: list[str] = []
+                    for f_i in range(idx_h + 1, len(h_lines)):
+                        sf_l = h_lines[f_i].strip()
+                        if sf_l and sf_l != "---":
+                            ne_fwd.append(sf_l)
+                            break
+                    adj_has_media = any(
+                        re.match(r"^(?:</Tabelle\b)", adj_l, re.IGNORECASE)
+                        for adj_l in ne_back
+                    ) or any(
+                        re.match(r"^(?:<(?:Bild|Tabelle)\b|!\[)", adj_l, re.IGNORECASE)
+                        for adj_l in ne_fwd
+                    )
                 if (
                     m_num_cap
+                    and adj_has_media
+                    and c_full_norm not in toc_u1_norms
+                    and c_body_norm not in toc_u1_norms
                     and not _TASK_OPERATOR_VERB_RE.match(c_body_cand)
                     and not _is_question_or_lead_in_prose(c_body_cand)
                     and not re.search(r"\bSie\b", c_body_cand)
                 ):
-                    c_num = m_num_cap.group(1)
+                    c_num = m_num_cap.group(2)
                     out_h_lines.append(_split_long_caption_body(f"{fig_pfx}{c_num}", c_body_cand))
                     if c_num == "1":
                         after_m1_caption = True
@@ -4108,8 +4498,23 @@ def _apply_buchkonferenz_rules(
             if m_any_h:
                 h_lvl = len(m_any_h.group(1))
                 h_title = m_any_h.group(2).strip()
+                h_norm = re.sub(r"\W+", " ", h_title).strip().lower()
+                h_norm_stripped = re.sub(
+                    r"^(?:werkstatt|strategie|extra|lexikon|infografik|methode|basiskonzept|exkurs)\s+",
+                    "",
+                    h_norm,
+                ).strip()
+                is_toc_u2_u3 = bool(
+                    toc_u2_u3_norms
+                    and (h_norm in toc_u2_u3_norms or h_norm_stripped in toc_u2_u3_norms)
+                )
                 if h_lvl == 3:
-                    if profile.text_subheadings_h4 and not u3_rubric_re.match(h_title) and not re.match(r"^\d+\.\d+\.\d+\b", h_title):
+                    if (
+                        profile.text_subheadings_h4
+                        and not is_toc_u2_u3
+                        and not u3_rubric_re.match(h_title)
+                        and not re.match(r"^\d+\.\d+\.\d+\b", h_title)
+                    ):
                         out_h_lines.append(f"#### {h_title}")
                     else:
                         out_h_lines.append(ln)
@@ -4141,7 +4546,7 @@ def _apply_buchkonferenz_rules(
                         seen_chapter_or_h3 = True
                         after_m1_caption = False
                         continue
-                    if u3_rubric_re.match(h_title):
+                    if u3_rubric_re.match(h_title) or (profile.text_subheadings_h4 and is_toc_u2_u3):
                         out_h_lines.append(f"### {h_title}")
                         seen_chapter_or_h3 = True
                         after_m1_caption = False
@@ -4276,6 +4681,105 @@ def _apply_buchkonferenz_rules(
             text,
             flags=re.IGNORECASE,
         )
+
+    # 7. Buchkonferenz Self-Assessment Blocks ([Selbsteinschätzung:]) & Arrow Cross-References
+    if profile.has_self_assessment_box or profile.arrow_ref_label:
+        arrow_lbl = profile.arrow_ref_label or "[siehe]"
+        sa_masked_blocks: list[str] = []
+
+        def _mask_sa_blk(m_b: re.Match[str]) -> str:
+            sa_masked_blocks.append(m_b.group(0))
+            return f"__BK_SA_PROT_{len(sa_masked_blocks) - 1}__"
+
+        sa_text = re.sub(
+            r"<(?:Bild|Tabelle)\b[^>]*>[\s\S]*?</(?:Bild|Tabelle)>",
+            _mask_sa_blk,
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        if profile.has_self_assessment_box:
+            def _fmt_sa_line(m_sa: re.Match[str]) -> str:
+                ref_raw = (m_sa.group(1) or "").strip()
+                if ref_raw:
+                    ref_clean = re.sub(r"^S\.?\s*", "S. ", ref_raw)
+                    return (
+                        "[Selbsteinschätzung:]\n"
+                        "[ ] Super!\n"
+                        f"[ ] Fragen? {arrow_lbl} {ref_clean}"
+                    )
+                return "[Selbsteinschätzung:]\n[ ] Super!\n[ ] Fragen?"
+
+            sa_text = re.sub(
+                r"(?im)^[ \t]*(?:👍|[-*•]|\[\s*\])?[ \t]*Super!?[ \t]*(?:\?|Fragen\??)?[ \t]*"
+                r"(?:(?:[▶►▷▻>]+|\[siehe\]|siehe)[ \t]*)?(S\.?\s*\d[^\n]*)?$",
+                _fmt_sa_line,
+                sa_text,
+            )
+
+            if raw_markdown:
+                raw_sa_pages = split_markdown_pages(raw_markdown)
+                cur_sa_pages = split_markdown_pages(sa_text)
+                raw_refs_by_page: dict[str, set[str]] = {}
+                for rs in raw_sa_pages:
+                    if not rs.page:
+                        continue
+                    for m_rs in re.finditer(
+                        r"(?im)^[ \t]*(?:👍|[-*•]|\[\s*\])?[ \t]*Super!?[ \t]*(?:\?|Fragen\??)?[ \t]*"
+                        r"(?:(?:[▶►▷▻>]+|\[siehe\]|siehe)[ \t]*)?(S\.?\s*\d[^\n]*)$",
+                        rs.text,
+                    ):
+                        norm_r = re.sub(r"\s+", "", m_rs.group(1)).lower()
+                        raw_refs_by_page.setdefault(rs.page, set()).add(norm_r)
+
+                if raw_refs_by_page:
+                    sa_changed = False
+                    for cp in cur_sa_pages:
+                        p_refs = raw_refs_by_page.get(cp.page or "")
+                        if not p_refs:
+                            continue
+
+                        def _recover_sa_ref(m_cr: re.Match[str], p_refs: set[str] = p_refs) -> str:
+                            raw_r = m_cr.group(1).strip()
+                            if re.sub(r"\s+", "", raw_r).lower() in p_refs:
+                                ref_fmt = re.sub(r"^S\.?\s*", "S. ", raw_r)
+                                return (
+                                    "[Selbsteinschätzung:]\n"
+                                    "[ ] Super!\n"
+                                    f"[ ] Fragen? {arrow_lbl} {ref_fmt}"
+                                )
+                            return m_cr.group(0)
+
+                        new_cp_text = re.sub(
+                            r"(?im)^[ \t]*(?:\(\s*)?(?:[▶►▷▻>]+|\[\s*siehe\s*\]|siehe)[ \t]+(S\.?\s*\d[^\n]*?)(?:\s*\))?$",
+                            _recover_sa_ref,
+                            cp.text,
+                        )
+                        if new_cp_text != cp.text:
+                            cp.text = new_cp_text
+                            sa_changed = True
+                    if sa_changed:
+                        sa_text = "".join(cp.text for cp in cur_sa_pages)
+
+        if profile.arrow_ref_label:
+            lbl_a = profile.arrow_ref_label
+            esc_lbl_a = re.escape(lbl_a)
+            sa_text = re.sub(
+                rf"(?<!{esc_lbl_a} )[▶►▷▻▸▹][ \t]*(?=(?:[BM]\s*\d|S\.?\s*\d|Seite\s+\d|Abb\.?|Bild\b|Tab\.?|Kap\.?|Aufg\.?|Basiskonzept\b|[A-ZÄÖÜ][a-zäöüß]))",
+                f"{lbl_a} ",
+                sa_text,
+            )
+            sa_text = re.sub(
+                r"\([ \t]*(?:>>|>=|>|≥)[ \t]*(?=(?:[BM]\s*\d|S\.?\s*\d|Abb\.?|Bild\s+\d|Tab\.?))",
+                f"({lbl_a} ",
+                sa_text,
+            )
+            sa_text = re.sub(rf"{esc_lbl_a}[ \t]+{esc_lbl_a}\b", lbl_a, sa_text)
+            sa_text = re.sub(rf"{esc_lbl_a}[ \t]{{2,}}", f"{lbl_a} ", sa_text)
+
+        for idx_sb, blk_sb in enumerate(sa_masked_blocks):
+            sa_text = sa_text.replace(f"__BK_SA_PROT_{idx_sb}__", blk_sb)
+        text = sa_text
 
     return text
 
@@ -4617,6 +5121,7 @@ def post_process_structure(
     directory_info: dict[str, Any] | None = None,
     custom_rules: str | None = None,
     ruleset_key: str = "uebertragungsregeln_09_2025",
+    table_max_cells: int | None = None,
 ) -> str:
     """Applies the full deterministic FIBS 09/2025 structural post-processing pipeline.
 
@@ -4631,6 +5136,7 @@ def post_process_structure(
         directory_info: Optional detected TOC/directory metadata dictionary.
         custom_rules: Optional book-specific rules string (e.g. task difficulty overrides).
         ruleset_key: Identifier of the active FIBS ruleset.
+        table_max_cells: Optional cell threshold overriding ``table_resolve_max_cells``.
 
     Returns:
         Fully post-processed E-Buch Markdown string.
@@ -4762,6 +5268,8 @@ def post_process_structure(
         custom_rules=custom_rules,
     )
     processed = _unroll_subtask_tables_and_convert_md_tables(processed)
+    if raw_markdown:
+        processed = _recover_dropped_tables(processed, raw_markdown)
 
     def _merge_cross_page_tabelle_blocks(m: re.Match[str]) -> str:
         t1_body = m.group(1).strip()
@@ -4881,6 +5389,8 @@ def post_process_structure(
         custom_rules,
         ruleset_key=ruleset_key,
         directory_info=directory_info,
+        raw_markdown=raw_markdown,
+        table_max_cells=table_max_cells,
     )
     processed = _lift_trailing_task_difficulty_tags(processed, custom_rules=custom_rules)
     processed = _apply_linked_worterklaerungen_and_randspalten(processed, custom_rules=custom_rules)
@@ -4913,6 +5423,36 @@ def post_process_structure(
 
     if raw_markdown:
         processed = _recover_dropped_rahmen_blocks(processed, raw_markdown)
+
+    # Unwrap empty or single-line label-only <Rahmen> blocks (<= 6 words, no sentence punctuation)
+    def _unwrap_label_only_rahmen(m_r: re.Match[str]) -> str:
+        inner_lns = [ln_r.strip() for ln_r in m_r.group(1).splitlines() if ln_r.strip()]
+        if not inner_lns:
+            return ""
+        if len(inner_lns) == 1:
+            only_raw = inner_lns[0]
+            only_plain = re.sub(r"^[_*]+|[_*]+$", "", only_raw).strip()
+            if (
+                only_plain
+                and len(only_plain.split()) <= 6
+                and not only_plain.endswith((".", "!", "?"))
+                and not only_plain.startswith(("-", "1."))
+            ):
+                after_tail = processed[m_r.end() :].lstrip()
+                if (
+                    only_plain.rstrip(":").lower() == "zusammenfassung"
+                    and after_tail.startswith("#")
+                ):
+                    return "### Zusammenfassung"
+                return only_raw
+        return m_r.group(0)
+
+    processed = re.sub(
+        r"<Rahmen\b[^>]*>\s*([\s\S]*?)\s*</Rahmen>",
+        _unwrap_label_only_rahmen,
+        processed,
+        flags=re.IGNORECASE,
+    )
 
     processed = _normalize_fibs_emphasis(processed, custom_rules=custom_rules)
     after_math_strip = strip_math_and_variable_emphasis(processed)
@@ -4973,7 +5513,8 @@ def post_process_structure(
             if m_dh:
                 dh_hashes, dh_title = m_dh.group(1), m_dh.group(2).strip()
                 dh_lvl = len(dh_hashes)
-                dh_toks = re.findall(r"[a-zäöüß0-9]+", dh_title.lower())
+                dh_norm = re.sub(r"\b([a-z])\s+(\d+)\b", r"\1\2", dh_title.lower())
+                dh_toks = re.findall(r"[a-zäöüß0-9]+", dh_norm)
                 dh_key = " ".join(dh_toks)
                 is_dec_sec = bool(
                     re.match(r"^[1-9]\d?\.[1-9]\d?\b", dh_title) and len(dh_toks) >= 3

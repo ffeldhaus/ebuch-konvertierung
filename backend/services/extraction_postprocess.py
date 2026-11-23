@@ -1029,6 +1029,374 @@ def _detect_page_3dot_task_difficulties(
     return [item[3] for item in found_difficulties]
 
 
+def _detect_page_circle_task_difficulties(
+    page: Any,
+    textpage: Any,
+    pw: float,
+    ph: float,
+    bx0: float,
+    by0: float,
+    rotation: int,
+    pdfium_c: Any,
+) -> list[dict[str, Any]]:
+    """Detects single-glyph circle task difficulty icons (``○``, ``◐``, ``●``) in born-digital PDFs.
+
+    Publisher-agnostic: locates isolated square-ish symbol glyphs (either explicit Unicode
+    difficulty symbols or minority non-body icon fonts) flanked by a task/subtask prefix
+    and task prose, then measures pixel interior fill vs. outer ring density on a single
+    page rasterization to classify empty (``○``), half-filled (``◐``), and solid (``●``).
+
+    Args:
+        page: Open ``pypdfium2.PdfPage``.
+        textpage: Open ``pypdfium2.PdfTextPage`` for ``page``.
+        pw: Page width in PDF points.
+        ph: Page height in PDF points.
+        bx0: Page bounding-box left origin in PDF points.
+        by0: Page bounding-box bottom origin in PDF points.
+        rotation: Page clockwise rotation in degrees (0, 90, 180, 270).
+        pdfium_c: ``pypdfium2.raw`` bindings module.
+
+    Returns:
+        List of detected difficulty dicts sorted in reading order with keys ``symbol``,
+        ``level`` (1..3), ``task_num``, ``subtask``, ``anchor``, and ``y_1000``.
+    """
+    n_chars = textpage.count_chars()
+    if n_chars <= 0 or pw <= 0 or ph <= 0:
+        return []
+
+    buf = ctypes.create_string_buffer(128)
+    buf_ptr = ctypes.cast(buf, ctypes.c_void_p)
+    flags_c = ctypes.c_int(0)
+    l_c = ctypes.c_double()
+    r_c = ctypes.c_double()
+    b_c = ctypes.c_double()
+    t_c = ctypes.c_double()
+
+    def _font_stem(raw_name: str) -> str:
+        s_fn = re.sub(r"^[A-Z]{6}\+", "", raw_name or "").lower()
+        s_fn = re.sub(
+            r"[-,_]*(?:(?:extra|semi|demi|ultra)?bold|demi|heavy|black|medium|regular|light|"
+            r"roman|book|italic|oblique|kursiv|slanted|bd|sb|bf|it)+$",
+            "",
+            s_fn,
+        )
+        return re.sub(r"[^a-z]+", "", s_fn)
+
+    char_rows: list[tuple[str, str, float, float, float, float]] = []
+    font_counts: dict[str, int] = {}
+    total_non_ws = 0
+    for ci in range(n_chars):
+        uni = pdfium_c.FPDFText_GetUnicode(textpage.raw, ci)
+        ch = chr(uni) if uni > 0 else " "
+        pdfium_c.FPDFText_GetFontInfo(textpage.raw, ci, buf_ptr, 128, ctypes.byref(flags_c))
+        fn_stem = _font_stem(buf.value.decode("utf-8", errors="ignore"))
+        pdfium_c.FPDFText_GetCharBox(
+            textpage.raw,
+            ci,
+            ctypes.byref(l_c),
+            ctypes.byref(r_c),
+            ctypes.byref(b_c),
+            ctypes.byref(t_c),
+        )
+        char_rows.append((ch, fn_stem, l_c.value, b_c.value, r_c.value, t_c.value))
+        if not ch.isspace() and fn_stem:
+            font_counts[fn_stem] = font_counts.get(fn_stem, 0) + 1
+            total_non_ws += 1
+
+    if total_non_ws <= 0:
+        return []
+
+    dom_font = max(font_counts.items(), key=lambda kv: kv[1])[0] if font_counts else ""
+    unicode_glyphs = set("○◯◐◑◒◓●□◩■◇◈◆")
+    candidates: list[dict[str, Any]] = []
+
+    for ci, (ch, fn_stem, l_v, b_v, r_v, t_v) in enumerate(char_rows):
+        if ch.isspace():
+            continue
+        bw = r_v - l_v
+        bh = t_v - b_v
+        if not (4.0 <= bw <= 14.0 and 4.0 <= bh <= 14.0):
+            continue
+        aspect = bw / max(bh, 0.1)
+        if not (0.75 <= aspect <= 1.35):
+            continue
+
+        is_uni = ch in unicode_glyphs
+        is_minority_icon = (
+            bool(fn_stem)
+            and fn_stem != dom_font
+            and (font_counts.get(fn_stem, 0) / total_non_ws) < 0.10
+            and (ci == 0 or char_rows[ci - 1][0].isspace())
+            and (ci + 1 >= n_chars or char_rows[ci + 1][0].isspace())
+        )
+        if not (is_uni or is_minority_icon):
+            continue
+
+        y_mid = (b_v + t_v) / 2.0
+        dy_tol = max(4.5, bh * 0.90)
+
+        pre_chars: list[str] = []
+        cur_x_left = l_v
+        for k_pre in range(ci - 1, max(-1, ci - 45), -1):
+            p_ch, _p_fn, p_l, p_b, p_r, p_t = char_rows[k_pre]
+            if p_ch in "\r\n":
+                if pre_chars:
+                    break
+                continue
+            p_ym = (p_b + p_t) / 2.0
+            if not p_ch.isspace() and (abs(p_ym - y_mid) > dy_tol or (cur_x_left - p_r) > 45.0):
+                break
+            pre_chars.append(p_ch)
+            if not p_ch.isspace():
+                cur_x_left = p_l
+        pre_txt = "".join(reversed(pre_chars)).strip()
+
+        post_chars: list[str] = []
+        cur_x_right = r_v
+        for k_post in range(ci + 1, min(n_chars, ci + 90)):
+            n_ch, _n_fn, n_l, n_b, n_r, n_t = char_rows[k_post]
+            if n_ch in "\r\n":
+                if len("".join(post_chars).strip()) >= 12:
+                    break
+                continue
+            n_ym = (n_b + n_t) / 2.0
+            if not n_ch.isspace() and (abs(n_ym - y_mid) > dy_tol or (n_l - cur_x_right) > 55.0):
+                break
+            post_chars.append(n_ch)
+            if not n_ch.isspace():
+                cur_x_right = n_r
+        post_txt = re.sub(r"\s+", " ", "".join(post_chars)).strip()
+
+        if len(re.findall(r"[A-Za-zÄÖÜäöüß]{3,}", post_txt)) < 2:
+            continue
+
+        task_num = ""
+        subtask = ""
+        m_pre_num = re.search(r"(?:^|\s)(\d{1,2}|[A-Z]\d{1,2})[.:)]?$", pre_txt)
+        m_pre_sub = re.search(r"(?:^|\s)([a-z]\))$", pre_txt)
+        m_post_sub = re.match(r"^([a-z]\))\s+[A-ZÄÖÜa-zäöüß]", post_txt)
+        if m_pre_num:
+            task_num = m_pre_num.group(1)
+        elif m_pre_sub:
+            subtask = m_pre_sub.group(1)
+        if m_post_sub and not subtask:
+            subtask = m_post_sub.group(1)
+            post_anchor = post_txt[m_post_sub.end(1) :].strip()
+        else:
+            post_anchor = post_txt
+
+        if not (task_num or subtask):
+            continue
+
+        candidates.append({
+            "box": (l_v, b_v, r_v, t_v),
+            "task_num": task_num,
+            "subtask": subtask,
+            "anchor": post_anchor[:65],
+        })
+
+    if not candidates:
+        return []
+
+    try:
+        pil_img = page.render(scale=4.0).to_pil().convert("RGB")
+    except Exception:
+        return []
+
+    img_w, img_h = pil_img.size
+    if img_w <= 0 or img_h <= 0:
+        return []
+
+    found: list[tuple[int, float, float, dict[str, Any]]] = []
+    for cand in candidates:
+        l_v, b_v, r_v, t_v = cand["box"]
+        if rotation == 90:
+            pts = [
+                (b_v - by0, ph - (r_v - bx0)),
+                (t_v - by0, ph - (l_v - bx0)),
+            ]
+        elif rotation == 180:
+            pts = [
+                (pw - (r_v - bx0), ph - (t_v - by0)),
+                (pw - (l_v - bx0), ph - (b_v - by0)),
+            ]
+        elif rotation == 270:
+            pts = [
+                (pw - (t_v - by0), l_v - bx0),
+                (pw - (b_v - by0), r_v - bx0),
+            ]
+        else:
+            pts = [(l_v - bx0, b_v - by0), (r_v - bx0, t_v - by0)]
+
+        rx0 = min(p[0] for p in pts)
+        rx1 = max(p[0] for p in pts)
+        ry0 = min(p[1] for p in pts)
+        ry1 = max(p[1] for p in pts)
+
+        px0 = ((rx0) / pw) * img_w
+        px1 = ((rx1) / pw) * img_w
+        py0 = ((ph - ry1) / ph) * img_h
+        py1 = ((ph - ry0) / ph) * img_h
+        if (px1 - px0) < 6.0 or (py1 - py0) < 6.0:
+            continue
+
+        cx = (px0 + px1) / 2.0
+        cy = (py0 + py1) / 2.0
+        rad_x = (px1 - px0) * 0.50
+        rad_y = (py1 - py0) * 0.50
+        inner_dark = inner_tot = ring_dark = ring_tot = 0
+        for py in range(max(0, int(py0) - 1), min(img_h, int(py1) + 2)):
+            for px in range(max(0, int(px0) - 1), min(img_w, int(px1) + 2)):
+                r_sq = ((px + 0.5 - cx) / max(rad_x, 0.5)) ** 2 + (
+                    (py + 0.5 - cy) / max(rad_y, 0.5)
+                ) ** 2
+                rv, gv, bv = pil_img.getpixel((px, py))
+                is_dark = (0.299 * rv + 0.587 * gv + 0.114 * bv) < 195.0
+                if r_sq <= 0.68**2:
+                    inner_tot += 1
+                    inner_dark += int(is_dark)
+                elif 0.72**2 <= r_sq <= 1.08**2:
+                    ring_tot += 1
+                    ring_dark += int(is_dark)
+
+        if inner_tot == 0 or ring_tot == 0:
+            continue
+        ring_fill = ring_dark / ring_tot
+        if ring_fill < 0.22:
+            continue
+
+        inner_fill = inner_dark / inner_tot
+        if inner_fill < 0.18:
+            sym, lvl = "○", 1
+        elif 0.30 <= inner_fill <= 0.72:
+            sym, lvl = "◐", 2
+        elif inner_fill > 0.82:
+            sym, lvl = "●", 3
+        else:
+            continue
+
+        x_mid_pt = (l_v + r_v) / 2.0
+        y_mid_pt = (b_v + t_v) / 2.0
+        col_idx = 1 if (x_mid_pt - bx0) > pw * 0.48 else 0
+        y_1000 = round(((ph - (y_mid_pt - by0)) / ph) * 1000.0, 1)
+        x_1000 = round(((l_v - bx0) / pw) * 1000.0, 1)
+        found.append(
+            (
+                col_idx,
+                y_1000,
+                x_1000,
+                {
+                    "symbol": sym,
+                    "level": lvl,
+                    "task_num": cand["task_num"],
+                    "subtask": cand["subtask"],
+                    "anchor": cand["anchor"],
+                    "y_1000": y_1000,
+                },
+            )
+        )
+
+    found.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in found]
+
+
+def _attach_circle_task_difficulties(
+    page_text: str, circle_diffs: list[dict[str, Any]]
+) -> str:
+    """Replaces misrecognized OCR circle task symbols (or inserts missing ones) from PDF glyphs.
+
+    Args:
+        page_text: Extracted Markdown string for a single page (or page segment).
+        circle_diffs: List of entries produced by ``_detect_page_circle_task_difficulties``.
+
+    Returns:
+        Updated Markdown string with exact ``○``, ``◐``, and ``●`` symbols attached to
+        the matching task/subtask lines.
+    """
+    if not page_text or not circle_diffs:
+        return page_text
+
+    td_lines = page_text.splitlines()
+    misread_prefix_re = r"(?:[○◯◐◑◒◓●□◩■•·0$.oO][ \t]+)"
+    used_lines: set[int] = set()
+
+    for cd in circle_diffs:
+        sym = str(cd.get("symbol") or "").strip()
+        t_num = str(cd.get("task_num") or "").strip()
+        sub = str(cd.get("subtask") or "").strip()
+        anchor = str(cd.get("anchor") or "").strip()
+        if sym not in ("○", "◐", "●"):
+            continue
+
+        anchor_words = [
+            w.lower()
+            for w in re.findall(r"[A-Za-zÄÖÜäöüß]{4,}", anchor)[:4]
+        ]
+        if not anchor_words:
+            anchor_words = [
+                w.lower()
+                for w in re.findall(r"[A-Za-zÄÖÜäöüß]{3,}", anchor)[:3]
+            ]
+
+        def _anchor_matches(candidate_body: str) -> bool:
+            if not anchor_words:
+                return True
+            plain_c = re.sub(r"[\*_]+", "", candidate_body).lower()
+            hits = sum(1 for w in anchor_words if w in plain_c)
+            return hits >= max(1, (len(anchor_words) + 1) // 2)
+
+        for li, raw_ln in enumerate(td_lines):
+            if li in used_lines:
+                continue
+            s_ln = raw_ln.strip()
+            if not s_ln or s_ln.startswith(("![", "<Bild", "|", "((")):
+                continue
+
+            if t_num and sub:
+                m_ts = re.match(
+                    rf"^([ \t]*(?:#{{1,6}}\s+)?(?:[-*•]\s+)?{re.escape(t_num)}[.:)]?\s+)"
+                    rf"(?:{misread_prefix_re})?({re.escape(sub)}\s+.*)$",
+                    raw_ln,
+                )
+                if m_ts and _anchor_matches(m_ts.group(2)):
+                    td_lines[li] = f"{m_ts.group(1)}{sym} {m_ts.group(2).lstrip()}"
+                    used_lines.add(li)
+                    break
+
+            if t_num and not sub:
+                m_t = re.match(
+                    rf"^([ \t]*(?:#{{1,6}}\s+)?(?:[-*•]\s+)?(?:\*\*|_)?(?:Aufgabe\s+)?{re.escape(t_num)}(?:\*\*|_)?[.:)]?\s+)(.+)$",
+                    raw_ln,
+                )
+                if m_t:
+                    body_t = m_t.group(2)
+                    stripped_t = re.sub(rf"^{misread_prefix_re}", "", body_t)
+                    if (
+                        stripped_t != body_t
+                        and stripped_t
+                        and (stripped_t[0].isalpha() or stripped_t[0] in "\"'„([")
+                    ):
+                        clean_b = stripped_t
+                    else:
+                        clean_b = body_t
+                    if _anchor_matches(clean_b):
+                        td_lines[li] = f"{m_t.group(1)}{sym} {clean_b.lstrip()}"
+                        used_lines.add(li)
+                        break
+
+            if sub:
+                m_sub = re.match(
+                    rf"^([ \t]*(?:[-*•]\s+)?)(?:{misread_prefix_re})?({re.escape(sub)}\s+.*)$",
+                    raw_ln,
+                )
+                if m_sub and _anchor_matches(m_sub.group(2)):
+                    td_lines[li] = f"{m_sub.group(1)}{sym} {m_sub.group(2).lstrip()}"
+                    used_lines.add(li)
+                    break
+
+    return "\n".join(td_lines)
+
+
 def extract_pdf_page_details(
     pdf_path_or_doc: Any,
     figure_bboxes_by_page: dict[int, list[list[int]]] | None = None,
@@ -1052,7 +1420,8 @@ def extract_pdf_page_details(
 
     Returns:
         Dictionary with keys ``font_spans_by_page``, ``figure_texts_by_page``,
-        ``pdf_blocks_by_page``, ``furniture_by_page``, and ``task_difficulties_by_page``.
+        ``pdf_blocks_by_page``, ``furniture_by_page``, ``task_difficulties_by_page``,
+        and ``circle_difficulties_by_page``.
     """
     details: dict[str, dict[int, list[Any]]] = {
         "font_spans_by_page": {},
@@ -1060,6 +1429,7 @@ def extract_pdf_page_details(
         "pdf_blocks_by_page": {},
         "furniture_by_page": {},
         "task_difficulties_by_page": {},
+        "circle_difficulties_by_page": {},
     }
     if pdf_path_or_doc is None:
         return details
@@ -1119,6 +1489,12 @@ def extract_pdf_page_details(
                 )
                 if page_diffs:
                     details["task_difficulties_by_page"][p_idx] = page_diffs
+
+                circle_diffs = _detect_page_circle_task_difficulties(
+                    page, textpage, pw, ph, bx0, by0, rotation, pdfium_c
+                )
+                if circle_diffs:
+                    details["circle_difficulties_by_page"][p_idx] = circle_diffs
 
                 n_chars = textpage.count_chars()
                 if n_chars <= 0:
@@ -1769,6 +2145,7 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
         "font_spans_by_page": {},
         "figure_texts_by_page": {},
         "task_difficulties_by_page": {},
+        "circle_difficulties_by_page": {},
         "opening_headers_by_page": {},
         "body_line_height": 0.0,
     }
@@ -2153,6 +2530,9 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
             for p_idx, t_diffs in pdf_details.get("task_difficulties_by_page", {}).items():
                 if t_diffs:
                     result["task_difficulties_by_page"][p_idx] = t_diffs
+            for p_idx, c_diffs in pdf_details.get("circle_difficulties_by_page", {}).items():
+                if c_diffs:
+                    result["circle_difficulties_by_page"][p_idx] = c_diffs
             for p_idx, furn_items in pdf_details.get("furniture_by_page", {}).items():
                 existing_f_norms = {
                     re.sub(r"\W+", " ", str(fi.get("text") or "")).strip().lower()
@@ -2681,10 +3061,27 @@ def fuse_vlm_page_with_docling(
         ln for ln in cleaned_text.splitlines() if not fc.PREPRESS_MARK_LINE_RE.match(ln)
     )
 
-    # Strip degenerate diagram pipe tables already present in VLM output
+    # Strip degenerate diagram pipe tables already present in VLM output (and unwrap embedded-image flowchart tables)
+    def _clean_vlm_pipe_table(m: re.Match[str]) -> str:
+        tbl_blk = m.group(0)
+        rows = _parse_pipe_table_rows(tbl_blk)
+        has_img = bool(
+            re.search(r"!\[[^\]]*\]\([^)\n]+\)|<!--\s*image\s*-->|<Bild\b", tbl_blk, re.IGNORECASE)
+        )
+        if has_img and len(rows) <= 2:
+            imgs = re.findall(
+                r"<Bild\b[^>]*>[\s\S]*?</Bild>|!\[[^\]]*\]\([^)\n]+\)|<!--\s*image\s*-->",
+                tbl_blk,
+                flags=re.IGNORECASE,
+            )
+            if imgs:
+                return "\n\n" + "\n\n".join(im.strip() for im in imgs) + "\n\n"
+            return ""
+        return "" if _is_degenerate_diagram_table(tbl_blk) else tbl_blk
+
     cleaned_text = re.sub(
         r"(?:^[ \t]*\|[^\n]+\|[ \t]*(?:\n|$))+",
-        lambda m: "" if _is_degenerate_diagram_table(m.group(0)) else m.group(0),
+        _clean_vlm_pipe_table,
         cleaned_text,
         flags=re.MULTILINE,
     )
@@ -3169,6 +3566,15 @@ def fuse_vlm_page_with_docling(
                 "wenn", "werden", "wird", "wurde", "wurden", "zum", "zur",
             }
             norm_existing = re.sub(r"\W+", " ", cleaned_text).lower()
+            norm_existing_compact = re.sub(r"\b([a-z])\s+(\d+)\b", r"\1\2", norm_existing)
+            existing_hdr_sets: list[set[str]] = []
+            for m_eh in re.finditer(r"(?m)^#{1,6}\s+(.+)$", cleaned_text):
+                eh_comp = re.sub(r"\b([a-z])\s+(\d+)\b", r"\1\2", re.sub(r"\W+", " ", m_eh.group(1)).lower())
+                eh_toks = {
+                    w for w in re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{2,}", eh_comp) if w not in stop_words_4
+                }
+                if eh_toks:
+                    existing_hdr_sets.append(eh_toks)
             orig_words_4 = {
                 w for w in re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{4,}", norm_existing) if w not in stop_words_4
             }
@@ -3217,8 +3623,26 @@ def fuse_vlm_page_with_docling(
                 norm_b = re.sub(r"\W+", " ", b_txt).strip().lower()
                 if not norm_b:
                     continue
-                if norm_b in norm_existing or (len(norm_b) >= 30 and norm_b[:30] in norm_existing):
+                norm_b_compact = re.sub(r"\b([a-z])\s+(\d+)\b", r"\1\2", norm_b)
+                if (
+                    norm_b in norm_existing
+                    or norm_b_compact in norm_existing_compact
+                    or (len(norm_b) >= 30 and norm_b[:30] in norm_existing)
+                ):
                     continue
+
+                b_hdr_set: set[str] = set()
+                if is_hdr:
+                    b_hdr_set = {
+                        w
+                        for w in re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{2,}", norm_b_compact)
+                        if w not in stop_words_4
+                    }
+                    if b_hdr_set and any(
+                        len(b_hdr_set & eh_s) / max(len(b_hdr_set), len(eh_s)) >= 0.80
+                        for eh_s in existing_hdr_sets
+                    ):
+                        continue
 
                 b_words_4 = [
                     w for w in re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{4,}", norm_b) if w not in stop_words_4
@@ -3246,6 +3670,9 @@ def fuse_vlm_page_with_docling(
                 formatted_b = _format_doc_block(cb)
                 recovered_with_rank.append((cb_i, is_gl, cb, formatted_b))
                 norm_existing = f"{norm_existing} {norm_b}"
+                norm_existing_compact = f"{norm_existing_compact} {norm_b_compact}"
+                if b_hdr_set:
+                    existing_hdr_sets.append(b_hdr_set)
                 if b_set_4:
                     recovered_word_sets.append(b_set_4)
 
@@ -3843,6 +4270,18 @@ def fuse_vlm_page_with_docling(
                 td_lines[li_td] = raw_dots_re.sub("", raw_td_ln).rstrip()
 
         cleaned_text = "\n".join(td_lines)
+
+    circle_diffs_on_page: list[dict[str, Any]] = []
+    if isinstance(effective_layout, dict):
+        cd_by_page = effective_layout.get("circle_difficulties_by_page") or {}
+        if inferred_p_idx is not None and inferred_p_idx in cd_by_page:
+            circle_diffs_on_page.extend(cd_by_page[inferred_p_idx] or [])
+        elif cd_by_page and len(cd_by_page) == 1 and inferred_p_idx is None:
+            circle_diffs_on_page.extend(next(iter(cd_by_page.values())) or [])
+        if effective_layout.get("circle_difficulties"):
+            circle_diffs_on_page.extend(effective_layout.get("circle_difficulties") or [])
+    if circle_diffs_on_page and cleaned_text:
+        cleaned_text = _attach_circle_task_difficulties(cleaned_text, circle_diffs_on_page)
 
     # 7. Prepend physical page boundary marker if not already present
     if f"(({phys_num}))" not in cleaned_text:
@@ -4681,7 +5120,7 @@ DIDACTIC_CALLOUT_PREFIXES = (
     r"Spielidee\b|"
     r"Checkliste\b|"
     r"Bio-Kompakt\s*:|"
-    r"Zusammenfassung\b|"
+    r"Zusammenfassung(?:[ \t]+[^\n]+|:)|"
     r"Geo-Lexikon\s*:|"
     r"Lexikon\s*:|"
     r"Lernwegweiser\b|"
@@ -5984,6 +6423,50 @@ def apply_extraction_postprocess(
             result = apply_directory_page_numbers(result, directory_info=directory_info)
         except Exception as e:
             logger.warning(f"Error applying directory page numbers in postprocess pipeline: {e}")
+
+    if pdf_path and os.path.exists(pdf_path) and pdf_path.lower().endswith(".pdf"):
+        try:
+            import pypdfium2 as pdfium
+            import pypdfium2.raw as pdfium_c
+
+            from backend.services.fibs_postprocess import split_markdown_pages
+
+            c_doc = pdfium.PdfDocument(pdf_path)
+            try:
+                cd_map: dict[int, list[dict[str, Any]]] = {}
+                for c_p_idx in range(len(c_doc)):
+                    c_page = c_doc[c_p_idx]
+                    c_pw, c_ph = c_page.get_size()
+                    c_bx0, c_by0 = c_page.get_bbox()[:2]
+                    c_tp = c_page.get_textpage()
+                    try:
+                        c_diffs = _detect_page_circle_task_difficulties(
+                            c_page,
+                            c_tp,
+                            c_pw,
+                            c_ph,
+                            c_bx0,
+                            c_by0,
+                            c_page.get_rotation(),
+                            pdfium_c,
+                        )
+                        if c_diffs:
+                            cd_map[c_p_idx] = c_diffs
+                    finally:
+                        c_tp.close()
+                if cd_map:
+                    segs = split_markdown_pages(result)
+                    if len(segs) == len(c_doc):
+                        for s_idx, seg in enumerate(segs):
+                            if s_idx in cd_map:
+                                seg.text = _attach_circle_task_difficulties(seg.text, cd_map[s_idx])
+                        result = "".join(s.text for s in segs)
+                    elif len(c_doc) == 1 and 0 in cd_map:
+                        result = _attach_circle_task_difficulties(result, cd_map[0])
+            finally:
+                c_doc.close()
+        except Exception as e:
+            logger.debug(f"Could not attach circle task difficulties in postprocess pipeline: {e}")
 
     try:
         from backend.services.fibs_postprocess import deduplicate_page_numbers

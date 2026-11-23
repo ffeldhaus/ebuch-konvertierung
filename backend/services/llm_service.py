@@ -2148,6 +2148,7 @@ def standardise_markdown(
         directory_info=directory_info,
         custom_rules=resolved_custom_rules,
         ruleset_key=ruleset_key,
+        table_max_cells=table_max_cells,
     )
 
 
@@ -2383,6 +2384,7 @@ async def standardise_markdown_async(
         directory_info=directory_info,
         custom_rules=resolved_custom_rules,
         ruleset_key=ruleset_key,
+        table_max_cells=table_max_cells,
     )
 
 
