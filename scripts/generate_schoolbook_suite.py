@@ -5294,6 +5294,7 @@ def _fibs_gesamtwerk_text(txt: str) -> str:
     out = re.sub(r"\b(?:eta)(?=[_\^]|\b)", "~j", out)
     out = re.sub(r"\bOmega\b", "~W", out)
     out = re.sub(r"(?<!\\)\b(ln|lg|log)(?=\s*\()", r"\\\1", out)
+    out = re.sub(r"\b([1-9])(\d{3})([ \t]+(?:Liter|m|mm|ml)\b)", r"\1.\2\3", out)
     return out
 
 
@@ -6323,7 +6324,7 @@ Zwischen den Mittelgebirgen Vogesen im Westen und Schwarzwald im Osten erstreckt
 #### Abb. 2.1: Physische und thematische Karte des Oberrheingrabens
 
 <Bild> Karte:
-Beschreibung mit Bildtext: Physische und thematische Karte des Oberrheingrabens auf OpenStreetMap-Kartengrundlage (© OpenStreetMap-Mitwirkende, ODbL 1.0) mit Gradnetz (47°N bis 49°N, 7°O bis 9°O), Windrose (N/O/S/W), Grabenbruch-Verwerfungslinien und Maßstabsleiste (Maßstab 1 : 2.500.000, 0 bis 50 km). Im Zentrum verläuft das grüne Tiefland (< 200 m) entlang des Rheins mit dem Nebenfluss Neckar und den Städten Basel, Freiburg, Straßburg und Karlsruhe; westlich liegen die Vogesen (200–800 m), östlich der Schwarzwald (> 800 m) mit dem Feldberg (1493 m).
+Beschreibung mit Bildtext: Physische und thematische Karte des Oberrheingrabens auf OpenStreetMap-Kartengrundlage (© OpenStreetMap-Mitwirkende, ODbL 1.0) mit Gradnetz (47°N bis 49°N, 7°O bis 9°O), Windrose (N/O/S/W), Grabenbruch-Verwerfungslinien und Maßstabsleiste (Maßstab 1 : 2.500.000, 0 bis 50 km). Im Zentrum verläuft das grüne Tiefland (< 200 m) entlang des Rheins mit dem Nebenfluss Neckar und den Städten Basel, Freiburg, Straßburg und Karlsruhe; westlich liegen die Vogesen (200–800 m), östlich der Schwarzwald (> 800 m) mit dem Feldberg (1.493 m).
 </Bild>
 
 ### Aufgabe 1: Kartenarbeit zum Oberrheingraben
@@ -6357,10 +6358,10 @@ Heute zählt die Rheinschiene zwischen Basel, Straßburg und Karlsruhe zu den wi
 Beschreibung mit Bildtext: Klimadiagramm der Station Freiburg i. Br. (269 m ü. NN), Jahresmitteltemperatur 11,4 °C, Jahresniederschlag 934 mm. Die rote Temperaturkurve steigt von 2,4 °C im Januar auf 21,1 °C im Juli und fällt auf 3,1 °C im Dezember; die blauen Niederschlagsbalken erreichen ihr Maximum im Juni (106 mm).
 </Bild>
 
-#### Abb. 2.2b: Klimadiagramm Feldberg im Schwarzwald (1493 m ü. NN)
+#### Abb. 2.2b: Klimadiagramm Feldberg im Schwarzwald (1.493 m ü. NN)
 
 <Bild> Klimadiagramm:
-Beschreibung mit Bildtext: Klimadiagramm der Station Feldberg / Schw. (1493 m ü. NN), Jahresmitteltemperatur 3,9 °C, Jahresniederschlag 1909 mm. Die rote Temperaturkurve verläuft im Winter unter 0 °C (-3,8 °C im Januar) und erreicht im Juli 11,9 °C; die blauen Niederschlagsbalken liegen ganzjährig hoch zwischen 134 mm (April) und 182 mm (Dezember).
+Beschreibung mit Bildtext: Klimadiagramm der Station Feldberg / Schw. (1.493 m ü. NN), Jahresmitteltemperatur 3,9 °C, Jahresniederschlag 1.909 mm. Die rote Temperaturkurve verläuft im Winter unter 0 °C (-3,8 °C im Januar) und erreicht im Juli 11,9 °C; die blauen Niederschlagsbalken liegen ganzjährig hoch zwischen 134 mm (April) und 182 mm (Dezember).
 </Bild>
 
 Der Vergleich der beiden Klimastationen verdeutlicht den vertikalen Temperaturgradienten sowie den Steigungsregen an den Westflanken des Schwarzwalds{2}. Während Freiburg ein mildes Weinbauklima aufweist, herrscht auf dem Feldberg ein kühl-feuchtes Gebirgsklima mit fast doppeltem Jahresniederschlag.

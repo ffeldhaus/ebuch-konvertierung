@@ -515,7 +515,7 @@ FIBS_ASYM_OP_CANDIDATE_RE: Final[re.Pattern[str]] = re.compile(
 )
 
 FIBS_RIGHT_MATH_CMD_RE: Final[re.Pattern[str]] = re.compile(
-    r"^\\(?:f|s|ol|vec|dot|ddot|tilde|ln|lg|log|lim|sum|prod|o?i{1,3}nt|"
+    r"^\\(?:f|s|ol|vec|dot|ddot|tilde|angle|ln|lg|log|lim|sum|prod|o?i{1,3}nt|"
     r"es|N|Z|Q|R|C|P|pm|mp|cd|va|ma|da|overset|xra|forall|ex|ominus)(?![A-Za-z])"
     r"|^\\(?:8|\||l<)"
 )
@@ -536,6 +536,79 @@ FIBS_LEFT_MATH_UNIT_RE: Final[re.Pattern[str]] = re.compile(
 FIBS_PROSE_RANGE_PREFIX_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(?:Jahr(?:e|en)?|Seite(?:n)?|S\.|Kapitel|Band|Nr\.|Teil|Zeile(?:n)?|"
     r"Vers(?:e)?|Strophe(?:n)?|Klasse(?:n)?|Stufe(?:n)?|Abb\.|Bild|Aufgabe(?:n)?)[ \t]+\d+$"
+)
+
+# ---------------------------------------------------------------------------
+# Thousands Separator & Coordinate Formatting Constants (FIBS 09/2025)
+# ---------------------------------------------------------------------------
+
+THOUSANDS_PROTECTED_RE: Final[re.Pattern[str]] = re.compile(
+    r"<Bild-Ref\b[^>]*>"
+    r"|!?\[[^\]]*\]\([^)]*\)"
+    r"|\(\(\d+(?:\s*[-–]\s*\d+)?\)\)"
+    r"|\bU\+[0-9A-Fa-f]{4,6}\b"
+    r"|\bISBN(?:-1[03])?:?[ \t]*[0-9X][0-9X\- ]{8,20}[0-9X]\b"
+    r"|\bISSN:?[ \t]*[0-9X]{4}[- ]?[0-9X]{4}\b"
+    r"|\bIBAN:?[ \t]*[A-Z]{2}[0-9 ]{12,34}\b"
+    r"|\b(?:DIN|ISO|EN|IEC|IEEE|VDE|RFC|CAS)[ \t]+(?:[A-Z]+[ \t]+)?\d{3,}(?:[-.:]\d+)*"
+    r"|\b(?:PLZ|Postleitzahl|D-|DE-|A-|CH-)[ \t]*\d{4,5}\b"
+    r"|(?:^|(?<=[\s(\[;,_*]))(?:Tel(?:efon)?\.?|Fax\.?|Hotline|Buchnummer|"
+    r"Mediencodes?|Webcodes?|Online-?Codes?|Codes?|Kennung(?:en)?|"
+    r"Bestell(?:-?Nr\.?|nummer)|Artikel(?:-?Nr\.?|nummer)|Katalog(?:-?Nr\.?|nummer)|"
+    r"ID|Nr\.|§|Art\.|Abs\.|S\.|Seiten?|Zeilen?|Verse?|Kapitel|Abschnitt|Band|Heft|"
+    r"Abb(?:ildung)?\.?|Tab(?:elle)?\.?|Fig(?:ur|ure)?\.?)[ \t]*\d{4,}(?:[ \t]*[-–/.][ \t]*\d+)*"
+    r"|\b\d{4,}-\d{1,3}(?:-\d+)*\b"
+    r"|\b(?:1\d{3}|20\d{2})[ \t]*[-–][ \t]*(?:1\d{3}|20\d{2})\b"
+    r"|\b(?:Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember|"
+    r"Jan\.|Feb\.|Mär\.|Apr\.|Jun\.|Jul\.|Aug\.|Sep\.|Sept\.|Okt\.|Nov\.|Dez\.|"
+    r"January|February|March|May|June|July|October|December)[ \t]+(?:1\d{3}|20\d{2})\b"
+    r"|\b\d{3,4}(?:[ \t]*[-–][ \t]*\d{3,4})?[ \t]+(?:(?:v\.|n\.)[ \t]*(?:Chr\.|u\.[ \t]*Z\.)|(?:BCE|CE|BC|AD)\b)",
+    re.MULTILINE,
+)
+
+THOUSANDS_UNIT_NOUNS: Final[frozenset[str]] = frozenset({
+    "Arten", "Betriebe", "Bücher", "Bürger", "Cent", "Dollar", "Einwohner", "Einwohnern",
+    "Euro", "Fahrzeuge", "Franken", "Grad", "Gramm", "Haushalte", "Haushalten", "Hektar",
+    "Hertz", "Jahre", "Jahren", "Joule", "Kalorien", "Kilogramm", "Kilokalorien",
+    "Kilometer", "Kilometern", "Kilowatt", "Kilowattstunden", "Kubikmeter",
+    "Kubikzentimeter", "Liter", "Litern", "Mal", "Mark", "Megawatt", "Menschen", "Meter",
+    "Metern", "Milliarden", "Milligramm", "Milliliter", "Millimeter", "Millionen",
+    "Minuten", "Monate", "Monaten", "Newton", "Pascal", "Personen", "Pflanzen", "Pfund",
+    "Prozent", "Promille", "Punkte", "Punkten", "Quadratkilometer", "Quadratmeter",
+    "Schüler", "Schülern", "Seiten", "Sekunden", "Stück", "Stunden", "Tage", "Tagen",
+    "Teile", "Tiere", "Tonnen", "Unternehmen", "Volt", "Watt", "Wochen", "Wörter",
+    "Zeichen", "Zellen", "Zentimeter",
+})
+
+THOUSANDS_4DIGIT_UNIT_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[ \t]+(?:"
+    r"(?:~m)?(?:cm|mm|dm|km|nm|m)(?:\^[23]|[²³])?(?:/s(?:\^2|²)?)?"
+    r"|km/[hs]|m/s(?:\^2|²)?|g/cm(?:\^3|³)|kg/m(?:\^3|³)|(?:k?J|g)/mol|mol/[lL]"
+    r"|(?:~m)?(?:mol|mmol|kg|mg|ml|mL|dl|dL|hl|ha|kJ|MJ|GJ|kW|MW|GW|kWh|MWh|Wh|kcal|"
+    r"mV|kV|mA|kA|Hz|kHz|MHz|GHz|Pa|hPa|kPa|MPa|bar|mbar|eV|keV|MeV|kN|min|EUR|USD)"
+    r"|°[CF]|€|%|\\permil"
+    r"|[mgtlLNJWVAK](?![A-Za-zÄÖÜäöüß.])"
+    r"|" + "|".join(sorted(THOUSANDS_UNIT_NOUNS, key=len, reverse=True))
+    + r")(?![A-Za-zÄÖÜäöüß])"
+)
+
+THOUSANDS_YEAR_PREFIX_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:Jahr(?:es|en|gang)?|Stand|Ausgabe|Auflage|Prognosejahr|anno|Copyright|geb\.|gest\.)[ \t]*$",
+    re.IGNORECASE,
+)
+
+COORD_NUM_ATOM: Final[str] = r"[+\-−]?\d+(?:\.\d{3})*(?:,\d+)?(?:/\d+)?"
+COORD_NUM_RE: Final[re.Pattern[str]] = re.compile(
+    rf"(?<!\()\([ \t]*({COORD_NUM_ATOM})[ \t]*[;|][ \t]*({COORD_NUM_ATOM})"
+    rf"(?:[ \t]*[;|][ \t]*({COORD_NUM_ATOM}))?[ \t]*\)(?!\))"
+)
+COORD_VAR_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:"
+    r"(?<![A-Za-zÄÖÜäöüß])([A-Z])\([ \t]*([A-Za-z](?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)[ \t]*;[ \t]*"
+    r"([A-Za-z](?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)(?:[ \t]*;[ \t]*([A-Za-z](?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?))?[ \t]*\)"
+    r"|(?<!\()\([ \t]*(x(?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)[ \t]*;[ \t]*"
+    r"(y(?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?)(?:[ \t]*;[ \t]*(z(?:_(?:\{[^{}]+\}|[A-Za-z0-9]+))?))?[ \t]*\)(?!\))"
+    r")"
 )
 
 # ---------------------------------------------------------------------------
@@ -704,7 +777,7 @@ EUROBRAILLE_CHAR_FALLBACK_MAP: Final[dict[str, str]] = {
     "’": "'",
     "…": "...",
     "€": "EUR",
-    "‰": "Promille",
+    "‰": r"\permil",
 }
 
 # ---------------------------------------------------------------------------

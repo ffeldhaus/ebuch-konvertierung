@@ -143,6 +143,9 @@ def detect_pdf_callout_rects_by_page(
 ) -> dict[int, list[tuple[float, float, float, float]]]:
     """Detects drawn vector callout box rectangles per page via pypdfium2.
 
+    Filters out invisible clip paths, unstroked pure-white fills, near-full-page
+    background bands, and duplicate fill/stroke rectangle pairs.
+
     Args:
         pdf_path: Path to the source PDF file (used when ``pdf_doc`` is None).
         pdf_doc: Optional already-open ``pypdfium2.PdfDocument`` handle to reuse.
@@ -154,22 +157,64 @@ def detect_pdf_callout_rects_by_page(
     owns_doc = False
     try:
         import pypdfium2 as pdfium
+        import pypdfium2.raw as pdfium_c
 
         if pdf_doc is None:
             pdf_doc = pdfium.PdfDocument(pdf_path)
             owns_doc = True
+        fill_mode_c = ctypes.c_int()
+        stroke_c = ctypes.c_int()
+        r_c = ctypes.c_uint()
+        g_c = ctypes.c_uint()
+        b_c = ctypes.c_uint()
+        a_c = ctypes.c_uint()
         for p_i in range(len(pdf_doc)):
             page = pdf_doc[p_i]
-            _pw, ph = page.get_size()
-            rects = []
+            pw, ph = page.get_size()
+            rects: list[tuple[float, float, float, float]] = []
             for obj in page.get_objects():
                 if obj.type == 2:  # FPDF_PAGEOBJ_PATH
                     l_b, b_b, r_b, t_b = obj.get_bounds()
                     w_b = r_b - l_b
                     h_b = t_b - b_b
-                    min_h = 36 if b_b <= 35 else 32
-                    if w_b >= 95 and min_h <= h_b <= ph * 0.62 and b_b > 14 and t_b < ph - 35:
-                        rects.append((l_b, b_b, r_b, t_b))
+                    min_h = 34 if b_b <= 35 else 26
+                    if not (
+                        w_b >= 95
+                        and min_h <= h_b <= ph * 0.62
+                        and b_b > 14
+                        and t_b < ph - 35
+                        and not (pw > 0 and w_b >= pw * 0.92 and h_b >= ph * 0.55)
+                    ):
+                        continue
+                    try:
+                        if pdfium_c.FPDFPath_GetDrawMode(
+                            obj.raw, ctypes.byref(fill_mode_c), ctypes.byref(stroke_c)
+                        ):
+                            has_fill = fill_mode_c.value != 0
+                            has_stroke = stroke_c.value != 0
+                            if not has_fill and not has_stroke:
+                                continue
+                            if has_fill and not has_stroke and pdfium_c.FPDFPageObj_GetFillColor(
+                                obj.raw,
+                                ctypes.byref(r_c),
+                                ctypes.byref(g_c),
+                                ctypes.byref(b_c),
+                                ctypes.byref(a_c),
+                            ):
+                                if a_c.value == 0 or (r_c.value >= 252 and g_c.value >= 252 and b_c.value >= 252):
+                                    continue
+                    except Exception:
+                        pass
+                    cand = (float(l_b), float(b_b), float(r_b), float(t_b))
+                    if any(
+                        abs(cand[0] - ex[0]) <= 4.0
+                        and abs(cand[1] - ex[1]) <= 4.0
+                        and abs(cand[2] - ex[2]) <= 4.0
+                        and abs(cand[3] - ex[3]) <= 4.0
+                        for ex in rects
+                    ):
+                        continue
+                    rects.append(cand)
             callout_rects_by_page[p_i] = rects
     except Exception:
         pass
@@ -210,26 +255,34 @@ def parse_furniture_opening_header(text: str, seen_opening_keys: set) -> str | N
     return None
 
 
+_CALLOUT_EXCLUDED_TEXT_RE = re.compile(
+    r"^(?:Kapitel|Chapter|\d+\.\d+|Aufgaben?(?:\s+\d+)?|Übungen?(?:\s+\d+)?|Tab(?:elle)?\.?\s+\d+|Abb(?:ildung)?\.?\s+\d+)",
+    re.IGNORECASE,
+)
+
+
 def is_bbox_inside_callout_rect(
     bbox_obj: Any,
     text: str,
     page_rects: list[tuple[float, float, float, float]],
 ) -> bool:
-    """Returns True if a heading bbox lies inside a drawn vector callout rectangle on that page."""
+    """Returns True if a text/heading bbox lies inside a drawn vector callout rectangle on that page."""
     if not bbox_obj or not page_rects:
+        return False
+    s_txt = (text or "").strip()
+    if _CALLOUT_EXCLUDED_TEXT_RE.match(s_txt):
         return False
     b_l = min(bbox_obj.l, bbox_obj.r)
     b_r = max(bbox_obj.l, bbox_obj.r)
     b_b = min(bbox_obj.b, bbox_obj.t)
     b_t = max(bbox_obj.b, bbox_obj.t)
+    b_rect = (b_l, b_b, b_r, b_t)
     for rl, rb, rr, rt in page_rects:
-        if b_l >= rl - 6 and b_r <= rr + 6 and b_b >= rb - 6 and b_t <= rt + 6:
-            if not re.match(
-                r"^(?:Kapitel|Chapter|\d+\.\d+|Aufgabe\s+\d+|Übung\s+\d+|Tab(?:elle)?\.?\s+\d+)",
-                text,
-                re.IGNORECASE,
-            ):
-                return True
+        if (
+            (b_l >= rl - 6 and b_r <= rr + 6 and b_b >= rb - 6 and b_t <= rt + 6)
+            or _bbox_overlap_ratio(b_rect, (rl, rb, rr, rt)) >= 0.55
+        ):
+            return True
     return False
 
 
@@ -237,12 +290,17 @@ _LAST_DOCLING_LAYOUT: dict[str, Any] = {}
 
 _TABLE_PLACEHOLDER_CELLS: set[str] = {"", "...", "…", "_..._", "-", "–", "—"}
 
+_MARGIN_ETYMOLOGY_RE = re.compile(
+    r"^(?:lat\.|griech\.|gr\.|engl\.|franz\.|frz\.|ital\.|span\.|arab\.)\s+[^=\n]{1,40}\s*=",
+    re.IGNORECASE,
+)
+
 _MARGINALIA_GLOSSARY_RE = re.compile(
     r"^(?:"
     r"[¹²³⁴⁵⁶⁷⁸⁹]+\s*\S"
     r"|\^\d+\s+[A-ZÄÖÜa-zäöü]"
     r"|[Ww]orterklärung\b"
-    r"|(?:[*_]*)(?:lat\.|griech\.|gr\.|engl\.|frz\.|ital\.)(?:[*_]*)\s+[A-Za-zÄÖÜäöüß\-*_]+"
+    r"|(?:[*_]*)(?:lat\.|griech\.|gr\.|engl\.|franz\.|frz\.|ital\.|span\.|arab\.)(?:[*_]*)\s+[A-Za-zÄÖÜäöüß\-*_]+"
     r"|(?:[*_]*)[A-Za-zÄÖÜäöüß\-]{3,35}(?:[*_]*)\s*=\s*(?:[*_]*)[A-Za-zÄÖÜäöüß]"
     r"|\d{1,2} [A-ZÄÖÜa-zäöü][a-zäöüß]+[^\n]*(?:[:.,;=–—]|\s+\S+\s+\S+)"
     r")"
@@ -256,14 +314,16 @@ def _is_marginalia_or_glossary_note(text: str) -> bool:
         text: Candidate text block string.
 
     Returns:
-        True if the text starts with a footnote/glossary marker or ``Worterklärung``
-        rather than a running header/footer.
+        True if the text starts with a footnote/glossary marker, margin etymology,
+        or ``Worterklärung`` rather than a running header/footer.
     """
     s = (text or "").strip()
     if not s or s.isupper():
         return False
     if re.match(r"^(?:\d+\s+)?(?:Kapitel|Chapter|Seite|Page|Teil|Abschnitt)\b", s, re.IGNORECASE):
         return False
+    if _MARGIN_ETYMOLOGY_RE.match(re.sub(r"^[#*_`\s]+", "", s)):
+        return True
     return bool(_MARGINALIA_GLOSSARY_RE.match(s))
 
 
@@ -1786,6 +1846,7 @@ def extract_pdf_page_details(
                     paragraphs.append([ln_e])
 
             unstyled_words_on_page: set[str] = set()
+            unstyled_runs_on_page: list[str] = []
             raw_styled_candidates: list[dict[str, Any]] = []
             page_pdf_blocks: list[dict[str, Any]] = []
 
@@ -1849,16 +1910,29 @@ def extract_pdf_page_details(
                 ]
                 para_fsize = statistics.median([pl["fsize"] for pl in para_lines if pl["fsize"] > 0] or [0.0])
                 para_words = para_str.split()
+                is_etymology_para = bool(
+                    _MARGIN_ETYMOLOGY_RE.match(re.sub(r"^[#*_`\s]+", "", para_str))
+                )
                 is_heading_para = bool(
                     median_fsize > 0
                     and para_fsize > median_fsize * 1.14
                     and len(para_words) <= 22
+                    and not is_etymology_para
                 )
-                is_callout_para = (
+                matched_callout_idx: int | None = None
+                if (
                     not _is_marginalia_or_glossary_note(para_str)
-                    and (
-                        any(pl.get("in_callout_box") for pl in para_lines)
-                        or any(
+                    and not _CALLOUT_EXCLUDED_TEXT_RE.match(para_str)
+                    and not _is_figure_caption_line(para_str, has_page_images=True)
+                ):
+                    for cr_i, cr_b in enumerate(page_callouts_1000):
+                        if any(
+                            _bbox_overlap_ratio(cr_b, fb) >= 0.65
+                            for fb in page_figs
+                            if fb not in callout_fig_rects
+                        ) or any(_bbox_overlap_ratio(cr_b, tb) >= 0.65 for tb in page_tbls):
+                            continue
+                        if (
                             _bbox_overlap_ratio(para_bbox, cr_b) >= 0.55
                             or (
                                 para_bbox[0] >= cr_b[0] - 12
@@ -1866,8 +1940,16 @@ def extract_pdf_page_details(
                                 and para_bbox[1] >= cr_b[1] - 12
                                 and para_bbox[3] <= cr_b[3] + 12
                             )
-                            for cr_b in page_callouts_1000
-                        )
+                        ):
+                            matched_callout_idx = cr_i
+                            break
+                is_callout_para = (
+                    not _is_marginalia_or_glossary_note(para_str)
+                    and not _CALLOUT_EXCLUDED_TEXT_RE.match(para_str)
+                    and not _is_figure_caption_line(para_str, has_page_images=True)
+                    and (
+                        any(pl.get("in_callout_box") for pl in para_lines)
+                        or matched_callout_idx is not None
                     )
                 )
                 blk_entry: dict[str, Any] = {
@@ -1878,6 +1960,8 @@ def extract_pdf_page_details(
                 }
                 if is_callout_para:
                     blk_entry["is_callout_box"] = True
+                    if matched_callout_idx is not None:
+                        blk_entry["callout_rect_idx"] = matched_callout_idx
                 page_pdf_blocks.append(blk_entry)
 
                 if is_heading_para:
@@ -1955,12 +2039,34 @@ def extract_pdf_page_details(
                     else:
                         idx_c += 1
 
+                cur_unstyled_run: list[str] = []
                 for wt in word_tokens:
                     if wt["style"] is None:
-                        unstyled_words_on_page.add(wt["word"].lower())
+                        w_low = wt["word"].lower()
+                        unstyled_words_on_page.add(w_low)
+                        cur_unstyled_run.append(w_low)
+                        if not re.fullmatch(r"\s+", wt["sep"] or ""):
+                            if len(cur_unstyled_run) >= 2:
+                                unstyled_runs_on_page.append(" ".join(cur_unstyled_run))
+                            cur_unstyled_run = []
+                    else:
+                        if len(cur_unstyled_run) >= 2:
+                            unstyled_runs_on_page.append(" ".join(cur_unstyled_run))
+                        cur_unstyled_run = []
+                if len(cur_unstyled_run) >= 2:
+                    unstyled_runs_on_page.append(" ".join(cur_unstyled_run))
+
+                nw = len(word_tokens)
+                alpha_word_tokens = [wt for wt in word_tokens if any(ch.isalpha() for ch in wt["word"])]
+                n_alpha_w = len(alpha_word_tokens)
+                styled_alpha_w = sum(1 for wt in alpha_word_tokens if wt["style"] is not None)
+                unstyled_alpha_w = n_alpha_w - styled_alpha_w
+                # Block-level styling (body-sized bold headings, short diagram labels, all-bold boxes)
+                # is NOT inline prose emphasis and must never leak into font_spans.
+                if n_alpha_w == 0 or unstyled_alpha_w == 0 or (styled_alpha_w / n_alpha_w >= 0.85 and unstyled_alpha_w <= 2):
+                    continue
 
                 wi = 0
-                nw = len(word_tokens)
                 while wi < nw:
                     st = word_tokens[wi]["style"]
                     if st is None:
@@ -1973,6 +2079,9 @@ def extract_pdf_page_details(
                         and re.fullmatch(r"\s+", word_tokens[wj - 1]["sep"] or "")
                     ):
                         wj += 1
+                    if (wi == 0 and wj == nw) or ((wj - wi) / max(1, nw) >= 0.85 and unstyled_alpha_w <= 2):
+                        wi = wj
+                        continue
                     phrase = " ".join(word_tokens[k]["word"] for k in range(wi, wj))
                     if (
                         len(phrase) >= 3
@@ -1993,15 +2102,24 @@ def extract_pdf_page_details(
                 details["pdf_blocks_by_page"][p_idx] = _sort_blocks_in_reading_order(page_pdf_blocks)
 
             if raw_styled_candidates:
+                unstyled_text_on_page = " | ".join(unstyled_runs_on_page)
                 seen_spans: set[tuple[str, str, str, str]] = set()
                 final_spans: list[dict[str, Any]] = []
                 for sc in raw_styled_candidates:
                     words_in_sc = sc["text"].lower().split()
-                    always_styled = (
-                        True
-                        if len(words_in_sc) >= 2
-                        else (words_in_sc[0] not in unstyled_words_on_page)
-                    )
+                    if len(words_in_sc) >= 2:
+                        phrase_low = " ".join(words_in_sc)
+                        always_styled = not bool(
+                            unstyled_text_on_page
+                            and re.search(
+                                rf"(?<![\wÄÖÜäöüß]){re.escape(phrase_low)}(?![\wÄÖÜäöüß])",
+                                unstyled_text_on_page,
+                            )
+                        )
+                    else:
+                        always_styled = words_in_sc[0] not in unstyled_words_on_page
+                    if not always_styled and not sc["left"] and not sc["right"]:
+                        continue
                     dedup_key = (
                         sc["text"],
                         sc["style"],
@@ -2083,9 +2201,11 @@ def _apply_pdf_font_spans_to_markdown(markdown_text: str, font_spans: list[dict[
             always_styled = bool(sp.get("always_styled", True))
             left_w = str(sp.get("left") or "").strip()
             right_w = str(sp.get("right") or "").strip()
+            if not always_styled and not left_w and not right_w:
+                continue
 
             phrase_regex_body = r"\s+".join(re.escape(tok) for tok in phrase.split())
-            if always_styled or (not left_w and not right_w):
+            if always_styled:
                 pat = re.compile(rf"(?<![\wÄÖÜäöüß*_$])({phrase_regex_body})(?![\wÄÖÜäöüß*_$])")
             elif left_w:
                 pat = re.compile(
@@ -2104,12 +2224,12 @@ def _apply_pdf_font_spans_to_markdown(markdown_text: str, font_spans: list[dict[
                 if idx_p % 2 == 1 or not part:
                     rebuilt_parts.append(part)
                     continue
-                if always_styled or (not left_w and not right_w):
+                if always_styled:
                     rebuilt_parts.append(pat.sub(rf"{marker}\1{marker}", part))
                 elif left_w:
-                    rebuilt_parts.append(pat.sub(lambda m: f"{m.group(1)}{marker}{phrase}{marker}", part))
+                    rebuilt_parts.append(pat.sub(lambda m: f"{m.group(1)}{marker}{m.group(2)}{marker}", part))
                 else:
-                    rebuilt_parts.append(pat.sub(lambda m: f"{marker}{phrase}{marker}{m.group(2)}", part))
+                    rebuilt_parts.append(pat.sub(lambda m: f"{marker}{m.group(1)}{marker}{m.group(2)}", part))
             updated_line = "".join(rebuilt_parts)
 
         out_lines.append(updated_line)
@@ -2331,6 +2451,35 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
 
             # 3. Collect single-line body heights, furniture, vector callout boxes, and heading bboxes
             callout_rects_by_page = detect_pdf_callout_rects_by_page(pdf_path, pdf_doc=pdf_doc_shared)
+            callout_rects_1000_by_page: dict[int, list[list[int]]] = {}
+            for cp_idx, cp_rects in callout_rects_by_page.items():
+                cp_pw, cp_ph = page_sizes_by_idx.get(cp_idx, (0.0, 0.0))
+                if cp_pw <= 0 or cp_ph <= 0:
+                    continue
+                cp_bx0, cp_by0 = (
+                    pdf_doc_shared[cp_idx].get_bbox()[:2]
+                    if pdf_doc_shared is not None and cp_idx < len(pdf_doc_shared)
+                    else (0.0, 0.0)
+                )
+                cp_figs = figure_bboxes_1000_by_page.get(cp_idx, [])
+                cp_tbls = table_bboxes_1000_by_page.get(cp_idx, [])
+                norm_crs: list[list[int]] = []
+                for rl, rb, rr, rt in cp_rects:
+                    if rr <= rl or rt <= rb:
+                        continue
+                    cr_1000 = [
+                        max(0, min(1000, int(round(((rl - cp_bx0) / cp_pw) * 1000.0)))),
+                        max(0, min(1000, int(round(((cp_ph - (rt - cp_by0)) / cp_ph) * 1000.0)))),
+                        max(0, min(1000, int(round(((rr - cp_bx0) / cp_pw) * 1000.0)))),
+                        max(0, min(1000, int(round(((cp_ph - (rb - cp_by0)) / cp_ph) * 1000.0)))),
+                    ]
+                    if any(_bbox_overlap_ratio(cr_1000, fb) >= 0.65 for fb in cp_figs) or any(
+                        _bbox_overlap_ratio(cr_1000, tb) >= 0.65 for tb in cp_tbls
+                    ):
+                        continue
+                    norm_crs.append(cr_1000)
+                if norm_crs:
+                    callout_rects_1000_by_page[cp_idx] = norm_crs
             body_heights: list[float] = []
             raw_headings: list[dict[str, Any]] = []
             pages_with_top_rubric_badge: set[int] = set()
@@ -2429,40 +2578,77 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                     continue
 
                 # Exclude diagram-internal labels located inside figure_bboxes_1000_by_page
+                is_etymology_doc = bool(
+                    _MARGIN_ETYMOLOGY_RE.match(re.sub(r"^[#*_`\s]+", "", txt))
+                )
                 in_callout_doc = is_bbox_inside_callout_rect(bbox_obj, txt, callout_rects_by_page.get(p_idx, []))
+                callout_rect_idx_doc: int | None = None
+                if (
+                    bbox_1000 is not None
+                    and not is_top_rubric_banner
+                    and not _is_marginalia_or_glossary_note(txt)
+                    and not _CALLOUT_EXCLUDED_TEXT_RE.match(txt)
+                    and not _is_figure_caption_line(txt, has_page_images=True)
+                ):
+                    for cr_i, cr_1000 in enumerate(callout_rects_1000_by_page.get(p_idx, [])):
+                        if (
+                            _bbox_overlap_ratio(bbox_1000, cr_1000) >= 0.55
+                            or (
+                                bbox_1000[0] >= cr_1000[0] - 12
+                                and bbox_1000[2] <= cr_1000[2] + 12
+                                and bbox_1000[1] >= cr_1000[1] - 12
+                                and bbox_1000[3] <= cr_1000[3] + 12
+                            )
+                        ):
+                            in_callout_doc = True
+                            callout_rect_idx_doc = cr_i
+                            break
+                overlaps_fig_for_heading = False
                 if bbox_1000 is not None and lbl != "caption":
                     in_fig_box = False
+                    cx_doc = (bbox_1000[0] + bbox_1000[2]) / 2.0
+                    cy_doc = (bbox_1000[1] + bbox_1000[3]) / 2.0
                     for fig_bbox in figure_bboxes_1000_by_page.get(p_idx, []):
-                        if _bbox_overlap_ratio(bbox_1000, fig_bbox) >= 0.55:
-                            if (
-                                is_top_rubric_banner
-                                or fc.DIDACTIC_BOX_HEADER_RE.match(txt)
-                                or (in_callout_doc and len(txt.split()) >= 4)
-                                or (
-                                    bbox_1000[1] >= fig_bbox[3] - 32
-                                    and _is_figure_caption_line(txt, has_page_images=True)
-                                )
-                            ):
-                                in_fig_box = False
-                            else:
-                                in_fig_box = True
-                                break
+                        fig_ov = _bbox_overlap_ratio(bbox_1000, fig_bbox)
+                        center_in_fig = (
+                            fig_bbox[0] <= cx_doc <= fig_bbox[2]
+                            and fig_bbox[1] <= cy_doc <= fig_bbox[3]
+                        )
+                        is_allowed_fig_overlay = bool(
+                            is_top_rubric_banner
+                            or fc.DIDACTIC_BOX_HEADER_RE.match(txt)
+                            or (in_callout_doc and len(txt.split()) >= 4)
+                            or (
+                                bbox_1000[1] >= fig_bbox[3] - 32
+                                and _is_figure_caption_line(txt, has_page_images=True)
+                            )
+                        )
+                        if (fig_ov >= 0.55 or center_in_fig) and not is_allowed_fig_overlay:
+                            in_fig_box = True
+                            break
+                        if fig_ov >= 0.30 and not is_allowed_fig_overlay:
+                            overlaps_fig_for_heading = True
                     if in_fig_box:
                         result["figure_texts_by_page"].setdefault(p_idx, []).append(txt)
                         continue
 
-                effective_lbl = (
-                    "section_header"
-                    if is_top_rubric_banner
-                    else ("text" if lbl in ("page_header", "page_footer", "furniture") else lbl)
-                )
+                if is_etymology_doc or overlaps_fig_for_heading:
+                    effective_lbl = "text"
+                else:
+                    effective_lbl = (
+                        "section_header"
+                        if is_top_rubric_banner
+                        else ("text" if lbl in ("page_header", "page_footer", "furniture") else lbl)
+                    )
                 tb_entry: dict[str, Any] = {
                     "type": effective_lbl,
                     "text": txt,
                     "page_idx": p_idx,
                 }
-                if in_callout_doc and not _is_marginalia_or_glossary_note(txt):
+                if in_callout_doc and not _is_marginalia_or_glossary_note(txt) and not is_top_rubric_banner:
                     tb_entry["is_callout_box"] = True
+                    if callout_rect_idx_doc is not None:
+                        tb_entry["callout_rect_idx"] = callout_rect_idx_doc
                 if bbox_1000 is not None:
                     tb_entry["bbox_1000"] = bbox_1000
                 result["text_blocks"].append(tb_entry)
@@ -2470,15 +2656,18 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
 
                 if lbl in ("text", "list_item") and not is_top_rubric_banner and 5.0 <= h <= 18.0 and 15 <= len(txt) <= 75 and w >= 80:
                     body_heights.append(h)
-                elif lbl in ("section_header", "title") or (is_top_rubric_banner and h > 0):
-                    in_callout = is_bbox_inside_callout_rect(bbox_obj, txt, callout_rects_by_page.get(p_idx, []))
+                elif (
+                    (lbl in ("section_header", "title") or (is_top_rubric_banner and h > 0))
+                    and not is_etymology_doc
+                    and not overlaps_fig_for_heading
+                ):
                     raw_headings.append({
                         "text": txt,
                         "page_idx": p_idx,
                         "h": h,
                         "w": w,
                         "bbox_1000": bbox_1000,
-                        "in_callout": in_callout,
+                        "in_callout": in_callout_doc,
                     })
 
             body_line_h = statistics.median(body_heights) if body_heights else 0.0
@@ -2570,7 +2759,28 @@ def extract_docling_page_layout(pdf_path: str, images_dir: str) -> dict[str, Any
                 for pb in pdf_blocks:
                     pb_txt = str(pb.get("text") or "").strip()
                     pb_norm = re.sub(r"\W+", " ", pb_txt).strip().lower()
-                    if not pb_norm or pb_norm in furn_norms_p or pb_norm in doc_norms_p:
+                    if not pb_norm or pb_norm in furn_norms_p:
+                        continue
+                    if pb.get("is_callout_box"):
+                        pb_wset = set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{4,}", pb_norm))
+                        for db in doc_blocks:
+                            if db.get("is_callout_box"):
+                                continue
+                            db_txt = str(db.get("text") or "").strip()
+                            db_norm = re.sub(r"\W+", " ", db_txt).strip().lower()
+                            if not db_norm or _is_marginalia_or_glossary_note(db_txt) or _CALLOUT_EXCLUDED_TEXT_RE.match(db_txt):
+                                continue
+                            if db_norm == pb_norm:
+                                db["is_callout_box"] = True
+                                if "callout_rect_idx" in pb:
+                                    db["callout_rect_idx"] = pb["callout_rect_idx"]
+                            elif pb_wset:
+                                db_wset = set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{4,}", db_norm))
+                                if db_wset and len(pb_wset & db_wset) / max(1, min(len(pb_wset), len(db_wset))) >= 0.65:
+                                    db["is_callout_box"] = True
+                                    if "callout_rect_idx" in pb:
+                                        db["callout_rect_idx"] = pb["callout_rect_idx"]
+                    if pb_norm in doc_norms_p:
                         continue
                     if pb.get("is_callout_box") and fc.DIDACTIC_BOX_HEADER_RE.match(pb_txt):
                         doc_blocks.append(pb)
@@ -2705,11 +2915,8 @@ def _enrich_flattened_tables_with_docling(cleaned_text: str, page_tables: list[s
     if not valid_page_tables:
         return cleaned_text
 
-    if "|" not in cleaned_text:
-        return cleaned_text.strip() + "\n\n" + "\n\n".join(valid_page_tables)
-
     pipe_block_re = re.compile(r"(?:^[ \t]*\|[^\n]+\|[ \t]*(?:\n|$)){2,}", re.MULTILINE)
-    existing_matches = list(pipe_block_re.finditer(cleaned_text))
+    existing_matches = list(pipe_block_re.finditer(cleaned_text)) if "|" in cleaned_text else []
     matched_docling_indices: set[int] = set()
 
     if existing_matches:
@@ -2752,20 +2959,98 @@ def _enrich_flattened_tables_with_docling(cleaned_text: str, page_tables: list[s
     existing_pipe_lines = "\n".join(
         ln for ln in cleaned_text.splitlines() if ln.strip().startswith("|")
     ).lower()
+    existing_pipe_row_sigs = {
+        " | ".join(re.sub(r"\s+", " ", c).strip().lower() for c in row)
+        for m_ex in pipe_block_re.finditer(cleaned_text)
+        for row in _parse_pipe_table_rows(m_ex.group(0))
+    }
+
     for t_idx, t_md in enumerate(valid_page_tables):
         if t_idx in matched_docling_indices:
             continue
-        cells = [
+        parsed_rows = _parse_pipe_table_rows(t_md)
+        non_empty_cells = [
             c.strip()
-            for r in t_md.splitlines()
-            if not re.match(r"^[\s\|:\-]+$", r)
-            for c in r.strip("|").split("|")
-            if len(c.strip()) >= 4
+            for r in parsed_rows
+            for c in r
+            if c.strip() not in _TABLE_PLACEHOLDER_CELLS
         ]
-        if len(cells) < 2:
+        if len(non_empty_cells) < 2:
             continue
-        matched_in_pipes = sum(1 for c in cells if c.lower() in existing_pipe_lines)
-        if matched_in_pipes < max(1, len(cells) // 3):
+        long_cells = [c for c in non_empty_cells if len(c) >= 3]
+        already_in_pipes = False
+        if existing_pipe_lines:
+            if len(long_cells) >= 2:
+                matched_in_pipes = sum(1 for c in long_cells if c.lower() in existing_pipe_lines)
+                already_in_pipes = matched_in_pipes >= max(1, len(long_cells) // 3)
+            else:
+                row_sigs = [
+                    " | ".join(re.sub(r"\s+", " ", c).strip().lower() for c in r)
+                    for r in parsed_rows
+                ]
+                matched_rows = sum(1 for rs in row_sigs if rs in existing_pipe_row_sigs)
+                already_in_pipes = matched_rows >= max(1, len(row_sigs) // 2)
+        if already_in_pipes:
+            continue
+
+        # Attempt in-place replacement when the VLM flattened the table into contiguous non-pipe text/lists
+        tbl_tok_set = {
+            tok
+            for c in non_empty_cells
+            for tok in re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{2,}", c.lower())
+        }
+        replaced_flattened = False
+        if len(tbl_tok_set) >= 4 and cleaned_text.strip():
+            paras = [p for p in re.split(r"\n{2,}", cleaned_text.strip()) if p.strip()]
+            cand_para_indices: list[int] = []
+            for p_i, p_txt in enumerate(paras):
+                p_s = p_txt.strip()
+                if (
+                    p_s.startswith(("|", "#", "![", "((", "<Rahmen", "<Bild", "<Tabelle"))
+                    or "</Rahmen>" in p_s
+                ):
+                    continue
+                p_toks = re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{2,}", p_s.lower())
+                if not p_toks:
+                    continue
+                p_tok_set = set(p_toks)
+                if len(p_tok_set & tbl_tok_set) / len(p_tok_set) >= 0.65:
+                    cand_para_indices.append(p_i)
+            # Group contiguous candidate paragraphs and pick the run covering the most table tokens
+            best_run: tuple[int, int, int] | None = None
+            if cand_para_indices:
+                run_start = cand_para_indices[0]
+                run_end = cand_para_indices[0]
+                runs: list[tuple[int, int]] = []
+                for idx_c in cand_para_indices[1:]:
+                    if idx_c == run_end + 1:
+                        run_end = idx_c
+                    else:
+                        runs.append((run_start, run_end))
+                        run_start = idx_c
+                        run_end = idx_c
+                runs.append((run_start, run_end))
+                for r_s, r_e in runs:
+                    run_toks = set(
+                        re.findall(
+                            r"[a-zA-ZäöüÄÖÜß0-9]{2,}",
+                            " ".join(paras[r_s : r_e + 1]).lower(),
+                        )
+                    )
+                    cov = len(run_toks & tbl_tok_set)
+                    if (
+                        cov >= 4
+                        and cov / len(tbl_tok_set) >= 0.55
+                        and (best_run is None or cov > best_run[2])
+                    ):
+                        best_run = (r_s, r_e, cov)
+            if best_run is not None:
+                r_s, r_e, _cov = best_run
+                paras[r_s : r_e + 1] = [t_md]
+                cleaned_text = "\n\n".join(paras)
+                replaced_flattened = True
+
+        if not replaced_flattened:
             cleaned_text = cleaned_text.strip() + "\n\n" + t_md
     return cleaned_text
 
@@ -3238,9 +3523,33 @@ def fuse_vlm_page_with_docling(
                 if inferred_p_idx is not None and hb.get("page_idx") is not None and hb.get("page_idx") != inferred_p_idx:
                     continue
                 hb_txt = str(hb.get("text") or "").strip()
+                if not hb_txt:
+                    continue
+                if _MARGIN_ETYMOLOGY_RE.match(re.sub(r"^[#*_`\s]+", "", hb_txt)):
+                    continue
                 hb_box = hb.get("bbox_1000")
                 hb_rect = _extract_rect_coords(hb_box) if hb_box is not None else None
-                if hb_txt and (hb_rect is None or hb_rect[3] > 65.0):
+                if (
+                    hb_rect is not None
+                    and fig_boxes_on_page
+                    and not hb.get("is_callout_box")
+                    and not _is_figure_caption_line(hb_txt, has_page_images=True)
+                ):
+                    hb_cx = (hb_rect[0] + hb_rect[2]) / 2.0
+                    hb_cy = (hb_rect[1] + hb_rect[3]) / 2.0
+                    in_fig_hb = False
+                    for fb in fig_boxes_on_page:
+                        fb_r = _extract_rect_coords(fb)
+                        if fb_r is not None and (
+                            _bbox_overlap_ratio(hb_rect, fb_r) >= 0.30
+                            or (fb_r[0] <= hb_cx <= fb_r[2] and fb_r[1] <= hb_cy <= fb_r[3])
+                        ):
+                            in_fig_hb = True
+                            break
+                    if in_fig_hb:
+                        figure_texts_on_page.append(hb_txt)
+                        continue
+                if hb_rect is None or hb_rect[3] > 65.0:
                     hn = _norm_furniture_key(hb_txt)
                     if hn:
                         body_heading_norms_on_page.add(hn)
@@ -3407,11 +3716,33 @@ def fuse_vlm_page_with_docling(
             is_cb_callout = bool(
                 item.get("is_callout_box") if isinstance(item, dict) else getattr(item, "is_callout_box", False)
             )
+            cb_rect_idx = (
+                item.get("callout_rect_idx") if isinstance(item, dict) else getattr(item, "callout_rect_idx", None)
+            )
+            if _MARGIN_ETYMOLOGY_RE.match(re.sub(r"^[#*_`\s]+", "", b_txt)):
+                b_type = "text"
+                is_gl = True
             if b_rect is not None and fig_boxes_on_page and b_type != "caption" and not is_cb_callout:
-                if any(_bbox_overlap_ratio(b_rect, fb) >= 0.50 for fb in fig_boxes_on_page):
-                    if not _is_figure_caption_line(b_txt, has_page_images=True):
-                        figure_texts_on_page.append(b_txt)
+                b_cx = (b_rect[0] + b_rect[2]) / 2.0
+                b_cy = (b_rect[1] + b_rect[3]) / 2.0
+                in_fig_cand = False
+                tight_fig_ov = False
+                for fb in fig_boxes_on_page:
+                    fb_r = _extract_rect_coords(fb)
+                    if fb_r is None:
                         continue
+                    ov_f = _bbox_overlap_ratio(b_rect, fb_r)
+                    if ov_f >= 0.50 or (fb_r[0] <= b_cx <= fb_r[2] and fb_r[1] <= b_cy <= fb_r[3]):
+                        in_fig_cand = True
+                        break
+                    if ov_f >= 0.30:
+                        tight_fig_ov = True
+                if in_fig_cand and not _is_figure_caption_line(b_txt, has_page_images=True):
+                    figure_texts_on_page.append(b_txt)
+                    continue
+                if tight_fig_ov and b_type in ("title", "section_header", "heading") and not _is_figure_caption_line(b_txt, has_page_images=True):
+                    b_type = "text"
+                    figure_texts_on_page.append(b_txt)
 
             if b_rect is not None and table_boxes_on_page:
                 if any(_bbox_overlap_ratio(b_rect, tb) >= 0.50 for tb in table_boxes_on_page):
@@ -3438,6 +3769,8 @@ def fuse_vlm_page_with_docling(
                 "is_glossary": is_gl,
                 "is_callout_box": is_cb_callout,
             }
+            if cb_rect_idx is not None:
+                norm_entry["callout_rect_idx"] = cb_rect_idx
             if b_box is not None:
                 norm_entry["bbox_1000"] = b_box
             clean_page_blocks.append(norm_entry)
@@ -3706,18 +4039,27 @@ def fuse_vlm_page_with_docling(
                     merged_paras.extend(tail_glossary)
                     cleaned_text = "\n\n".join(merged_paras)
 
-        # 2b-ii. Format or recover colored didactic / Steckbrief callout boxes (<Rahmen>)
+        # 2b-ii. Format or recover colored didactic / Steckbrief and general shaded callout boxes (<Rahmen>)
         if clean_page_blocks and cleaned_text:
             cb_idx = 0
             while cb_idx < len(clean_page_blocks):
                 cb_cur = clean_page_blocks[cb_idx]
-                if cb_cur.get("is_callout_box") and fc.DIDACTIC_BOX_HEADER_RE.match(cb_cur["text"]):
+                if not cb_cur.get("is_callout_box"):
+                    cb_idx += 1
+                    continue
+
+                cur_rect_id = cb_cur.get("callout_rect_idx")
+                if fc.DIDACTIC_BOX_HEADER_RE.match(cb_cur["text"]):
                     grp_blocks = [cb_cur]
                     nxt_cb = cb_idx + 1
                     while nxt_cb < len(clean_page_blocks) and clean_page_blocks[nxt_cb].get("is_callout_box"):
-                        if fc.DIDACTIC_BOX_HEADER_RE.match(clean_page_blocks[nxt_cb]["text"]):
+                        nxt_blk = clean_page_blocks[nxt_cb]
+                        if fc.DIDACTIC_BOX_HEADER_RE.match(nxt_blk["text"]):
                             break
-                        grp_blocks.append(clean_page_blocks[nxt_cb])
+                        nxt_rect_id = nxt_blk.get("callout_rect_idx")
+                        if cur_rect_id is not None and nxt_rect_id is not None and nxt_rect_id != cur_rect_id:
+                            break
+                        grp_blocks.append(nxt_blk)
                         nxt_cb += 1
                     hdr_clean = re.sub(r"^[#*_:\s]+|[#*_:\s]+$", "", grp_blocks[0]["text"]).strip()
                     if hdr_clean.isupper() and len(hdr_clean) >= 4:
@@ -3751,7 +4093,200 @@ def fuse_vlm_page_with_docling(
                             cleaned_text = f"{cleaned_text.rstrip()}\n\n#### {hdr_clean}\n\n<Rahmen>\n{rahmen_inner}\n</Rahmen>"
                     cb_idx = nxt_cb
                     continue
-                cb_idx += 1
+
+                # General shaded/colored PDF callout box without literal didactic prefix (e.g. summary/law boxes)
+                grp_blocks = [cb_cur]
+                nxt_cb = cb_idx + 1
+                while nxt_cb < len(clean_page_blocks) and clean_page_blocks[nxt_cb].get("is_callout_box"):
+                    nxt_blk = clean_page_blocks[nxt_cb]
+                    if fc.DIDACTIC_BOX_HEADER_RE.match(nxt_blk["text"]):
+                        break
+                    nxt_rect_id = nxt_blk.get("callout_rect_idx")
+                    if cur_rect_id is not None and nxt_rect_id is not None and nxt_rect_id != cur_rect_id:
+                        break
+                    prev_b = _extract_rect_coords(grp_blocks[-1].get("bbox_1000"))
+                    nxt_b = _extract_rect_coords(nxt_blk.get("bbox_1000"))
+                    if prev_b is not None and nxt_b is not None and cur_rect_id is None:
+                        horiz_ov = min(prev_b[2], nxt_b[2]) - max(prev_b[0], nxt_b[0])
+                        vert_gap_cb = nxt_b[1] - prev_b[3]
+                        if horiz_ov <= 0 or vert_gap_cb > 120 or vert_gap_cb < -40:
+                            break
+                    grp_blocks.append(nxt_blk)
+                    nxt_cb += 1
+
+                first_txt = grp_blocks[0]["text"].strip()
+                first_bbox = _extract_rect_coords(grp_blocks[0].get("bbox_1000"))
+                is_top_banner_grp = bool(
+                    first_bbox is not None
+                    and first_bbox[1] <= 120
+                    and (
+                        fc.STANDALONE_RUBRIC_LABEL_RE.match(first_txt)
+                        or fc.DIDACTIC_RUBRIC_BANNER_RE.match(first_txt)
+                    )
+                )
+                has_table_blk = any(b["text"].lstrip().startswith("|") for b in grp_blocks)
+                has_excluded_hdr = bool(
+                    re.match(
+                        r"^(?:#{1,6}\s+)?(?:\*\*|_)?(?:Aufgaben?|Übungen?|Training|Kompetenzcheck|Kapitel|Chapter|\d+\.\d+\b)",
+                        first_txt,
+                        re.IGNORECASE,
+                    )
+                )
+                task_like_cnt = 0
+                for b in grp_blocks:
+                    bt_s = b["text"].strip()
+                    if re.match(r"^(?:#{1,6}\s+)?(?:\*\*|_)?(?:Aufgabe|Übung)\s+\d+", bt_s, re.IGNORECASE):
+                        task_like_cnt += 2
+                    elif re.match(r"^\d{1,2}[\.\)]?\s+\S", bt_s) and (
+                        _TASK_IMPERATIVE_SIE_RE.search(bt_s)
+                        or _TASK_IMPERATIVE_DU_START_RE.match(re.sub(r"^\d{1,2}[\.\)]?\s+", "", bt_s))
+                        or bt_s.endswith("?")
+                    ):
+                        task_like_cnt += 1
+                all_caps_or_gloss = all(
+                    _is_figure_caption_line(b["text"], has_page_images=bool(page_images))
+                    or _is_marginalia_or_glossary_note(b["text"])
+                    for b in grp_blocks
+                )
+                grp_text = " ".join(b["text"].strip() for b in grp_blocks if b["text"].strip()).strip()
+                grp_alpha_words = re.findall(r"[A-Za-zÄÖÜäöüß]{2,}", grp_text)
+
+                if (
+                    not is_top_banner_grp
+                    and not has_table_blk
+                    and not has_excluded_hdr
+                    and task_like_cnt == 0
+                    and not all_caps_or_gloss
+                    and len(grp_text) >= 25
+                    and len(grp_alpha_words) >= 5
+                ):
+                    grp_words = set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{4,}", grp_text.lower()))
+                    if len(grp_words) < 3:
+                        grp_words = set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{3,}", grp_text.lower()))
+                    blk_word_sets = [
+                        set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{3,}", b["text"].lower()))
+                        for b in grp_blocks
+                    ]
+                    paras_cur = [p for p in re.split(r"\n{2,}", cleaned_text) if p.strip()]
+                    in_existing_rahmen = False
+                    rahmen_protected_indices: set[int] = set()
+                    for p_i_r, p_val_r in enumerate(paras_cur):
+                        if "<Rahmen" in p_val_r:
+                            rahmen_protected_indices.add(p_i_r)
+                            if "</Rahmen" not in p_val_r:
+                                in_existing_rahmen = True
+                        elif "</Rahmen" in p_val_r:
+                            rahmen_protected_indices.add(p_i_r)
+                            in_existing_rahmen = False
+                        elif in_existing_rahmen:
+                            rahmen_protected_indices.add(p_i_r)
+
+                    matched_p_indices: set[int] = set()
+                    for p_i_c, p_val in enumerate(paras_cur):
+                        if p_i_c in rahmen_protected_indices:
+                            continue
+                        ps = p_val.strip()
+                        if (
+                            ps.startswith(("![", "|", "<Bild", "((", "<Tabelle"))
+                            or re.fullmatch(r"[-*_]{3,}", ps)
+                            or _is_figure_caption_line(ps, has_page_images=bool(page_images))
+                            or _is_marginalia_or_glossary_note(ps)
+                            or re.match(
+                                r"^(?:#{1,6}\s+)?(?:\*\*|_)?(?:Kapitel|Chapter|\d+\.\d+|Aufgaben?|Übungen?|Aufgabe\s+\d+|Übung\s+\d+)\b",
+                                ps,
+                                re.IGNORECASE,
+                            )
+                        ):
+                            continue
+                        if re.match(r"^\d{1,2}[\.\)]?\s+\S", ps) and (
+                            _TASK_IMPERATIVE_SIE_RE.search(ps)
+                            or _TASK_IMPERATIVE_DU_START_RE.match(re.sub(r"^\d{1,2}[\.\)]?\s+", "", ps))
+                            or ps.endswith("?")
+                        ):
+                            continue
+                        pw4 = set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{4,}", ps.lower()))
+                        pw3 = set(re.findall(r"[a-zA-ZäöüÄÖÜß0-9]{3,}", ps.lower()))
+                        if len(pw4) >= 3 and len(pw4 & grp_words) / len(pw4) >= 0.55:
+                            matched_p_indices.add(p_i_c)
+                        elif pw3 and any(
+                            bws and len(pw3 & bws) / len(pw3) >= 0.70 and len(pw3 & bws) >= 2
+                            for bws in blk_word_sets
+                        ):
+                            matched_p_indices.add(p_i_c)
+
+                    # Include display math paragraphs immediately following/between matched box paragraphs
+                    if matched_p_indices:
+                        for p_i_c, p_val in enumerate(paras_cur):
+                            if p_i_c in rahmen_protected_indices or p_i_c in matched_p_indices:
+                                continue
+                            ps = p_val.strip()
+                            if ps.startswith(("$$", "\\[")) and (p_i_c - 1) in matched_p_indices:
+                                matched_p_indices.add(p_i_c)
+
+                    if matched_p_indices:
+                        sorted_mi = sorted(matched_p_indices)
+                        runs_cb: list[tuple[int, int]] = []
+                        r_s = sorted_mi[0]
+                        r_e = sorted_mi[0]
+                        for mi_v in sorted_mi[1:]:
+                            if mi_v == r_e + 1:
+                                r_e = mi_v
+                            else:
+                                runs_cb.append((r_s, r_e))
+                                r_s = mi_v
+                                r_e = mi_v
+                        runs_cb.append((r_s, r_e))
+                        best_cb_run: tuple[int, int, int] | None = None
+                        for r_s, r_e in runs_cb:
+                            run_w = set(
+                                re.findall(
+                                    r"[a-zA-ZäöüÄÖÜß0-9]{4,}",
+                                    " ".join(paras_cur[r_s : r_e + 1]).lower(),
+                                )
+                            )
+                            if len(run_w) < 3:
+                                run_w = set(
+                                    re.findall(
+                                        r"[a-zA-ZäöüÄÖÜß0-9]{3,}",
+                                        " ".join(paras_cur[r_s : r_e + 1]).lower(),
+                                    )
+                                )
+                            cov_cb = len(run_w & grp_words)
+                            if (
+                                grp_words
+                                and cov_cb / len(grp_words) >= 0.45
+                                and (best_cb_run is None or cov_cb > best_cb_run[2])
+                            ):
+                                best_cb_run = (r_s, r_e, cov_cb)
+
+                        if best_cb_run is not None:
+                            r_s, r_e, _cov_cb = best_cb_run
+                            formatted_inner: list[str] = []
+                            for p_val in paras_cur[r_s : r_e + 1]:
+                                ps = p_val.strip()
+                                if re.match(r"^#{1,6}\s+", ps):
+                                    unhdr = re.sub(r"^#{1,6}\s+", "", ps).strip()
+                                    if (
+                                        len(unhdr.split()) <= 10
+                                        and not unhdr.endswith((".", "!", "?"))
+                                        and not (unhdr.startswith("**") and unhdr.endswith("**"))
+                                    ):
+                                        formatted_inner.append(f"**{unhdr}**")
+                                    else:
+                                        formatted_inner.append(unhdr)
+                                else:
+                                    formatted_inner.append(ps)
+                            del_start = r_s
+                            del_end = r_e
+                            if del_start > 0 and re.fullmatch(r"[-*_]{3,}", paras_cur[del_start - 1].strip()):
+                                del_start -= 1
+                            if del_end + 1 < len(paras_cur) and re.fullmatch(r"[-*_]{3,}", paras_cur[del_end + 1].strip()):
+                                del_end += 1
+                            rahmen_blk = "<Rahmen>\n" + "\n\n".join(formatted_inner) + "\n</Rahmen>"
+                            paras_cur[del_start : del_end + 1] = [rahmen_blk]
+                            cleaned_text = "\n\n".join(paras_cur).strip()
+
+                cb_idx = nxt_cb
 
         # 2c. In-Figure Text Label Deduplication (strip orphan diagram labels outside figures)
         if figure_texts_on_page and cleaned_text:
@@ -3861,9 +4396,18 @@ def fuse_vlm_page_with_docling(
                     is_orphan_fig_label = False
                     if s_ln.startswith("#"):
                         if (
-                            1 <= len(cand_toks) <= 4
-                            and all(t in fig_tokens for t in cand_toks)
+                            1 <= len(cand_toks) <= 8
                             and not in_body_phrase
+                            and (
+                                norm_cand in fig_line_norms
+                                or (
+                                    all(t in fig_tokens for t in cand_toks)
+                                    and (
+                                        len(cand_toks) <= 4
+                                        or any(t not in body_tokens for t in cand_toks)
+                                    )
+                                )
+                            )
                         ):
                             is_orphan_fig_label = True
                     elif norm_cand in fig_line_norms and norm_cand not in body_line_norms and not in_body_phrase:
@@ -3881,6 +4425,19 @@ def fuse_vlm_page_with_docling(
                         dedup_fig_lines.append(raw_ln)
 
                 cleaned_text = re.sub(r"\n{3,}", "\n\n", "\n".join(dedup_fig_lines)).strip()
+
+    # 2d. Demote margin etymologies emitted as headings (runs even without Docling layout)
+    if cleaned_text:
+        etym_fixed_lines: list[str] = []
+        for raw_ln in cleaned_text.splitlines():
+            s_ln = raw_ln.strip()
+            if s_ln.startswith("#") and _MARGIN_ETYMOLOGY_RE.match(
+                re.sub(r"^[#*_`\s]+", "", s_ln)
+            ):
+                etym_fixed_lines.append(re.sub(r"^#{1,6}\s+", "", s_ln))
+            else:
+                etym_fixed_lines.append(raw_ln)
+        cleaned_text = "\n".join(etym_fixed_lines)
 
     # 3. Unwrap italic/bold around standalone figure captions (*Abbildung 4.1: ...* -> Abbildung 4.1: ...)
     cleaned_text = re.sub(
@@ -4013,9 +4570,16 @@ def fuse_vlm_page_with_docling(
     cleaned_text = "\n".join(new_lines)
 
     # 4b. Enrich with Docling TableFormer tables when missed or flattened by VLM
-    if page_tables:
+    effective_page_tables: list[Any] = list(page_tables) if page_tables is not None else []
+    if page_tables is None and isinstance(effective_layout, dict):
+        tb_map_layout = effective_layout.get("tables_by_page") or {}
+        if inferred_p_idx is not None and inferred_p_idx in tb_map_layout:
+            effective_page_tables = list(tb_map_layout[inferred_p_idx] or [])
+        elif tb_map_layout and len(tb_map_layout) == 1 and inferred_p_idx is None:
+            effective_page_tables = list(next(iter(tb_map_layout.values())) or [])
+    if effective_page_tables:
         filtered_tables: list[str] = []
-        for t_entry in page_tables:
+        for t_entry in effective_page_tables:
             if isinstance(t_entry, dict):
                 t_md = str(t_entry.get("markdown") or t_entry.get("text") or "").strip()
                 t_box = t_entry.get("bbox") or t_entry.get("bbox_1000")
@@ -5307,6 +5871,16 @@ def reconstruct_title_hierarchy(
                 else:
                     blocks = data
 
+            fig_rects_by_p: dict[int, list[tuple[float, float, float, float]]] = {}
+            for b in blocks:
+                if not isinstance(b, dict):
+                    continue
+                b_type_f = str(b.get("type", "")).lower()
+                if b_type_f in ("image", "picture", "figure"):
+                    f_rect = _extract_rect_coords(b.get("bbox_1000") or b.get("bbox"))
+                    if f_rect is not None:
+                        fig_rects_by_p.setdefault(int(b.get("page_idx", 0) or 0), []).append(f_rect)
+
             title_blocks = []
             for b in blocks:
                 if not isinstance(b, dict):
@@ -5316,6 +5890,19 @@ def reconstruct_title_hierarchy(
                     b_type == "text" and b.get("text_level", 0) > 0
                 ):
                     txt = b.get("text", "").strip()
+                    if _MARGIN_ETYMOLOGY_RE.match(re.sub(r"^[#*_`\s]+", "", txt)):
+                        continue
+                    p_fig_rects = fig_rects_by_p.get(int(b.get("page_idx", 0) or 0), [])
+                    t_rect_1000 = _extract_rect_coords(b.get("bbox_1000") or b.get("bbox"))
+                    if p_fig_rects and t_rect_1000 is not None:
+                        tcx = (t_rect_1000[0] + t_rect_1000[2]) / 2.0
+                        tcy = (t_rect_1000[1] + t_rect_1000[3]) / 2.0
+                        if any(
+                            _bbox_overlap_ratio(t_rect_1000, fr) >= 0.30
+                            or (fr[0] <= tcx <= fr[2] and fr[1] <= tcy <= fr[3])
+                            for fr in p_fig_rects
+                        ):
+                            continue
                     if b.get("is_callout_box"):
                         callout_box_titles.add(txt)
                         continue
@@ -5490,12 +6077,38 @@ def reconstruct_title_hierarchy(
 
     processed_lines: list[str] = []
     i = 0
+    in_rahmen = False
 
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
         if not stripped:
             processed_lines.append(line)
+            i += 1
+            continue
+
+        if stripped.startswith("<Rahmen"):
+            if "</Rahmen>" not in stripped:
+                in_rahmen = True
+            processed_lines.append(line)
+            i += 1
+            continue
+        if "</Rahmen>" in stripped:
+            in_rahmen = False
+            processed_lines.append(line)
+            i += 1
+            continue
+        if in_rahmen:
+            processed_lines.append(line)
+            i += 1
+            continue
+
+        # Never promote margin etymology lines to headings; demote if already prefixed with '#'
+        if _MARGIN_ETYMOLOGY_RE.match(re.sub(r"^[#*_`\s]+", "", stripped)):
+            if stripped.startswith("#"):
+                processed_lines.append(re.sub(r"^#{1,6}\s+", "", stripped))
+            else:
+                processed_lines.append(line)
             i += 1
             continue
 
@@ -5868,11 +6481,18 @@ def recover_table_truncation(markdown_content: str) -> str:
             return "\n".join(out_lines).strip() + "\n"
 
         # Check if this pipe table is actually a multi-column textbook prose layout falsely classified as a table
-        # (contains long multi-sentence prose cells >= 200 chars and no 'Tabelle'/'Tab.' header)
+        # (contains long multi-sentence prose cells >= 200 chars and no structured short-header multi-row grid)
         all_non_empty_cells = [c for _r, cells in data_rows for c in cells if c]
         max_cell_len = max((len(c) for c in all_non_empty_cells), default=0)
         total_cell_len = sum(len(c) for c in all_non_empty_cells)
-        if max_cell_len >= 200 and total_cell_len >= 450:
+        header_non_empty = [c for c in data_rows[0][1] if c]
+        has_structured_header = (
+            len(data_rows) >= 3
+            and len(header_non_empty) >= 2
+            and max((len(c) for c in header_non_empty), default=0) <= 65
+            and not any(". " in c for c in header_non_empty)
+        )
+        if max_cell_len >= 200 and total_cell_len >= 450 and not has_structured_header:
             prose_paras = []
             for _r, cells in data_rows:
                 for c in cells:

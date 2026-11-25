@@ -1027,12 +1027,24 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
         work = re.sub(r"(\\f\{(?:[^{}]|\{[^{}]*\})*\})\s+\{", r"\1{", work)
 
     # 6b. Roots & Overlines: \sqrt[n]{x} -> \s[n]{x}, \sqrt{x} -> \s{x}, \overline{x} -> \ol{x}
-    work = re.sub(r"\\sqrt\s+([0-9A-Za-z])(?![0-9A-Za-z{\[])", r"\\s{\1}", work)
+    work = re.sub(
+        r"\\sqrt(?![a-zA-Z])\s*(?:\[\s*([^\]]*?)\s*\])?\s*\(\s*([^()\n]+?)\s*\)",
+        lambda m: (
+            rf"\s[{m.group(1)}]{{{m.group(2)}}}"
+            if m.group(1)
+            else rf"\s{{{m.group(2)}}}"
+        ),
+        work,
+    )
+    work = re.sub(r"\\sqrt\s+([0-9A-Za-z]+)(?![{\[])", r"\\s{\1}", work)
     work = re.sub(
         r"\\sqrt(?![a-zA-Z])\s*(?:\[\s*([^\]]*?)\s*\])?\s*\{",
         lambda m: rf"\s[{m.group(1)}]{{".replace("[]", "") if m.group(1) is not None else r"\s{",
         work,
     )
+    work = re.sub(r"√\s*\(\s*([^()\n]+?)\s*\)", r"\\s{\1}", work)
+    work = re.sub(r"√\s*\{", lambda _: r"\s{", work)
+    work = re.sub(r"√\s*([0-9A-Za-z]+)(?![{\[])", r"\\s{\1}", work)
     work = re.sub(r"\\overline(?![a-zA-Z])\s*\{", lambda _: r"\ol{", work)
     work = re.sub(r"\\overline(?![a-zA-Z])\s+([A-Za-z0-9]+)", r"\\ol{\1}", work)
 
@@ -1071,9 +1083,11 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
     work = re.sub(r"∓(?=[A-Za-z])", lambda _: r"\mp ", work)
     work = work.replace("∓", r"\mp")
 
-    # 6d. Angle brackets, arrows (\rlh vs \lra), sets, logic (\forall, \ex), geometry, and dots
+    # 6d. Angle brackets, angle symbol (\angle(g,h)), arrows (\rlh vs \lra), sets, logic, geometry, and dots
     work = re.sub(r"\\langle(?![a-zA-Z])|⟨", lambda _: r"\l<", work)
     work = re.sub(r"\\rangle(?![a-zA-Z])|⟩", lambda _: r"\r>", work)
+    work = re.sub(r"∠(?=[A-Za-z])", lambda _: r"\angle ", work)
+    work = work.replace("∠", r"\angle")
 
     work = re.sub(r"\\(?:Leftrightarrow|iff)(?![a-zA-Z])", lambda _: r"\Lra", work)
     work = re.sub(r"\s*⇔\s*", lambda _: r" \Lra ", work)
@@ -1239,6 +1253,75 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
         work = re.sub(r"\([ \t]+(?=[^\s)])", "(", work)
         work = re.sub(r"(?<=[^\s(])[ \t]+\)", ")", work)
 
+    # 8b. Tighten Marburger spacing for Delta (~D) and implicit variable * tilde-Greek products
+    work = re.sub(
+        r"~D[ \t]+("
+        r"~[A-Za-z]"
+        r"|\\(?:vec|ol|dot|ddot|tilde)\{"
+        r"|\((?![A-Za-zÄÖÜäöüß]{3,}[)\s,])"
+        r"|[A-Za-z](?:'{1,3}|[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+)|(?![A-Za-zÄÖÜäöüß]))"
+        r")",
+        r"~D\1",
+        work,
+    )
+    work = re.sub(
+        r"(?<![A-Za-zÄÖÜäöüß~\\_])([A-Za-z](?:\^[0-9])?)[ \t]+"
+        r"(~(?!m(?:mol|g|m|l|L|s|A|V|F|W|N|J|Pa|Hz|bar)\b)[A-Za-z]"
+        r"(?![a-zäöüß]{2}|-[A-Za-zäöüÄÖÜß]{2,}))",
+        r"\1\2",
+        work,
+    )
+
+    # 8c. Bare tilde proportionality ('~a ~ M' -> '~a \sim M', 'a ~ F' -> 'a \sim F', 's ~ t^2' -> 's \sim t^2')
+    _prop_lhs = (
+        r"(?:"
+        r"~D(?:~[A-Za-z]|\\(?:vec|ol)\{[^{}]+\}|[A-Za-z](?:'{1,3})?)(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r"|~[A-Za-z](?:'{1,3})?(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r"|\\(?:vec|ol|f|s)\{[^{}]+\}(?:\{[^{}]+\})?(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r"|(?<![A-Za-zÄÖÜäöüß~\\])[A-Za-z](?:'{1,3})?(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r")"
+    )
+    _prop_rhs = (
+        r"(?="
+        r"~[A-Za-z](?![a-zäöüß]{2})"
+        r"|\\(?:f|s|vec|ol|dot|ddot|tilde)\b"
+        r"|1/[A-Za-z~\\]"
+        r"|\((?![A-Za-zÄÖÜäöüß]{3,}[)\s,])"
+        r"|-?(?:[A-Za-z](?:'{1,3}|[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+)|(?![A-Za-zÄÖÜäöüß])))"
+        r")"
+    )
+    work = re.sub(
+        rf"({_prop_lhs})[ \t]+~[ \t]+{_prop_rhs}",
+        r"\1 \\sim ",
+        work,
+    )
+
+    # 8d. Convert spaced bare symbolic variable fractions ('F = ~Dp / ~Dt' -> 'F = \f{~Dp}{~Dt}')
+    _frac_term = (
+        r"(?:"
+        r"[A-Za-z]?~D(?:~[A-Za-z]|\\(?:vec|ol)\{[^{}]+\}|[A-Za-z](?:'{1,3})?)(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r"|~[A-Za-z](?:'{1,3})?(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r"|\\(?:vec|ol|s)\{[^{}]+\}(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r"|[A-Za-z](?:'{1,3})?(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r")"
+    )
+
+    def _spaced_var_frac_repl(m: re.Match[str]) -> str:
+        num, den = m.group(1), m.group(2)
+        if any(ch in num or ch in den for ch in ("~", "\\", "_", "^", "'")):
+            return rf"\f{{{num}}}{{{den}}}"
+        line_s = work.rfind("\n", 0, m.start()) + 1
+        before = work[line_s : m.start()]
+        if re.search(r"(?:=|<=|>=|\\sim|\\apx|\\neq|\\\^=|[+\-*(])[ \t]*$", before):
+            return rf"\f{{{num}}}{{{den}}}"
+        return m.group(0)
+
+    work = re.sub(
+        rf"(?<![A-Za-zÄÖÜäöüß0-9_\\~])({_frac_term})[ \t]+/[ \t]+({_frac_term})(?![A-Za-zÄÖÜäöüß0-9_])",
+        _spaced_var_frac_repl,
+        work,
+    )
+
     # 9. FIBS Bruchschreibweisen: negative numeric fractions & forbidden '1/2 x' space
     work = re.sub(r"(?<![0-9A-Za-z./\-])(\d+)/-(\d+)(?![0-9A-Za-z./\-])", r"\\f{\1}{-\2}", work)
     work = re.sub(
@@ -1339,7 +1422,7 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
             if lctx[-1] == ")" and re.search(r"\([A-Za-zäöüÄÖÜß\s.,;:]{5,}\)$", lctx):
                 return False
             return True
-        if re.search(r"\^[+\-*]$|~[A-Za-z]$", lctx) or fc.FIBS_LEFT_MATH_CMD_RE.search(lctx):
+        if re.search(r"\^[+\-*]$|~D?[A-Za-z]$", lctx) or fc.FIBS_LEFT_MATH_CMD_RE.search(lctx):
             return True
         if re.search(r"(?<![A-Za-zäöüÄÖÜß_])[A-Za-z]$|[A-Za-z0-9)\]}']_[A-Za-z]$", lctx):
             return True
@@ -1377,8 +1460,42 @@ def _convert_to_fibs_bare_latex(text: str) -> str:
         asym_parts.append(work[asym_last:])
         work = "".join(asym_parts)
 
-    # 10. Collapse redundant spaces (preserving tabs) and re-apply degree/percent rules
+    # 10. Collapse redundant spaces (preserving tabs), strip stray spaces before math punctuation,
+    #     and re-apply unit/degree/percent/thousands/coordinate rules
     work = re.sub(r"(?<=\S)[ ]{2,}(?=\S)", " ", work)
+
+    _math_punct_tok = (
+        r"(?:"
+        r"\\(?:vec|f|s|ol|dot|ddot|tilde|xra|angle)(?:\[[^\]]*\])?"
+        r"\{(?:[^{}]|\{[^{}]*\})*\}(?:\{(?:[^{}]|\{[^{}]*\})*\})?"
+        r"|\\angle\([^)\n]+\)"
+        r"|\\(?:8|es|N|Z|Q|R|C|P|ominus)"
+        r"|~D(?:~[A-Za-z]|\\(?:vec|ol)\{[^{}]+\}|\([^)\n]+\)|[A-Za-z](?:'{1,3})?)"
+        r"(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r"|~[A-Za-z](?:'{1,3})?(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))*"
+        r"|=[A-Za-z0-9_~\\^()*/+\-{}']+"
+        r"|(?<![A-Za-zÄÖÜäöüß\\])[A-Za-z](?:[A-Za-z0-9']{0,2})?(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9+\-]+))+"
+        r"|(?<![A-Za-zÄÖÜäöüß\\])[A-Za-z](?:'{1,3}|\([A-Za-z0-9_~+\-*, ]+\))"
+        r"|(?<=[\s(\[])[A-Za-z]"
+        r")"
+    )
+
+    def _strip_math_punct_space(m: re.Match[str]) -> str:
+        tok, punct = m.group(1), m.group(2)
+        if punct == ":":
+            after = work[m.end() :]
+            if after and not re.match(r"^[ \t]*(?:\n|$)", after):
+                if len(tok) == 1 and re.match(
+                    r"^[ \t]+(?:\d|[A-Za-z](?![A-Za-zäöüÄÖÜß]))", after
+                ):
+                    return m.group(0)
+        return f"{tok}{punct}"
+
+    work = re.sub(
+        rf"({_math_punct_tok})[ \t]+([,:;]|\.(?!\.))(?=[ \t\n]|$)",
+        _strip_math_punct_space,
+        work,
+    )
     work = normalize_fibs_units_and_percent(work)
 
     for idx, val in reversed(list(enumerate(protected_spans))):

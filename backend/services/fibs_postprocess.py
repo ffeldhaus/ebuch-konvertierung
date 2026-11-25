@@ -450,6 +450,33 @@ def split_golden_by_physical_pages(md: str, physical_pages: list[int]) -> dict[i
     return result
 
 
+def _toc_norm_matches_page(
+    norm_key: str,
+    toc_pages_map: dict[str, set[int | None]],
+    current_page: int | None,
+    has_doc_pages: bool,
+) -> bool:
+    """Checks whether ``norm_key`` matches a TOC entry scoped to ``current_page`` (±1 page).
+
+    Args:
+        norm_key: Normalized heading title key.
+        toc_pages_map: Mapping from normalized TOC title to its target page numbers.
+        current_page: Current physical page number from ``((N))``, or ``None`` if unknown.
+        has_doc_pages: Whether the document contains any numeric ``((N))`` page markers.
+
+    Returns:
+        ``True`` if the TOC entry applies on ``current_page``, otherwise ``False``.
+    """
+    pages = toc_pages_map.get(norm_key)
+    if not pages:
+        return False
+    if not has_doc_pages:
+        return True
+    if current_page is None:
+        return False
+    return any(ep is not None and abs(current_page - ep) <= 1 for ep in pages)
+
+
 def infer_heading_hierarchy(
     markdown_content: str,
     raw_markdown: str | None = None,
@@ -499,7 +526,7 @@ def infer_heading_hierarchy(
                 in_bild = False
             processed_lines.append(re.sub(r"^(\s*)#{1,6}\s+", r"\1", line))
             continue
-        if re.match(r"^<Bild\b", stripped, re.IGNORECASE):
+        if re.match(r"^<Bild(?!-Ref)\b", stripped, re.IGNORECASE):
             if not re.search(r"</Bild>", stripped, re.IGNORECASE):
                 in_bild = True
             processed_lines.append(line)
@@ -715,11 +742,45 @@ def infer_heading_hierarchy(
 
     result = "\n".join(processed_lines)
     try:
-        from backend.services.directory_service import apply_directory_heading_levels
-
-        result, _ = apply_directory_heading_levels(
-            result, directory_info=directory_info, raw_markdown=raw_markdown
+        from backend.services.directory_service import (
+            apply_directory_heading_levels,
+            extract_directories_from_markdown,
         )
+
+        eff_dir_info = directory_info
+        if not eff_dir_info or not eff_dir_info.get("has_any_directory"):
+            eff_dir_info = extract_directories_from_markdown(raw_markdown or result)
+
+        if eff_dir_info and eff_dir_info.get("has_any_directory"):
+            toc_entries_all = eff_dir_info.get("toc_entries") or []
+            page_segs = split_markdown_pages(result)
+            has_numeric_pages = any(seg.page and seg.page.isdigit() for seg in page_segs)
+            if not has_numeric_pages or not toc_entries_all:
+                result, _ = apply_directory_heading_levels(
+                    result, directory_info=eff_dir_info, raw_markdown=raw_markdown
+                )
+            else:
+                updated_segs: list[str] = []
+                for seg in page_segs:
+                    cur_pg_int = int(seg.page) if (seg.page and seg.page.isdigit()) else None
+                    scoped_toc: list[dict[str, Any]] = []
+                    if cur_pg_int is not None:
+                        for entry in toc_entries_all:
+                            if not isinstance(entry, dict):
+                                continue
+                            pg_s = str(entry.get("page") or "").strip()
+                            if pg_s.isdigit() and abs(cur_pg_int - int(pg_s)) <= 1:
+                                scoped_toc.append(entry)
+                    seg_dir_info = {
+                        **eff_dir_info,
+                        "toc_entries": scoped_toc,
+                        "heading_levels": {},
+                    }
+                    seg_out, _ = apply_directory_heading_levels(
+                        seg.text, directory_info=seg_dir_info, raw_markdown=None
+                    )
+                    updated_segs.append(seg_out)
+                result = "".join(updated_segs)
     except Exception as e:
         logger.debug(f"Could not apply directory heading levels in infer_heading_hierarchy: {e}")
 
@@ -1772,19 +1833,22 @@ def _promote_and_clean_bild_captions(
     text_subheadings_h4 = bool(
         custom_rules and _parse_buchkonferenz_profile(custom_rules).text_subheadings_h4
     )
-    protected_heading_norms: set[str] = set()
+    protected_heading_pages: dict[str, set[int | None]] = {}
     for toc_e in (directory_info or {}).get("toc_entries") or []:
         if not isinstance(toc_e, dict):
             continue
         raw_t = str(toc_e.get("title") or "").strip()
         lvl_e = int(toc_e.get("level") or 0)
         if lvl_e == 1 or re.match(r"^\d+\.?\s+\S", raw_t):
+            pg_s_e = str(toc_e.get("page") or "").strip()
+            pg_int_e = int(pg_s_e) if pg_s_e.isdigit() else None
             norm_f = re.sub(r"\W+", " ", raw_t).strip().lower()
             if norm_f:
-                protected_heading_norms.add(norm_f)
+                protected_heading_pages.setdefault(norm_f, set()).add(pg_int_e)
             norm_c = re.sub(r"\W+", " ", str(toc_e.get("clean_title") or "")).strip().lower()
             if norm_c:
-                protected_heading_norms.add(norm_c)
+                protected_heading_pages.setdefault(norm_c, set()).add(pg_int_e)
+    has_doc_pages_cap = bool(re.search(r"(?m)^\(\(\d+\)\)", text))
 
     # 19f: Strip contiguous >= 2 pairs of orphan in-diagram subheading + single-letter panel heading after </Bild>
     pair_segs = re.split(r"(<Bild\b[^>]*>[\s\S]*?</Bild>)", text, flags=re.IGNORECASE)
@@ -1956,7 +2020,11 @@ def _promote_and_clean_bild_captions(
         return _split_long_caption_body(label_part, c_body_clean), c_body_clean
 
     bild_segs = re.split(r"(<Bild\b[^>]*>[\s\S]*?</Bild>)", text, flags=re.IGNORECASE)
+    cur_bild_page: int | None = None
     for b_i in range(1, len(bild_segs), 2):
+        pre_pg_hits = re.findall(r"(?m)^\(\((\d+)\)\)", bild_segs[b_i - 1])
+        if pre_pg_hits:
+            cur_bild_page = int(pre_pg_hits[-1])
         pre_lines = bild_segs[b_i - 1].splitlines()
         post_lines = bild_segs[b_i + 1].splitlines()
         bild_box = bild_segs[b_i]
@@ -2128,8 +2196,18 @@ def _promote_and_clean_bild_captions(
                             not word_pre
                             and not let_pre
                             and (
-                                cand_full_norm in protected_heading_norms
-                                or cand_body_norm in protected_heading_norms
+                                _toc_norm_matches_page(
+                                    cand_full_norm,
+                                    protected_heading_pages,
+                                    cur_bild_page,
+                                    has_doc_pages_cap,
+                                )
+                                or _toc_norm_matches_page(
+                                    cand_body_norm,
+                                    protected_heading_pages,
+                                    cur_bild_page,
+                                    has_doc_pages_cap,
+                                )
                             )
                         )
                         if (
@@ -2958,6 +3036,31 @@ def _apply_linked_worterklaerungen_and_randspalten(
     if not text:
         return text
 
+    # 0. Demote margin etymology headings (e.g. '### lat. vegetare = beleben') outside <Bild>/<Tabelle>
+    etym_h_re = re.compile(
+        r"^#{2,5}\s+((?:lat\.|griech\.|gr\.|engl\.|franz\.|frz\.|ital\.|span\.|arab\.)\s+[^=\n]{1,40}=[^\n]*)$",
+        re.IGNORECASE,
+    )
+    etym_lines = text.splitlines()
+    etym_in_media = False
+    etym_changed = False
+    for idx_e, raw_e in enumerate(etym_lines):
+        se = raw_e.strip()
+        if etym_in_media:
+            if re.search(r"</(?:Bild|Tabelle)>", se, re.IGNORECASE):
+                etym_in_media = False
+            continue
+        if re.match(r"^<(?:Bild(?!-Ref)|Tabelle)\b", se, re.IGNORECASE):
+            if not re.search(r"</(?:Bild|Tabelle)>", se, re.IGNORECASE):
+                etym_in_media = True
+            continue
+        m_etym_h = etym_h_re.match(se)
+        if m_etym_h:
+            etym_lines[idx_e] = m_etym_h.group(1).strip()
+            etym_changed = True
+    if etym_changed:
+        text = "\n".join(etym_lines)
+
     # 1. Non-glossary marginal boxes ('Randspalte') -> '#### Randspalte' + '<Rahmen>...</Rahmen>'
     def _lift_randspalte_rahmen(m: re.Match[str]) -> str:
         sub = (m.group(1) or "").strip()
@@ -3455,8 +3558,8 @@ def _inject_toc_u1_chapters(
     directory_info: dict[str, Any] | None,
     *,
     inject_missing: bool,
-) -> tuple[str, set[str]]:
-    """Collects TOC level-1 chapter norms and optionally injects missing ``# <title>`` headings.
+) -> tuple[str, dict[str, set[int | None]]]:
+    """Collects page-scoped TOC level-1 chapter norms and optionally injects missing ``# <title>``.
 
     Args:
         text: Markdown document with ``((page))`` markers.
@@ -3465,9 +3568,10 @@ def _inject_toc_u1_chapters(
             when no matching ``# `` heading already appears on that page.
 
     Returns:
-        Tuple ``(updated_text, toc_u1_title_norms)``.
+        Tuple ``(updated_text, toc_u1_pages)`` mapping normalized level-1 titles to their
+        target page numbers (or ``None`` when no page is attached to the TOC entry).
     """
-    toc_u1_norms: set[str] = set()
+    toc_u1_pages: dict[str, set[int | None]] = {}
     toc_entries = (directory_info or {}).get("toc_entries") or []
     u1_by_page: dict[str, list[str]] = {}
     for entry in toc_entries:
@@ -3475,17 +3579,18 @@ def _inject_toc_u1_chapters(
             continue
         raw_t = str(entry.get("title") or "").strip()
         pg_t = str(entry.get("page") or "").strip()
+        pg_int = int(pg_t) if pg_t.isdigit() else None
         norm_t = re.sub(r"\W+", " ", raw_t).strip().lower()
         if norm_t:
-            toc_u1_norms.add(norm_t)
+            toc_u1_pages.setdefault(norm_t, set()).add(pg_int)
             norm_unnum = re.sub(r"^\d+\.?\s+", "", norm_t).strip()
             if norm_unnum:
-                toc_u1_norms.add(norm_unnum)
+                toc_u1_pages.setdefault(norm_unnum, set()).add(pg_int)
         if raw_t and pg_t and not entry.get("page_inferred"):
             u1_by_page.setdefault(pg_t, []).append(raw_t)
 
     if not inject_missing or not u1_by_page or not text:
-        return text, toc_u1_norms
+        return text, toc_u1_pages
 
     segs = split_markdown_pages(text)
     changed = False
@@ -3523,8 +3628,8 @@ def _inject_toc_u1_chapters(
             seg.text = re.sub(r"\n{3,}", "\n\n", "\n".join(seg_lines).rstrip()) + "\n\n"
 
     if not changed:
-        return text, toc_u1_norms
-    return "".join(s.text for s in segs).strip(), toc_u1_norms
+        return text, toc_u1_pages
+    return "".join(s.text for s in segs).strip(), toc_u1_pages
 
 
 def _apply_buchkonferenz_rules(
@@ -3571,6 +3676,62 @@ def _apply_buchkonferenz_rules(
         flags=re.IGNORECASE,
     )
 
+    # Strip literal '<Nr>' placeholder headings and <Bild-Ref>-leaked ghost headings (e.g. '#### M026')
+    raw_nums_by_page: dict[str, set[str]] = {}
+    raw_nums_all: set[str] = set()
+    if raw_markdown:
+        for r_seg in split_markdown_pages(raw_markdown):
+            r_clean = re.sub(r"<Bild-Ref\b[^>]*/?>|\bBILD_\d+\b|\(\(\d+\)\)", " ", r_seg.text, flags=re.IGNORECASE)
+            nums_in_seg = {str(int(n)) for n in re.findall(r"\d+", r_clean)}
+            raw_nums_all.update(nums_in_seg)
+            if r_seg.page:
+                raw_nums_by_page.setdefault(r_seg.page, set()).update(nums_in_seg)
+
+    gh_lines = text.splitlines()
+    gh_kept: list[str] = []
+    gh_in_media = False
+    gh_cur_pg = ""
+    gh_changed = False
+    n_gh = len(gh_lines)
+    for gh_i, gh_ln in enumerate(gh_lines):
+        gh_s = gh_ln.strip()
+        m_gh_pg = re.match(r"^\(\((\d+)\)\)", gh_s)
+        if m_gh_pg:
+            gh_cur_pg = m_gh_pg.group(1)
+        if gh_in_media:
+            if re.search(r"</(?:Bild|Tabelle)>", gh_s, re.IGNORECASE):
+                gh_in_media = False
+            gh_kept.append(gh_ln)
+            continue
+        if re.match(r"^<(?:Bild(?!-Ref)|Tabelle)\b", gh_s, re.IGNORECASE):
+            if not re.search(r"</(?:Bild|Tabelle)>", gh_s, re.IGNORECASE):
+                gh_in_media = True
+            gh_kept.append(gh_ln)
+            continue
+        if re.match(r"^#{1,6}\s+(?:[A-Z]\s*)?<Nr>[^\n]*$", gh_s, re.IGNORECASE):
+            gh_changed = True
+            continue
+        if re.match(r"^#{2,5}\s+[MBQ]\s*0\d{2,3}\s*$", gh_s):
+            gh_changed = True
+            continue
+        m_bare_hi = re.match(r"^####\s+[MBQ]\s*(\d+)\s*$", gh_s)
+        if m_bare_hi and raw_markdown:
+            hi_num = int(m_bare_hi.group(1))
+            if hi_num >= 20:
+                nxt_gh = ""
+                for f_gh in range(gh_i + 1, n_gh):
+                    if gh_lines[f_gh].strip():
+                        nxt_gh = gh_lines[f_gh].strip()
+                        break
+                if re.match(r"^(?:<Bild(?:-Ref)?\b|!\[)", nxt_gh, re.IGNORECASE):
+                    page_raw_nums = raw_nums_by_page.get(gh_cur_pg, raw_nums_all) if gh_cur_pg else raw_nums_all
+                    if str(hi_num) not in page_raw_nums:
+                        gh_changed = True
+                        continue
+        gh_kept.append(gh_ln)
+    if gh_changed:
+        text = re.sub(r"\n{3,}", "\n\n", "\n".join(gh_kept))
+
     # Global FIBS 09/2025 Ü4 captions above <Bild> with Buchkonferenz prefix priority
     text = _promote_and_clean_bild_captions(
         text,
@@ -3588,6 +3749,16 @@ def _apply_buchkonferenz_rules(
         "praktikum": "Praktikum",
         "streifzug": "Streifzug",
     }
+    text = re.sub(
+        r"(?im)^<Rahmen\b[^>]*>\s*(?:\*\*|_)?material\s+mit\s*aufgaben:?(?:\*\*|_)?\s*</Rahmen>[ \t]*$",
+        "### Material mit Aufgaben",
+        text,
+    )
+    text = re.sub(
+        r"(?im)^(?:#{1,6}[ \t]+)?(?:\*\*|_)?material(?:\*\*|_)?[ \t]*\n+(?:#{1,6}[ \t]+)?(?:\*\*|_)?mit[ \t]*aufgaben:?(?:\*\*|_)?[ \t]*$",
+        "### Material mit Aufgaben",
+        text,
+    )
     text = re.sub(
         r"(?im)^#{2,4}[ \t]+(?:\*\*|_)?material[ \t]+mit[ \t]*aufgaben:?(?:\*\*|_)?[ \t]*$",
         "### Material mit Aufgaben",
@@ -3639,7 +3810,7 @@ def _apply_buchkonferenz_rules(
         return re.sub(r"[ \t]*\[[123]\s*Punkte?\]", "", text, flags=re.IGNORECASE)
 
     profile = _parse_buchkonferenz_profile(custom_rules)
-    text, toc_u1_norms = _inject_toc_u1_chapters(
+    text, toc_u1_pages = _inject_toc_u1_chapters(
         text, directory_info, inject_missing=profile.adopt_toc_u1
     )
     fig_pfx, explicit_bk = _resolve_figure_caption_prefix(custom_rules, ruleset_key)
@@ -3997,6 +4168,33 @@ def _apply_buchkonferenz_rules(
                     continue
             idx_t += 1
 
+        def _is_fig_prefixed_num(num_tok: str) -> bool:
+            up_n = num_tok.upper()
+            if up_n.startswith("M") and up_n[1:2].isdigit():
+                return True
+            if (
+                fig_pfx
+                and up_n.startswith(fig_pfx.upper())
+                and up_n[len(fig_pfx) : len(fig_pfx) + 1].isdigit()
+            ):
+                return True
+            return False
+
+        def _next_non_empty_t(cur_idx: int) -> str:
+            for fwd_i in range(cur_idx + 1, n_tl):
+                if fwd_i not in skip_t_indices and t_lines[fwd_i].strip():
+                    return t_lines[fwd_i].strip()
+            return ""
+
+        inline_fig_hdr_re = re.compile(
+            rf"^####\s+(?:(?:{re.escape(fig_pfx)}|[MBQ])\s*\d+|Abb(?:ildung)?\.?\s*\d+|"
+            rf"Tab(?:elle)?\.?\s*\d+|Bild\s*\d+|Grafik\s*\d+|Fig(?:ure|\.)?\s*\d+)\b"
+            if fig_pfx
+            else r"^####\s+(?:[MBQ]\s*\d+|Abb(?:ildung)?\.?\s*\d+|Tab(?:elle)?\.?\s*\d+|"
+            r"Bild\s*\d+|Grafik\s*\d+|Fig(?:ure|\.)?\s*\d+)\b",
+            re.IGNORECASE,
+        )
+
         for line_i_t, ln in enumerate(t_lines):
             if line_i_t in skip_t_indices:
                 continue
@@ -4007,6 +4205,9 @@ def _apply_buchkonferenz_rules(
             if in_bild:
                 if re.search(r"</Bild>", s, re.IGNORECASE):
                     in_bild = False
+                out_t_lines.append(ln)
+                continue
+            if re.match(r"^<Bild-Ref\b", s, re.IGNORECASE):
                 out_t_lines.append(ln)
                 continue
             if re.match(r"^<Bild\b", s, re.IGNORECASE):
@@ -4072,15 +4273,14 @@ def _apply_buchkonferenz_rules(
                 h_only_hashes = m_h5_only.group(1)
                 h_only_kw = m_h5_only.group(2)
                 h_only_num = m_h5_only.group(3)
-                nxt_ne_line = ""
-                for fwd_t in range(line_i_t + 1, n_tl):
-                    if fwd_t not in skip_t_indices and t_lines[fwd_t].strip():
-                        nxt_ne_line = t_lines[fwd_t].strip()
-                        break
+                nxt_ne_line = _next_non_empty_t(line_i_t)
+                next_is_bild = bool(re.match(r"^(?:<Bild(?:-Ref)?\b|!\[)", nxt_ne_line, re.IGNORECASE))
+                is_fig_num = _is_fig_prefixed_num(h_only_num)
                 is_alpha_subtask = (
                     len(h_only_hashes) >= 2
                     and bool(re.match(r"^[A-LN-Z]\d+$", h_only_num))
-                    and not nxt_ne_line.startswith(("<Bild", "!["))
+                    and not is_fig_num
+                    and not next_is_bild
                     and (
                         in_aufgaben
                         or in_material_sec
@@ -4088,7 +4288,11 @@ def _apply_buchkonferenz_rules(
                         or nxt_ne_line.endswith("?")
                     )
                 )
-                if len(h_only_hashes) == 5 or h_only_kw or is_alpha_subtask:
+                if (
+                    not next_is_bild
+                    and not (is_fig_num and not h_only_kw and not in_aufgaben)
+                    and (len(h_only_hashes) == 5 or h_only_kw or is_alpha_subtask)
+                ):
                     if emit_aufgaben_hdr and not in_aufgaben:
                         out_t_lines.append("##### Aufgaben")
                         out_t_lines.append("")
@@ -4112,12 +4316,19 @@ def _apply_buchkonferenz_rules(
                     (m_h_task.group(5) or "").strip(),
                     m_h_task.group(6).strip(),
                 )
+                nxt_ne_ht = _next_non_empty_t(line_i_t)
+                next_is_bild_ht = bool(re.match(r"^(?:<Bild(?:-Ref)?\b|!\[)", nxt_ne_ht, re.IGNORECASE))
+                is_fig_num_ht = _is_fig_prefixed_num(t_num)
                 is_task_h = (
-                    "aufgabe" in s.lower()
-                    or len(hashes_t) == 5
-                    or bool(re.match(r"^[A-LN-Z]\d+$", t_num))
-                    or bool(_TASK_OPERATOR_VERB_RE.match(t_body))
-                    or t_body.endswith("?")
+                    not next_is_bild_ht
+                    and not (is_fig_num_ht and "aufgabe" not in s.lower() and not in_aufgaben)
+                    and (
+                        "aufgabe" in s.lower()
+                        or len(hashes_t) == 5
+                        or (bool(re.match(r"^[A-LN-Z]\d+$", t_num)) and not is_fig_num_ht)
+                        or bool(_TASK_OPERATOR_VERB_RE.match(t_body))
+                        or t_body.endswith("?")
+                    )
                 )
                 if is_task_h:
                     if emit_aufgaben_hdr and not in_aufgaben:
@@ -4142,9 +4353,35 @@ def _apply_buchkonferenz_rules(
                         )
                     continue
 
-            # Reset in_aufgaben on non-task H1..H4 headings
+            # Reset in_aufgaben on non-task H1..H4 headings (except inline figure/table headings inside active tasks)
             if re.match(r"^#{1,4}\s+", s):
-                in_aufgaben = False
+                is_inline_media_h4 = False
+                if in_aufgaben and s.startswith("#### ") and not re.match(
+                    r"^####\s+(?:Material\b|Randspalte\b|Worterklärung\b|Merke\b|Steckbrief\b|[A-Z]:\s)",
+                    s,
+                    re.IGNORECASE,
+                ):
+                    nxt1_h = _next_non_empty_t(line_i_t)
+                    if re.match(r"^(?:<Bild(?:-Ref)?\b|<Tabelle\b|!\[)", nxt1_h, re.IGNORECASE):
+                        is_inline_media_h4 = True
+                    elif inline_fig_hdr_re.match(s):
+                        seen_ahead_h = 0
+                        for fwd_m in range(line_i_t + 1, n_tl):
+                            if fwd_m in skip_t_indices:
+                                continue
+                            st_fm = t_lines[fwd_m].strip()
+                            if not st_fm:
+                                continue
+                            if st_fm.startswith(("#", "((")):
+                                break
+                            if re.match(r"^(?:<Bild(?:-Ref)?\b|<Tabelle\b|!\[)", st_fm, re.IGNORECASE):
+                                is_inline_media_h4 = True
+                                break
+                            seen_ahead_h += 1
+                            if seen_ahead_h >= 2:
+                                break
+                if not is_inline_media_h4:
+                    in_aufgaben = False
                 out_t_lines.append(ln)
                 continue
 
@@ -4197,6 +4434,9 @@ def _apply_buchkonferenz_rules(
                 p_sym_tok = (m_plain_task.group(3) or "").strip()
                 p_sub_tok = (m_plain_task.group(4) or "").strip()
                 t_body = m_plain_task.group(5).strip()
+                nxt_ne_pt = _next_non_empty_t(line_i_t)
+                next_is_bild_pt = bool(re.match(r"^(?:<Bild(?:-Ref)?\b|!\[)", nxt_ne_pt, re.IGNORECASE))
+                is_fig_num_pt = _is_fig_prefixed_num(t_num)
                 is_explicit_op_or_q = (
                     bool(_TASK_OPERATOR_VERB_RE.match(t_body))
                     or t_body.endswith("?")
@@ -4204,9 +4444,17 @@ def _apply_buchkonferenz_rules(
                     or bool(fc.POINT_DIFFICULTY_TAG_RE.search(t_body))
                     or bool(p_sym_tok)
                 )
-                if is_explicit_op_or_q or (
-                    in_aufgaben
-                    and bool(re.match(r"^[A-LN-Z]\d+$", t_num))
+                if (
+                    not next_is_bild_pt
+                    and not (is_fig_num_pt and not in_aufgaben)
+                    and (
+                        is_explicit_op_or_q
+                        or (
+                            in_aufgaben
+                            and bool(re.match(r"^[A-LN-Z]\d+$", t_num))
+                            and not is_fig_num_pt
+                        )
+                    )
                 ):
                     if emit_aufgaben_hdr and not in_aufgaben:
                         out_t_lines.append("##### Aufgaben")
@@ -4314,24 +4562,26 @@ def _apply_buchkonferenz_rules(
                 elif re.match(r"^###\s+\S", st_sc):
                     pages_with_h3.add(cur_pg_scan)
 
-        toc_u2_u3_norms: set[str] = set()
+        toc_u2_u3_pages: dict[str, set[int | None]] = {}
         for toc_e in (directory_info or {}).get("toc_entries") or []:
             if not isinstance(toc_e, dict) or int(toc_e.get("level") or 0) not in (2, 3):
                 continue
+            pg_s_u = str(toc_e.get("page") or "").strip()
+            pg_int_u = int(pg_s_u) if pg_s_u.isdigit() else None
             for field_k in ("title", "clean_title"):
                 raw_tk = str(toc_e.get(field_k) or "").strip()
                 if not raw_tk:
                     continue
                 norm_tk = re.sub(r"\W+", " ", raw_tk).strip().lower()
                 if norm_tk:
-                    toc_u2_u3_norms.add(norm_tk)
+                    toc_u2_u3_pages.setdefault(norm_tk, set()).add(pg_int_u)
                     stripped_rub = re.sub(
                         r"^(?:werkstatt|strategie|extra|lexikon|infografik|methode|basiskonzept|exkurs)\s*:?\s+",
                         "",
                         norm_tk,
                     ).strip()
                     if stripped_rub:
-                        toc_u2_u3_norms.add(stripped_rub)
+                        toc_u2_u3_pages.setdefault(stripped_rub, set()).add(pg_int_u)
 
         h_lines = text.splitlines()
         out_h_lines: list[str] = []
@@ -4340,17 +4590,23 @@ def _apply_buchkonferenz_rules(
         seen_chapter_or_h3 = False
         after_m1_caption = False
         cur_pg_h = ""
+        cur_pg_int_h: int | None = None
+        has_doc_pages_h = bool(re.search(r"(?m)^\(\(\d+\)\)", text))
         seen_mat_h3_on_page = False
         for idx_h, ln in enumerate(h_lines):
             s = ln.strip()
             m_pm_h = re.match(r"^\(\((\d+)\)\)", s)
             if m_pm_h:
                 cur_pg_h = m_pm_h.group(1)
+                cur_pg_int_h = int(cur_pg_h)
                 seen_mat_h3_on_page = False
                 after_m1_caption = False
             if in_bild:
                 if re.search(r"</Bild>", s, re.IGNORECASE):
                     in_bild = False
+                out_h_lines.append(ln)
+                continue
+            if re.match(r"^<Bild-Ref\b", s, re.IGNORECASE):
                 out_h_lines.append(ln)
                 continue
             if re.match(r"^<Bild\b", s, re.IGNORECASE):
@@ -4431,12 +4687,14 @@ def _apply_buchkonferenz_rules(
                 after_m1_caption = False
                 continue
 
-            # Preserve TOC Ü1 and explicit Kapitel/Chapter headings before numbered-caption check
+            # Preserve TOC Ü1 (scoped to target page ±1) and explicit Kapitel/Chapter headings
             m_pre_u1 = re.match(r"^(#{1,4})\s+(.+)$", s)
             if m_pre_u1:
                 pre_title = m_pre_u1.group(2).strip()
                 pre_norm = re.sub(r"\W+", " ", pre_title).strip().lower()
-                if pre_norm in toc_u1_norms or re.match(
+                if _toc_norm_matches_page(
+                    pre_norm, toc_u1_pages, cur_pg_int_h, has_doc_pages_h
+                ) or re.match(
                     r"^(?:Kapitel|Chapter|Teil|Part)\s+\d+", pre_title, re.IGNORECASE
                 ):
                     out_h_lines.append(f"# {pre_title}")
@@ -4482,8 +4740,12 @@ def _apply_buchkonferenz_rules(
                 if (
                     m_num_cap
                     and adj_has_media
-                    and c_full_norm not in toc_u1_norms
-                    and c_body_norm not in toc_u1_norms
+                    and not _toc_norm_matches_page(
+                        c_full_norm, toc_u1_pages, cur_pg_int_h, has_doc_pages_h
+                    )
+                    and not _toc_norm_matches_page(
+                        c_body_norm, toc_u1_pages, cur_pg_int_h, has_doc_pages_h
+                    )
                     and not _TASK_OPERATOR_VERB_RE.match(c_body_cand)
                     and not _is_question_or_lead_in_prose(c_body_cand)
                     and not re.search(r"\bSie\b", c_body_cand)
@@ -4505,8 +4767,15 @@ def _apply_buchkonferenz_rules(
                     h_norm,
                 ).strip()
                 is_toc_u2_u3 = bool(
-                    toc_u2_u3_norms
-                    and (h_norm in toc_u2_u3_norms or h_norm_stripped in toc_u2_u3_norms)
+                    toc_u2_u3_pages
+                    and (
+                        _toc_norm_matches_page(
+                            h_norm, toc_u2_u3_pages, cur_pg_int_h, has_doc_pages_h
+                        )
+                        or _toc_norm_matches_page(
+                            h_norm_stripped, toc_u2_u3_pages, cur_pg_int_h, has_doc_pages_h
+                        )
+                    )
                 )
                 if h_lvl == 3:
                     if (
@@ -4580,6 +4849,115 @@ def _apply_buchkonferenz_rules(
             r"\1\3\n\n\2",
             text,
         )
+
+    # 4a. Buchkonferenz '### Material mit Aufgaben' & lettered '#### A:' / '#### B:' colon convention
+    has_material_mit_aufgaben_u3 = bool(
+        re.search(
+            r"(?:(?:Überschrift|Ebene)\s*3|Ü\s*3)\b[\s\S]{0,160}\bMaterial\s+mit\s+Aufgaben\b"
+            r"|\bMaterial\s+mit\s+Aufgaben\b[^\n]{0,60}(?:(?:Überschrift|Ebene)\s*3|Ü\s*3)\b",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    lettered_material_colon_u4 = bool(
+        re.search(
+            r"(?:(?:Überschrift|Ebene)\s*4|Ü\s*4|####)[^\n]{0,200}\bA:(?:[,;)\s]|$)"
+            r"|(?:^|\n)[ \t#*\-]*(?:z\.\s*B\.?\s*)?(?:####\s+)?A:\s+[^\n]{2,60}(?:[,;/\s]+B:\s+|\n[ \t#*\-]*(?:####\s+)?B:\s+)",
+            custom_rules,
+            re.IGNORECASE,
+        )
+    )
+    if has_material_mit_aufgaben_u3 or lettered_material_colon_u4:
+        raw_mat_aufg_pages: set[str] = set()
+        if raw_markdown:
+            for rm_seg in split_markdown_pages(raw_markdown):
+                if rm_seg.page and re.search(
+                    r"\bmaterial\s+mit\s*aufgaben\b", rm_seg.text, re.IGNORECASE
+                ):
+                    raw_mat_aufg_pages.add(rm_seg.page)
+
+        ma_pages = split_markdown_pages(text)
+        ma_changed = False
+        lettered_no_colon_re = re.compile(
+            r"^(#{2,4})\s+([A-H])(?:\s*[•·\-–]\s*|\s+)([A-ZÄÖÜ][^\n]+)$"
+        )
+        lettered_with_colon_re = re.compile(r"^(#{2,4})\s+([A-H]):\s+([^\n]+)$")
+        for ma_seg in ma_pages:
+            seg_lns = ma_seg.text.splitlines()
+            has_mat_aufg_hdr = any(
+                re.match(r"^###\s+Material\s+mit\s+Aufgaben\s*$", ln.strip(), re.IGNORECASE)
+                for ln in seg_lns
+            )
+            has_tasks_on_seg = any(
+                re.match(r"^#####\s+(?:Aufgaben|[A-Z]?\d+)\b", ln.strip(), re.IGNORECASE)
+                for ln in seg_lns
+            )
+            letter_hits = [
+                m.group(2)
+                for ln in seg_lns
+                for m in (
+                    lettered_no_colon_re.match(ln.strip())
+                    or lettered_with_colon_re.match(ln.strip()),
+                )
+                if m and not re.match(r"^(?:Steckbrief|Material)\b", m.group(3).strip(), re.IGNORECASE)
+            ]
+            seg_has_lettered_ctx = (
+                has_mat_aufg_hdr
+                or has_tasks_on_seg
+                or len(set(letter_hits)) >= 2
+                or (ma_seg.page in raw_mat_aufg_pages if ma_seg.page else False)
+            )
+            seg_edited = False
+            if lettered_material_colon_u4 and seg_has_lettered_ctx:
+                in_ma_media = False
+                for idx_ml, raw_ml in enumerate(seg_lns):
+                    st_ml = raw_ml.strip()
+                    if in_ma_media:
+                        if re.search(r"</(?:Bild|Tabelle)>", st_ml, re.IGNORECASE):
+                            in_ma_media = False
+                        continue
+                    if re.match(r"^<(?:Bild(?!-Ref)|Tabelle)\b", st_ml, re.IGNORECASE):
+                        if not re.search(r"</(?:Bild|Tabelle)>", st_ml, re.IGNORECASE):
+                            in_ma_media = True
+                        continue
+                    m_lnc = lettered_no_colon_re.match(st_ml)
+                    if m_lnc and not re.match(
+                        r"^(?:Steckbrief|Material)\b", m_lnc.group(3).strip(), re.IGNORECASE
+                    ):
+                        seg_lns[idx_ml] = f"#### {m_lnc.group(2)}: {m_lnc.group(3).strip()}"
+                        seg_edited = True
+                    else:
+                        m_lwc = lettered_with_colon_re.match(st_ml)
+                        if m_lwc and len(m_lwc.group(1)) != 4:
+                            seg_lns[idx_ml] = f"#### {m_lwc.group(2)}: {m_lwc.group(3).strip()}"
+                            seg_edited = True
+
+            if has_material_mit_aufgaben_u3 and not has_mat_aufg_hdr and has_tasks_on_seg:
+                first_a_idx: int | None = None
+                seen_h3_before_a = False
+                for idx_ml, raw_ml in enumerate(seg_lns):
+                    st_ml = raw_ml.strip()
+                    if re.match(r"^###\s+\S", st_ml):
+                        seen_h3_before_a = True
+                    if re.match(r"^####\s+A:\s+\S", st_ml):
+                        first_a_idx = idx_ml
+                        break
+                raw_had_ma = bool(ma_seg.page and ma_seg.page in raw_mat_aufg_pages)
+                if first_a_idx is not None and (not seen_h3_before_a or raw_had_ma):
+                    seg_lns.insert(first_a_idx, "")
+                    seg_lns.insert(first_a_idx, "### Material mit Aufgaben")
+                    seg_edited = True
+
+            if seg_edited:
+                trail_ma = (
+                    "\n\n"
+                    if ma_seg.text.endswith("\n\n")
+                    else ("\n" if ma_seg.text.endswith("\n") else "")
+                )
+                ma_seg.text = re.sub(r"\n{3,}", "\n\n", "\n".join(seg_lns).rstrip("\n")) + trail_ma
+                ma_changed = True
+        if ma_changed:
+            text = "".join(s.text for s in ma_pages)
 
     # 4b. Strip italic/underscore emphasis on introductory paragraph right after '## X.Y' or '### Rubric:'
     if profile.plain_italic_intro:
@@ -5455,6 +5833,187 @@ def post_process_structure(
     )
 
     processed = _normalize_fibs_emphasis(processed, custom_rules=custom_rules)
+
+    # Clean <Rahmen> full-paragraph _..._ emphasis, demote giant multi-sentence #### headings, and enforce #### Merke
+    rahmen_emph_line_re = re.compile(
+        r"(?<![A-Za-z0-9\\])_(?!\.\.\._)((?:(?!(?<=[A-Za-zÄÖÜäöüß0-9.,;:!?\"')\]])_(?![A-Za-z0-9\{]))[^\n])+?)"
+        r"(?<=[A-Za-zÄÖÜäöüß0-9.,;:!?\"')\]])_(?![A-Za-z0-9\{])"
+    )
+    rahmen_emph_para_re = re.compile(
+        r"(?<![A-Za-z0-9\\])_(?!\.\.\._)((?:(?!(?<=[A-Za-zÄÖÜäöüß0-9.,;:!?\"')\]])_(?![A-Za-z0-9\{]))[\s\S])+?)"
+        r"(?<=[A-Za-zÄÖÜäöüß0-9.,;:!?\"')\]])_(?![A-Za-z0-9\{])"
+    )
+
+    def _clean_rahmen_block(m_rb: re.Match[str]) -> str:
+        inner_raw = m_rb.group(1)
+        r_paras = re.split(r"(\n{2,})", inner_raw)
+        cleaned_paras: list[str] = []
+        for p_idx_r, p_chunk in enumerate(r_paras):
+            if p_idx_r % 2 == 1:
+                cleaned_paras.append(p_chunk)
+                continue
+            p_lines = p_chunk.splitlines()
+            new_plns: list[str] = []
+            for pln in p_lines:
+                ps = pln.strip()
+                m_long_rh = re.match(r"^#{2,6}\s+(.+)$", ps)
+                if m_long_rh:
+                    rh_body = m_long_rh.group(1).strip()
+                    if len(rh_body) > 120 and ". " in rh_body:
+                        new_plns.append(rh_body)
+                        continue
+                if ps and not ps.startswith("#"):
+                    u_spans_ln = [m.group(1) for m in rahmen_emph_line_re.finditer(pln)]
+                    if u_spans_ln:
+                        emph_a = sum(1 for sp in u_spans_ln for ch in sp if ch.isalpha())
+                        tot_a = sum(1 for ch in ps if ch.isalpha())
+                        w_cnt = len(ps.split())
+                        has_sp = bool(re.search(r"[.!?](?:\s|_|$)", ps))
+                        if (
+                            tot_a > 0
+                            and (emph_a / tot_a) >= 0.80
+                            and (w_cnt >= 10 or (w_cnt >= 6 and has_sp))
+                        ):
+                            pln = rahmen_emph_line_re.sub(r"\1", pln)
+                new_plns.append(pln)
+            rejoined_p = "\n".join(new_plns)
+            rp_s = rejoined_p.strip()
+            if (
+                "\n" in rp_s
+                and rp_s.startswith("_")
+                and rp_s.endswith("_")
+                and not rp_s.startswith("_..._")
+                and not new_plns[0].strip().endswith("_")
+            ):
+                u_spans_p = [m.group(1) for m in rahmen_emph_para_re.finditer(rejoined_p)]
+                emph_ap = sum(1 for sp in u_spans_p for ch in sp if ch.isalpha())
+                tot_ap = sum(1 for ch in rp_s if ch.isalpha())
+                w_cnt_p = len(rp_s.split())
+                has_sp_p = bool(re.search(r"[.!?](?:\s|_|$)", rp_s))
+                if (
+                    tot_ap > 0
+                    and (emph_ap / tot_ap) >= 0.80
+                    and (w_cnt_p >= 10 or (w_cnt_p >= 6 and has_sp_p))
+                ):
+                    rejoined_p = rahmen_emph_para_re.sub(r"\1", rejoined_p)
+            cleaned_paras.append(rejoined_p)
+        return f"<Rahmen>\n{''.join(cleaned_paras).strip()}\n</Rahmen>"
+
+    processed = re.sub(
+        r"<Rahmen\b[^>]*>\s*([\s\S]*?)\s*</Rahmen>",
+        _clean_rahmen_block,
+        processed,
+        flags=re.IGNORECASE,
+    )
+
+    wants_merke_h4_rahmen = bool(
+        custom_rules
+        and (
+            re.search(
+                r"\bMerke\b[^\n]{0,40}(?:\+|und|mit)[^\n]{0,30}(?:Rahmen|<Rahmen>)",
+                custom_rules,
+                re.IGNORECASE,
+            )
+            or re.search(
+                r"(?:Rahmen|<Rahmen>)[^\n]{0,30}(?:\+|und|mit)[^\n]{0,30}\bMerke\b",
+                custom_rules,
+                re.IGNORECASE,
+            )
+            or re.search(
+                r"(?:Überschrift\s*4|Ü\s*4|Ebene\s*4)\b[^\n]{0,160}\bMerke\b",
+                custom_rules,
+                re.IGNORECASE,
+            )
+            or re.search(
+                r"\bMerke\b[^\n]{0,60}(?:Überschrift\s*4|Ü\s*4|Ebene\s*4)\b",
+                custom_rules,
+                re.IGNORECASE,
+            )
+        )
+    )
+    rk_lines = processed.splitlines()
+    rk_out: list[str] = []
+    rk_in_media = False
+    rk_skip_next_merke = False
+    rk_changed = False
+    n_rk = len(rk_lines)
+    for rk_i, rk_ln in enumerate(rk_lines):
+        rk_s = rk_ln.strip()
+        if rk_in_media:
+            if re.search(r"</(?:Bild|Tabelle)>", rk_s, re.IGNORECASE):
+                rk_in_media = False
+            rk_out.append(rk_ln)
+            continue
+        if re.match(r"^<(?:Bild(?!-Ref)|Tabelle)\b", rk_s, re.IGNORECASE):
+            if not re.search(r"</(?:Bild|Tabelle)>", rk_s, re.IGNORECASE):
+                rk_in_media = True
+            rk_out.append(rk_ln)
+            continue
+        if rk_skip_next_merke:
+            if not rk_s:
+                continue
+            rk_skip_next_merke = False
+            if re.match(r"^(?:\*\*|_)?Merke:?(?:\*\*|_)?\s*$", rk_s, re.IGNORECASE):
+                rk_changed = True
+                continue
+        m_long_h4_pre = re.match(r"^####\s+(.+)$", rk_s)
+        if m_long_h4_pre:
+            lh_body = m_long_h4_pre.group(1).strip()
+            if (
+                len(lh_body) > 120
+                and ". " in lh_body
+                and not re.match(
+                    r"^(?:[MBQ]\s*\d+|Abb(?:ildung)?\.?\s*\d+|Tab(?:elle)?\.?\s*\d+|Bild\s*\d+|Grafik\s*\d+)\b",
+                    lh_body,
+                    re.IGNORECASE,
+                )
+            ):
+                nxt_rk = ""
+                for f_rk in range(rk_i + 1, n_rk):
+                    if rk_lines[f_rk].strip():
+                        nxt_rk = rk_lines[f_rk].strip()
+                        break
+                if re.match(r"^#####\s+Aufgaben\b", nxt_rk, re.IGNORECASE):
+                    rk_out.append(lh_body)
+                    rk_changed = True
+                    continue
+        if wants_merke_h4_rahmen and re.match(r"^<Rahmen\b", rk_s, re.IGNORECASE):
+            prev_ne_idx: int | None = None
+            for b_rk in range(len(rk_out) - 1, -1, -1):
+                if rk_out[b_rk].strip():
+                    prev_ne_idx = b_rk
+                    break
+            prev_ne_s = rk_out[prev_ne_idx].strip() if prev_ne_idx is not None else ""
+            if not re.match(r"^#{1,6}\s+", prev_ne_s):
+                if prev_ne_idx is not None and re.match(
+                    r"^(?:\*\*|_)?Merke:?(?:\*\*|_)?\s*$", prev_ne_s, re.IGNORECASE
+                ):
+                    rk_out[prev_ne_idx] = "#### Merke"
+                    rk_skip_next_merke = True
+                    rk_changed = True
+                else:
+                    first_in_r = ""
+                    for f_rk in range(rk_i + 1, n_rk):
+                        st_fr = rk_lines[f_rk].strip()
+                        if re.match(r"^</Rahmen>", st_fr, re.IGNORECASE):
+                            break
+                        if st_fr:
+                            first_in_r = re.sub(r"^[#*_]+|[#*_]+$", "", st_fr).strip()
+                            break
+                    if not re.match(
+                        r"^(?:Randspalte|Steckbrief|Experiment|Versuch(?:sprotokoll)?|Beispiel|"
+                        r"Worterklärung|Tipp|Hinweis|Definition|\[?Selbsteinschätzung)\b",
+                        first_in_r,
+                        re.IGNORECASE,
+                    ):
+                        rk_out.append("#### Merke")
+                        rk_out.append("")
+                        rk_skip_next_merke = True
+                        rk_changed = True
+        rk_out.append(rk_ln)
+    if rk_changed:
+        processed = re.sub(r"\n{3,}", "\n\n", "\n".join(rk_out))
+
     after_math_strip = strip_math_and_variable_emphasis(processed)
     if after_math_strip != processed:
         from backend.services.formula_service import _convert_to_fibs_bare_latex
@@ -5477,16 +6036,21 @@ def post_process_structure(
         except Exception as e:
             logger.debug(f"Could not apply directory page numbers in post_process_structure: {e}")
 
-    # Deduplicate consecutive identical headings and duplicate 'Material mit Aufgaben' / decimal section headings on the same page
+    # Deduplicate same-page identical headings (consecutive or separated only by <Bild>/<Bild-Ref>)
+    # and demote isolated single-letter '##### A'/'##### B' headings without a '####' parent (H3->H5)
     dedup_pages = split_markdown_pages(processed)
     dedup_changed = False
+    last_h_lvl_doc = 0
+    in_aufg_h5_doc = False
     for d_seg in dedup_pages:
         d_lines = d_seg.text.splitlines()
         out_d_lines: list[str] = []
         in_d_tag = False
+        seg_dedup_changed = False
         prev_h_out_idx: int | None = None
         prev_h_key = ""
         prev_h_lvl = 0
+        prev_h_via_bild = False
         seen_page_sec_keys: dict[str, tuple[int, int]] = {}
         for d_ln in d_lines:
             ds = d_ln.strip()
@@ -5495,12 +6059,23 @@ def post_process_structure(
                     in_d_tag = False
                 out_d_lines.append(d_ln)
                 continue
-            if re.match(r"^<(?:Bild|Tabelle|Rahmen|Anmerkung|Lückentext)\b", ds, re.IGNORECASE):
+            if re.match(r"^<Bild-Ref\b", ds, re.IGNORECASE):
+                prev_h_via_bild = True
+                out_d_lines.append(d_ln)
+                continue
+            if re.match(r"^<Bild\b", ds, re.IGNORECASE):
+                if not re.search(r"</Bild>", ds, re.IGNORECASE):
+                    in_d_tag = True
+                prev_h_via_bild = True
+                out_d_lines.append(d_ln)
+                continue
+            if re.match(r"^<(?:Tabelle|Rahmen|Anmerkung|Lückentext)\b", ds, re.IGNORECASE):
                 if not re.search(
-                    r"</(?:Bild|Tabelle|Rahmen|Anmerkung|Lückentext)>", ds, re.IGNORECASE
+                    r"</(?:Tabelle|Rahmen|Anmerkung|Lückentext)>", ds, re.IGNORECASE
                 ):
                     in_d_tag = True
                 prev_h_out_idx = None
+                prev_h_via_bild = False
                 out_d_lines.append(d_ln)
                 continue
             if not ds or ds == "---" or re.match(
@@ -5509,45 +6084,81 @@ def post_process_structure(
             ):
                 out_d_lines.append(d_ln)
                 continue
+            m_iso_h5_let = re.match(r"^#####\s+([A-Z])\s*$", ds)
+            if m_iso_h5_let and not in_aufg_h5_doc and last_h_lvl_doc <= 3:
+                out_d_lines.append(m_iso_h5_let.group(1))
+                prev_h_out_idx = None
+                prev_h_via_bild = False
+                seg_dedup_changed = True
+                continue
+            m_h5_any = re.match(r"^#####\s+(.+)$", ds)
+            if m_h5_any:
+                h5_t = m_h5_any.group(1).strip()
+                if re.match(r"^Aufgaben\b", h5_t, re.IGNORECASE):
+                    in_aufg_h5_doc = True
+                last_h_lvl_doc = 5
+                prev_h_out_idx = None
+                prev_h_via_bild = False
+                out_d_lines.append(d_ln)
+                continue
             m_dh = re.match(r"^(#{1,4})\s+(.+)$", ds)
             if m_dh:
                 dh_hashes, dh_title = m_dh.group(1), m_dh.group(2).strip()
                 dh_lvl = len(dh_hashes)
+                if dh_lvl <= 3:
+                    in_aufg_h5_doc = bool(re.match(r"^Aufgabe\s+\d+\b", dh_title, re.IGNORECASE))
+                elif not re.match(
+                    r"^(?:[MBQ]\s*\d+|Abb(?:ildung)?\.?\s*\d+|Tab(?:elle)?\.?\s*\d+|Bild\s*\d+|Grafik\s*\d+)\b",
+                    dh_title,
+                    re.IGNORECASE,
+                ):
+                    in_aufg_h5_doc = False
                 dh_norm = re.sub(r"\b([a-z])\s+(\d+)\b", r"\1\2", dh_title.lower())
                 dh_toks = re.findall(r"[a-zäöüß0-9]+", dh_norm)
                 dh_key = " ".join(dh_toks)
                 is_dec_sec = bool(
                     re.match(r"^[1-9]\d?\.[1-9]\d?\b", dh_title) and len(dh_toks) >= 3
                 )
+                allow_dup_key = len(dh_toks) >= 2 or (
+                    prev_h_via_bild
+                    and len(dh_key) >= 4
+                    and dh_key
+                    not in {"merke", "beispiel", "hinweis", "exkurs", "randspalte", "steckbrief"}
+                )
                 if (
                     prev_h_out_idx is not None
                     and dh_key
-                    and len(dh_toks) >= 2
+                    and allow_dup_key
                     and dh_key == prev_h_key
                 ):
                     if dh_lvl < prev_h_lvl:
                         out_d_lines[prev_h_out_idx] = d_ln
                         prev_h_lvl = dh_lvl
-                    dedup_changed = True
+                        last_h_lvl_doc = dh_lvl
+                    seg_dedup_changed = True
                     continue
                 if (dh_key == "material mit aufgaben" or is_dec_sec) and dh_key in seen_page_sec_keys:
                     first_idx_s, first_lvl_s = seen_page_sec_keys[dh_key]
                     if dh_lvl < first_lvl_s:
                         out_d_lines[first_idx_s] = d_ln
                         seen_page_sec_keys[dh_key] = (first_idx_s, dh_lvl)
-                    dedup_changed = True
+                    seg_dedup_changed = True
                     continue
                 cur_out_idx = len(out_d_lines)
                 out_d_lines.append(d_ln)
                 prev_h_out_idx = cur_out_idx
                 prev_h_key = dh_key
                 prev_h_lvl = dh_lvl
+                prev_h_via_bild = False
+                last_h_lvl_doc = dh_lvl
                 if dh_key == "material mit aufgaben" or is_dec_sec:
                     seen_page_sec_keys[dh_key] = (cur_out_idx, dh_lvl)
                 continue
             prev_h_out_idx = None
+            prev_h_via_bild = False
             out_d_lines.append(d_ln)
-        if dedup_changed:
+        if seg_dedup_changed:
+            dedup_changed = True
             trail_nl = "\n\n" if d_seg.text.endswith("\n\n") else ("\n" if d_seg.text.endswith("\n") else "")
             d_seg.text = re.sub(r"\n{3,}", "\n\n", "\n".join(out_d_lines).rstrip("\n")) + trail_nl
     if dedup_changed:

@@ -1045,6 +1045,22 @@ def deduplicate_cross_page_echoes(markdown_text: str) -> str:
     def _norm_tok(tok: str) -> str:
         return re.sub(r"^[^\wÄÖÜäöüß]+|[^\wÄÖÜäöüß]+$", "", tok).lower()
 
+    def _strip_echo_markup(raw_txt: str) -> str:
+        txt = re.sub(r"</?(?:Rahmen|Anmerkung)\b[^>]*>", " ", raw_txt, flags=re.IGNORECASE)
+        txt = re.sub(r"(?m)^[ \t]*#{1,6}[ \t]+", "", txt)
+        txt = re.sub(
+            r"(?<![A-Za-zÄÖÜäöüß0-9])(?:(?:Abb(?:ildung)?|Bild|Grafik|Fig(?:ure)?)\.?\s+|([MBQ])\s*)(?=\d)",
+            "",
+            txt,
+            flags=re.IGNORECASE,
+        )
+        return txt
+
+    def _norm_echo_key(raw_txt: str) -> str:
+        return " ".join(re.findall(r"[a-zäöüß0-9]+", _strip_echo_markup(raw_txt).lower()))
+
+    generic_short_headings = {"aufgaben", "material", "merke", "beispiel", "hinweis", "übung"}
+
     changed = False
     for idx_s in range(1, len(segs)):
         prev_seg = segs[idx_s - 1]
@@ -1064,34 +1080,41 @@ def deduplicate_cross_page_echoes(markdown_text: str) -> str:
 
         prev_blocks = _split_blocks(prev_body)
         curr_blocks = _split_blocks(curr_body)
-        prev_tail = [b for b in prev_blocks if not _is_media_or_marker(b)][-6:]
+        prev_tail = [b for b in prev_blocks if not _is_media_or_marker(b)]
         if not prev_tail or not curr_blocks:
             continue
 
         prev_heading_norms: set[str] = set()
+        prev_exact_norms: set[str] = set()
         prev_windows: list[tuple[set[str], set[tuple[str, str]], set[str]]] = []
         for j_p, p_blk in enumerate(prev_tail):
+            p_clean = _strip_echo_markup(p_blk)
+            p_key = " ".join(re.findall(r"[a-zäöüß0-9]+", p_clean.lower()))
+            if p_key:
+                prev_exact_norms.add(p_key)
             m_ph = re.match(r"^#{1,6}\s+(.+)$", p_blk.strip())
             if m_ph:
-                prev_heading_norms.add(m_ph.group(1).strip().lower())
-            p_ws = fc.ECHO_WORD_TOKEN_RE.findall(p_blk.lower())
+                ph_key = _norm_echo_key(m_ph.group(1))
+                if ph_key:
+                    prev_heading_norms.add(ph_key)
+            p_ws = fc.ECHO_WORD_TOKEN_RE.findall(p_clean.lower())
             if p_ws:
                 prev_windows.append(
                     (
                         set(p_ws),
                         {(p_ws[k], p_ws[k + 1]) for k in range(len(p_ws) - 1)},
-                        set(re.findall(r"\b\d+\b", p_blk)),
+                        set(re.findall(r"\b\d+\b", p_clean)),
                     )
                 )
             if j_p + 1 < len(prev_tail):
-                comb_txt = f"{p_blk}\n{prev_tail[j_p + 1]}"
-                comb_ws = fc.ECHO_WORD_TOKEN_RE.findall(comb_txt.lower())
+                comb_clean = f"{p_clean}\n{_strip_echo_markup(prev_tail[j_p + 1])}"
+                comb_ws = fc.ECHO_WORD_TOKEN_RE.findall(comb_clean.lower())
                 if comb_ws:
                     prev_windows.append(
                         (
                             set(comb_ws),
                             {(comb_ws[k], comb_ws[k + 1]) for k in range(len(comb_ws) - 1)},
-                            set(re.findall(r"\b\d+\b", comb_txt)),
+                            set(re.findall(r"\b\d+\b", comb_clean)),
                         )
                     )
 
@@ -1099,12 +1122,13 @@ def deduplicate_cross_page_echoes(markdown_text: str) -> str:
             cand_txt: str,
             windows: list[tuple[set[str], set[tuple[str, str]], set[str]]] = prev_windows,
         ) -> bool:
-            c_ws = fc.ECHO_WORD_TOKEN_RE.findall(cand_txt.lower())
+            c_clean = _strip_echo_markup(cand_txt)
+            c_ws = fc.ECHO_WORD_TOKEN_RE.findall(c_clean.lower())
             if len(c_ws) < 8:
                 return False
             c_set = set(c_ws)
             c_bg = {(c_ws[k], c_ws[k + 1]) for k in range(len(c_ws) - 1)}
-            c_nums = set(re.findall(r"\b\d+\b", cand_txt))
+            c_nums = set(re.findall(r"\b\d+\b", c_clean))
             for p_set, p_bg, p_nums in windows:
                 if c_nums - p_nums:
                     continue
@@ -1115,35 +1139,50 @@ def deduplicate_cross_page_echoes(markdown_text: str) -> str:
             return False
 
         drop_indices: set[int] = set()
-        pending_h_idx: int | None = None
+        pending_h_indices: list[int] = []
         scanned_nm = 0
+        max_scan_nm = max(12, len(prev_tail) + 4)
         for idx_c, c_blk in enumerate(curr_blocks):
             if _is_media_or_marker(c_blk):
                 continue
-            if scanned_nm >= 6:
+            if scanned_nm >= max_scan_nm:
                 break
             scanned_nm += 1
             s_cb = c_blk.strip()
-            m_ch = re.match(r"^(#{2,5})\s+(.+)$", s_cb)
+            m_ch = re.match(r"^(#{1,6})\s+(.+)$", s_cb)
             if m_ch:
-                h_norm = m_ch.group(2).strip().lower()
-                if h_norm in prev_heading_norms:
+                h_raw = m_ch.group(2).strip()
+                h_norm = _norm_echo_key(h_raw)
+                h_toks = h_norm.split()
+                if h_norm and (
+                    h_norm in prev_heading_norms
+                    or (len(h_toks) >= 2 and h_norm in prev_exact_norms)
+                ):
                     if (
-                        len(fc.ECHO_WORD_TOKEN_RE.findall(h_norm)) >= 2
-                        or re.match(r"^\d+\.\d+", h_norm)
-                    ) and h_norm not in {"aufgaben", "material"}:
+                        len(h_toks) >= 2 or bool(re.match(r"^\d+\.\d+", h_raw))
+                    ) and h_norm not in generic_short_headings:
                         drop_indices.add(idx_c)
-                        pending_h_idx = None
+                        drop_indices.update(pending_h_indices)
+                        pending_h_indices.clear()
                     else:
-                        pending_h_idx = idx_c
+                        pending_h_indices.append(idx_c)
                     continue
                 break
 
-            if not s_cb.startswith("#") and _is_echo_prose(s_cb):
+            c_norm = _norm_echo_key(s_cb)
+            c_toks = c_norm.split()
+            is_short_exact_echo = bool(
+                c_norm
+                and c_norm not in generic_short_headings
+                and (
+                    (len(c_toks) >= 3 and c_norm in prev_exact_norms)
+                    or (len(c_toks) >= 2 and c_norm in prev_heading_norms)
+                )
+            )
+            if not s_cb.startswith("#") and (_is_echo_prose(s_cb) or is_short_exact_echo):
                 drop_indices.add(idx_c)
-                if pending_h_idx is not None:
-                    drop_indices.add(pending_h_idx)
-                    pending_h_idx = None
+                drop_indices.update(pending_h_indices)
+                pending_h_indices.clear()
                 continue
             break
 

@@ -337,7 +337,7 @@ def test_sek1_geographie_and_geschichte_fibs_challenges():
 
     assert "#### Abb. 2.1: Physische und thematische Karte des Oberrheingrabens" in geo_md
     assert "#### Abb. 2.2a: Klimadiagramm Freiburg im Breisgau (269 m ü. NN)" in geo_md
-    assert "#### Abb. 2.2b: Klimadiagramm Feldberg im Schwarzwald (1493 m ü. NN)" in geo_md
+    assert "#### Abb. 2.2b: Klimadiagramm Feldberg im Schwarzwald (1.493 m ü. NN)" in geo_md
     assert "Maßstab 1 : 2.500.000" in geo_md
     assert "Binnenschifffahrt." in geo_md
     for n in (1, 2):

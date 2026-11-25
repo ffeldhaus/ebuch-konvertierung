@@ -379,7 +379,7 @@ In einem beweglichen Kolbenzylinder befinden sich n = 2,0 mol Stickstoffgas bei 
 _Methoden-Kasten: Umrechnung thermodynamischer Zustandsgrößen_
 -	Umrechnung zwischen Celsius- und Kelvin-Skala: T (in K) = ~h (in Grad Celsius) + 273,15.
 -	Druckeinheiten im Vergleich: 1 bar = 10^5 Pa = 100 kPa = 10^5 N / m^2.
--	Volumeneinheiten im Vergleich: 1 m^3 = 1000 Liter (L) = 10^6 cm^3.
+-	Volumeneinheiten im Vergleich: 1 m^3 = 1.000 Liter (L) = 10^6 cm^3.
 -	Normbedingungen (STP): p_0 = 1013,25 hPa und T_0 = 273,15 K (molares Normvolumen V_m = 22,41 L/mol).
 -	Zusammenhang der molaren Wärmekapazitäten: C_p - C_V = R sowie Adiabatenexponent ~k = C_p / C_V = (f + 2) / f.
 </Rahmen>

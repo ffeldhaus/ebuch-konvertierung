@@ -565,9 +565,9 @@ def normalize_versalien(markdown: str) -> str:
 
 
 def normalize_fibs_units_and_percent(text: str) -> str:
-    r"""Normalizes FIBS 09/2025 temperatures, angles, percentages, and promille outside code and URLs.
+    r"""Normalizes FIBS 09/2025 units, degrees, percentages, promille, thousands, and coordinates.
 
-    Applies FIBS Section 8.1 and LaTeX-Handreichung rules deterministically:
+    Applies FIBS Section 8.1 and LaTeX-Handreichung rules deterministically outside code and URLs:
       - Unwraps standalone ``$80\,^\circ\text{C}$``, ``$90^\circ$``, ``$36^\circ 14' 10''$``,
         ``$50\,\%$``, and ``$5\,\permil$`` spans.
       - Replaces ``<num>^\circ\text{C}`` -> ``<num> °C`` and ``<num>^\circ`` -> ``<num>°``.
@@ -578,12 +578,18 @@ def normalize_fibs_units_and_percent(text: str) -> str:
         hyphenated and suffixed forms (``5%-Klausel``, ``100%ig``).
       - Normalizes ``‰`` and ``\textperthousand`` to ``\permil`` with one leading space
         after numbers (``5‰`` / ``5\permil`` -> ``5 \permil``).
+      - Repairs micromol units (``~mol``, ``µmol``, ``μmol`` -> ``~mmol``).
+      - Normalizes German thousands separators with dots (``300 000`` -> ``300.000``,
+        ``10000`` -> ``10.000``, ``5143`` -> ``5.143``, ``1400 cm^3`` -> ``1.400 cm^3``)
+        while preserving years, dates, postal codes, ISBNs, page markers, and decimals.
+      - Normalizes 2D/3D point coordinates in parentheses to ``(x|y)`` without spaces
+        (``(0; 50)`` -> ``(0|50)``, ``P(2; -5)`` -> ``P(2|-5)``).
 
     Args:
         text: Input Markdown text.
 
     Returns:
-        Text with normalized degree, arcminute/arcsecond, percent, and promille spacing.
+        Text with normalized FIBS units, numbers, and coordinate formatting.
     """
     if not text:
         return text
@@ -698,6 +704,109 @@ def normalize_fibs_units_and_percent(text: str) -> str:
     )
     work = re.sub(r"\\textperthousand(?![a-zA-Z])|‰", lambda _: r"\permil", work)
     work = re.sub(r"(\d)[ \t]*\\permil(?![a-zA-Z])", r"\1 \\permil", work)
+
+    # 8. Micromol normalization: 'µmol'/'μmol' and merged '~mol' -> '~mmol'
+    work = re.sub(r"(\d)[ \t]*[µμ]mol(?![A-Za-z])", r"\1 ~mmol", work)
+    work = re.sub(r"(?<![A-Za-z\\])[µμ]mol(?![A-Za-z])", "~mmol", work)
+    work = re.sub(r"(\d)[ \t]*~mol(?![A-Za-z])", r"\1 ~mmol", work)
+    work = re.sub(r"(?<![A-Za-z~\\])~mol(?![A-Za-z])", "~mmol", work)
+
+    # 9. Thousands separator dots (5.143, 200.000, 1.400 cm^3), preserving years/dates/PLZs/IDs/decimals
+    num_prot: list[str] = []
+
+    def _mask_num(m: re.Match[str]) -> str:
+        num_prot.append(m.group(0))
+        return f"__FIBS_NUM_{len(num_prot) - 1}__"
+
+    work = fc.THOUSANDS_PROTECTED_RE.sub(_mask_num, work)
+
+    def _fmt_spaced_thousands(m: re.Match[str]) -> str:
+        raw = m.group(1)
+        line_s = work.rfind("\n", 0, m.start()) + 1
+        if re.search(r"\d[ \t]+$", work[line_s : m.start()]) or re.match(
+            r"^[ \t]+\d", work[m.end() :]
+        ):
+            return raw
+        parts = re.split(r"[ \u00a0\u202f]", raw)
+        if len(parts) >= 3:
+            vals = [int(p) for p in parts]
+            step = vals[1] - vals[0]
+            if step > 0 and all(vals[i + 1] - vals[i] == step for i in range(len(vals) - 1)):
+                return raw
+        return ".".join(parts)
+
+    work = re.sub(
+        r"(?<![0-9.,/\\A-Za-z_])([1-9]\d{0,2}(?:[ \u00a0\u202f]\d{3})+)(?![0-9]|\.[0-9]|[A-Za-z_])",
+        _fmt_spaced_thousands,
+        work,
+    )
+
+    def _fmt_large_int(m: re.Match[str]) -> str:
+        digits = m.group(1)
+        if len(digits) == 5 and not digits.endswith("000"):
+            line_s = work.rfind("\n", 0, m.start()) + 1
+            before = work[line_s : m.start()]
+            after = work[m.end() :]
+            m_city = re.match(
+                r"^[ \t]+([A-ZÄÖÜ][a-zäöüß]{2,})(?:[ \t]*(?:[,.;:\n)\]|]|$|[/-][A-ZÄÖÜ]"
+                r"|(?:am|an|im|in|ob|bei|vor|unter)[ \t]+[A-ZÄÖÜ]))",
+                after,
+            )
+            if (
+                m_city
+                and m_city.group(1) not in fc.THOUSANDS_UNIT_NOUNS
+                and (
+                    not before.strip()
+                    or re.search(
+                        r"(?:,\s*|\b(?:in|aus|nach|bei|zu|von)[ \t]+|[(\[|\t][ \t]*)$",
+                        before,
+                        re.IGNORECASE,
+                    )
+                )
+            ):
+                return digits
+        return f"{int(digits):,}".replace(",", ".")
+
+    work = re.sub(
+        r"(?<![0-9.,/\\A-Za-z_])([1-9]\d{4,})(?![0-9]|\.[0-9]|[A-Za-z_])",
+        _fmt_large_int,
+        work,
+    )
+
+    def _fmt_4digit_int(m: re.Match[str]) -> str:
+        digits = m.group(1)
+        line_s = work.rfind("\n", 0, m.start()) + 1
+        before = work[line_s : m.start()]
+        if fc.THOUSANDS_YEAR_PREFIX_RE.search(before):
+            return digits
+        if int(digits) >= 2100 or fc.THOUSANDS_4DIGIT_UNIT_RE.match(work[m.end() :]):
+            return f"{digits[0]}.{digits[1:]}"
+        return digits
+
+    work = re.sub(
+        r"(?<![0-9.,/\\A-Za-z_])([1-9]\d{3})(?![0-9]|\.[0-9]|[A-Za-z_])",
+        _fmt_4digit_int,
+        work,
+    )
+
+    for idx, val in reversed(list(enumerate(num_prot))):
+        work = work.replace(f"__FIBS_NUM_{idx}__", val)
+
+    # 10. Point coordinates in round parentheses: (0; 50) -> (0|50), P(2; -5) -> P(2|-5)
+    def _fmt_num_coord(m: re.Match[str]) -> str:
+        parts = [g.replace("−", "-") for g in m.groups() if g is not None]
+        return f"({'|'.join(parts)})"
+
+    work = fc.COORD_NUM_RE.sub(_fmt_num_coord, work)
+
+    def _fmt_var_coord(m: re.Match[str]) -> str:
+        if m.group(1) is not None:
+            parts = [g for g in (m.group(2), m.group(3), m.group(4)) if g is not None]
+            return f"{m.group(1)}({'|'.join(parts)})"
+        parts = [g for g in (m.group(5), m.group(6), m.group(7)) if g is not None]
+        return f"({'|'.join(parts)})"
+
+    work = fc.COORD_VAR_RE.sub(_fmt_var_coord, work)
 
     for idx, val in enumerate(protected_spans):
         work = work.replace(f"__FIBS_PROT_{idx}__", val)

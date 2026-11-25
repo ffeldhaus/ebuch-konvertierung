@@ -186,7 +186,7 @@ def test_fibs_mode_bare_latex_tilde_greek_micro_and_arrows():
     assert "\\," not in res
     assert "0,001 ~mg bzw. 0,001 ~mg" in res
     assert "2 ~mm bzw. 2 ~mm sowie 1,67 ~mm" in res
-    assert "~D s =d *sin(~a_1) =k *~l" in res
+    assert "~Ds =d *sin(~a_1) =k *~l" in res
     assert "~g +~b =~d" in res
     assert "CH_3COOH +C_2H_5OH \\rlh CH_3COOC_2H_5 +H_2O" in res
     assert "2 SO_2(g) +O_2(g) \\xra{Kat., 450 °C} 2 SO_3(g)" in res
